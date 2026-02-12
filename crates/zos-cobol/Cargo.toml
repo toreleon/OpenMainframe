@@ -1,0 +1,17 @@
+[package]
+name = "zos-cobol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "COBOL compiler for zOS-clone"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+bumpalo.workspace = true
+zos-encoding.workspace = true
+zos-runtime.workspace = true
+
+[dev-dependencies]

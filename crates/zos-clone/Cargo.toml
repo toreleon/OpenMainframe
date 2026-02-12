@@ -1,0 +1,27 @@
+[package]
+name = "zos-clone"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for the zOS-clone mainframe emulator"
+
+[[bin]]
+name = "zos-clone"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+clap_complete.workspace = true
+miette.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zos-encoding.workspace = true
+zos-runtime.workspace = true
+zos-dataset.workspace = true
+zos-cobol.workspace = true
+zos-jcl.workspace = true
+
+[dev-dependencies]

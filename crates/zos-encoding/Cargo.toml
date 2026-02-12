@@ -1,0 +1,15 @@
+[package]
+name = "zos-encoding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "EBCDIC encoding and decimal arithmetic for zOS-clone"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+rust_decimal.workspace = true
+
+[dev-dependencies]

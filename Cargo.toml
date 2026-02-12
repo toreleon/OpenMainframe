@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/zos-clone",
+    "crates/zos-cobol",
+    "crates/zos-jcl",
+    "crates/zos-runtime",
+    "crates/zos-dataset",
+    "crates/zos-encoding",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+repository = "https://github.com/zos-clone/zos-clone"
+
+[workspace.dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+
+# Error handling
+miette = { version = "7", features = ["fancy"] }
+thiserror = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Decimal arithmetic
+rust_decimal = { version = "1", features = ["maths"] }
+
+# Arena allocation
+bumpalo = "3"
+
+# Internal crates
+zos-encoding = { path = "crates/zos-encoding" }
+zos-runtime = { path = "crates/zos-runtime" }
+zos-dataset = { path = "crates/zos-dataset" }
+zos-cobol = { path = "crates/zos-cobol" }
+zos-jcl = { path = "crates/zos-jcl" }
