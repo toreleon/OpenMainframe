@@ -20,6 +20,7 @@ pub mod ast;
 pub mod error;
 pub mod lexer;
 pub mod parser;
+pub mod semantic;
 
 pub use ast::*;
 pub use error::CobolError;
@@ -29,3 +30,7 @@ pub use lexer::{
     Span, Token, TokenKind,
 };
 pub use parser::Parser;
+pub use semantic::{
+    analyze, CobolType, Diagnostic, SemanticAnalyzer, SemanticResult, Severity, Symbol, SymbolKind,
+    SymbolTable, TypeCategory,
+};
