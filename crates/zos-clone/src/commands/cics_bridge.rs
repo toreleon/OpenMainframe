@@ -30,6 +30,8 @@ pub struct CicsBridge {
     pub xctl_program: Option<String>,
     /// COMMAREA variable name (the COBOL variable holding COMMAREA data).
     pub commarea_var: Option<String>,
+    /// Active browse tokens per file (file_name -> token).
+    browse_tokens: HashMap<String, u32>,
 }
 
 impl CicsBridge {
@@ -50,6 +52,22 @@ impl CicsBridge {
             return_transid: None,
             xctl_program: None,
             commarea_var: None,
+            browse_tokens: HashMap::new(),
+        }
+    }
+
+    /// Register a VSAM file with the bridge's file manager.
+    pub fn register_file(
+        &mut self,
+        name: &str,
+        record_length: usize,
+        key_length: usize,
+        records: Vec<FileRecord>,
+    ) {
+        let file = zos_cics::runtime::CicsFile::new(name, record_length, key_length);
+        self.runtime.files.register(file);
+        if !records.is_empty() {
+            self.runtime.files.load_data(name, records);
         }
     }
 
@@ -388,7 +406,8 @@ impl CicsBridge {
         };
 
         match self.runtime.files.startbr(&file_name, &key) {
-            Ok(_token) => {
+            Ok(token) => {
+                self.browse_tokens.insert(file_name.to_uppercase(), token);
                 self.runtime.eib.set_response(CicsResponse::Normal);
             }
             Err(_) => {
@@ -406,10 +425,13 @@ impl CicsBridge {
         options: &[(String, Option<CobolValue>)],
         env: &mut Environment,
     ) -> Result<()> {
+        let file_name = Self::get_option_str(options, "FILE")
+            .or_else(|| Self::get_option_str(options, "DATASET"))
+            .unwrap_or_default();
         let into_var = Self::get_option_str(options, "INTO");
 
-        // Use token 0 as default browse token (simplified)
-        match self.runtime.files.readnext(0) {
+        let token = self.browse_tokens.get(&file_name.to_uppercase()).copied().unwrap_or(0);
+        match self.runtime.files.readnext(token) {
             Ok(record) => {
                 if let Some(ref into) = into_var {
                     let data_str = String::from_utf8_lossy(&record.data).to_string();
@@ -432,9 +454,13 @@ impl CicsBridge {
         options: &[(String, Option<CobolValue>)],
         env: &mut Environment,
     ) -> Result<()> {
+        let file_name = Self::get_option_str(options, "FILE")
+            .or_else(|| Self::get_option_str(options, "DATASET"))
+            .unwrap_or_default();
         let into_var = Self::get_option_str(options, "INTO");
 
-        match self.runtime.files.readprev(0) {
+        let token = self.browse_tokens.get(&file_name.to_uppercase()).copied().unwrap_or(0);
+        match self.runtime.files.readprev(token) {
             Ok(record) => {
                 if let Some(ref into) = into_var {
                     let data_str = String::from_utf8_lossy(&record.data).to_string();
@@ -457,8 +483,13 @@ impl CicsBridge {
         options: &[(String, Option<CobolValue>)],
         env: &mut Environment,
     ) -> Result<()> {
-        // End all active browse sessions (simplified)
-        let _ = self.runtime.files.endbr(0);
+        let file_name = Self::get_option_str(options, "FILE")
+            .or_else(|| Self::get_option_str(options, "DATASET"))
+            .unwrap_or_default();
+
+        if let Some(token) = self.browse_tokens.remove(&file_name.to_uppercase()) {
+            let _ = self.runtime.files.endbr(token);
+        }
         self.runtime.eib.set_response(CicsResponse::Normal);
         self.update_resp_variables(options, env)?;
         Ok(())
@@ -878,5 +909,97 @@ mod tests {
         // RESP should be updated with NOTFND (13)
         let resp = env.get("WS-RESP").unwrap();
         assert_eq!(resp.to_display_string().trim(), "13");
+    }
+
+    #[test]
+    fn test_vsam_read_write() {
+        let mut bridge = CicsBridge::new("TEST", "T001");
+        let mut env = create_test_env();
+
+        // Register a file with test data
+        bridge.register_file(
+            "CUSTFILE",
+            100,
+            6,
+            vec![
+                FileRecord::from_strings("000001", "Alice Smith"),
+                FileRecord::from_strings("000002", "Bob Jones"),
+            ],
+        );
+
+        // Set up COBOL variables
+        env.set("WS-KEY", CobolValue::Alphanumeric("000001".to_string())).unwrap();
+        env.set("WS-RECORD", CobolValue::Alphanumeric(String::new())).unwrap();
+        env.set("WS-RESP", CobolValue::from_i64(0)).unwrap();
+
+        // READ existing record
+        let options = vec![
+            ("FILE".to_string(), Some(CobolValue::Alphanumeric("CUSTFILE".to_string()))),
+            ("INTO".to_string(), Some(CobolValue::Alphanumeric("WS-RECORD".to_string()))),
+            ("RIDFLD".to_string(), Some(CobolValue::Alphanumeric("WS-KEY".to_string()))),
+            ("RESP".to_string(), Some(CobolValue::Alphanumeric("WS-RESP".to_string()))),
+        ];
+
+        bridge.execute("READ", &options, &mut env).unwrap();
+
+        let resp = env.get("WS-RESP").unwrap();
+        assert_eq!(resp.to_display_string().trim(), "0"); // Normal
+        let record = env.get("WS-RECORD").unwrap();
+        assert!(record.to_display_string().contains("Alice Smith"));
+    }
+
+    #[test]
+    fn test_vsam_browse() {
+        let mut bridge = CicsBridge::new("TEST", "T001");
+        let mut env = create_test_env();
+
+        bridge.register_file(
+            "ACCTFILE",
+            80,
+            4,
+            vec![
+                FileRecord::from_strings("0001", "Account A"),
+                FileRecord::from_strings("0002", "Account B"),
+                FileRecord::from_strings("0003", "Account C"),
+            ],
+        );
+
+        env.set("WS-KEY", CobolValue::Alphanumeric("0001".to_string())).unwrap();
+        env.set("WS-RECORD", CobolValue::Alphanumeric(String::new())).unwrap();
+        env.set("WS-RESP", CobolValue::from_i64(0)).unwrap();
+
+        // STARTBR
+        let startbr_opts = vec![
+            ("FILE".to_string(), Some(CobolValue::Alphanumeric("ACCTFILE".to_string()))),
+            ("RIDFLD".to_string(), Some(CobolValue::Alphanumeric("WS-KEY".to_string()))),
+            ("RESP".to_string(), Some(CobolValue::Alphanumeric("WS-RESP".to_string()))),
+        ];
+        bridge.execute("STARTBR", &startbr_opts, &mut env).unwrap();
+        assert_eq!(env.get("WS-RESP").unwrap().to_display_string().trim(), "0");
+
+        // READNEXT
+        let readnext_opts = vec![
+            ("FILE".to_string(), Some(CobolValue::Alphanumeric("ACCTFILE".to_string()))),
+            ("INTO".to_string(), Some(CobolValue::Alphanumeric("WS-RECORD".to_string()))),
+            ("RESP".to_string(), Some(CobolValue::Alphanumeric("WS-RESP".to_string()))),
+        ];
+        bridge.execute("READNEXT", &readnext_opts, &mut env).unwrap();
+        assert!(env.get("WS-RECORD").unwrap().to_display_string().contains("Account A"));
+
+        bridge.execute("READNEXT", &readnext_opts, &mut env).unwrap();
+        assert!(env.get("WS-RECORD").unwrap().to_display_string().contains("Account B"));
+
+        bridge.execute("READNEXT", &readnext_opts, &mut env).unwrap();
+        assert!(env.get("WS-RECORD").unwrap().to_display_string().contains("Account C"));
+
+        // READNEXT at end of file
+        bridge.execute("READNEXT", &readnext_opts, &mut env).unwrap();
+        assert_eq!(env.get("WS-RESP").unwrap().to_display_string().trim(), "20"); // Endfile
+
+        // ENDBR
+        let endbr_opts = vec![
+            ("FILE".to_string(), Some(CobolValue::Alphanumeric("ACCTFILE".to_string()))),
+        ];
+        bridge.execute("ENDBR", &endbr_opts, &mut env).unwrap();
     }
 }
