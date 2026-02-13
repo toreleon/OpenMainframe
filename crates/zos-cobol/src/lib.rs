@@ -20,6 +20,7 @@ pub mod ast;
 #[cfg(feature = "llvm")]
 pub mod codegen;
 pub mod error;
+pub mod intrinsics;
 pub mod lexer;
 pub mod parser;
 pub mod semantic;
