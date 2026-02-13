@@ -117,9 +117,14 @@ impl Widget for FieldRenderedScreen<'_> {
             }
         }
 
-        // Render each field
+        // Render each field with full attribute + extended color/highlight support
         for field in self.field_table.fields() {
-            let style = styles::attribute_to_style(&field.attribute, self.theme);
+            let style = styles::cell_style(
+                Some(&field.attribute),
+                field.color.as_ref(),
+                field.highlight.as_ref(),
+                self.theme,
+            );
 
             for (i, &ch_byte) in field.content.iter().enumerate() {
                 let pos = field.position_at(i);

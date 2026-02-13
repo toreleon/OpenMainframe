@@ -3,7 +3,7 @@
 //! Manages the field table for a 3270 screen, supporting tab navigation
 //! between unprotected fields, character input, and Modified Data Tag tracking.
 
-use zos_cics::bms::{AttributeByte, BmsMap};
+use zos_cics::bms::{AttributeByte, BmsMap, FieldColor, FieldHighlight};
 use zos_cics::terminal::ScreenPosition;
 
 /// Entry in the field table, tracking runtime state for each BMS field.
@@ -18,6 +18,10 @@ pub struct FieldEntry {
     pub length: usize,
     /// 3270 attribute byte.
     pub attribute: AttributeByte,
+    /// Extended color attribute (from BMS COLOR= specification).
+    pub color: Option<FieldColor>,
+    /// Extended highlight attribute (from BMS HILIGHT= specification).
+    pub highlight: Option<FieldHighlight>,
     /// Whether the field has been modified by the user (MDT).
     pub modified: bool,
     /// Current field content (displayable characters).
@@ -95,6 +99,8 @@ impl FieldTable {
                 col: bms_field.column,
                 length: bms_field.length,
                 attribute: attr,
+                color: bms_field.attributes.color,
+                highlight: bms_field.attributes.highlight,
                 modified: false,
                 content,
                 cursor_offset: 0,
@@ -527,5 +533,39 @@ STATUS   DFHMDF POS=(3,12),LENGTH=15,ATTRB=(PROT)
         let modified = table.get_modified_fields();
         assert_eq!(modified.len(), 1);
         assert_eq!(modified[0].0, "NAME");
+    }
+
+    #[test]
+    fn test_extended_color_attributes() {
+        let source = r#"
+COLTEST  DFHMSD TYPE=MAP,LANG=COBOL
+COLM     DFHMDI SIZE=(24,80)
+TITLE    DFHMDF POS=(1,1),LENGTH=20,ATTRB=(PROT,BRT),COLOR=BLUE
+ERROR    DFHMDF POS=(2,1),LENGTH=40,ATTRB=(PROT),COLOR=RED,HILIGHT=REVERSE
+INPUT    DFHMDF POS=(3,1),LENGTH=10,ATTRB=(UNPROT),COLOR=GREEN
+         DFHMSD TYPE=FINAL
+"#;
+        let mut parser = BmsParser::new();
+        let mapset = parser.parse(source).unwrap();
+        let map = &mapset.maps[0];
+        let table = FieldTable::from_bms_map(map);
+
+        // TITLE: bright protected with blue color
+        let title = table.fields().iter().find(|f| f.name == "TITLE").unwrap();
+        assert!(title.attribute.is_protected());
+        assert!(title.attribute.is_bright());
+        assert_eq!(title.color, Some(FieldColor::Blue));
+        assert_eq!(title.highlight, None);
+
+        // ERROR: protected with red color and reverse highlight
+        let error = table.fields().iter().find(|f| f.name == "ERROR").unwrap();
+        assert!(error.attribute.is_protected());
+        assert_eq!(error.color, Some(FieldColor::Red));
+        assert_eq!(error.highlight, Some(FieldHighlight::Reverse));
+
+        // INPUT: unprotected with green color
+        let input = table.fields().iter().find(|f| f.name == "INPUT").unwrap();
+        assert!(!input.attribute.is_protected());
+        assert_eq!(input.color, Some(FieldColor::Green));
     }
 }

@@ -133,4 +133,43 @@ mod tests {
         assert_eq!(field_color_to_ratatui(&FieldColor::Green), Color::Green);
         assert_eq!(field_color_to_ratatui(&FieldColor::Red), Color::Red);
     }
+
+    #[test]
+    fn test_cell_style_with_extended_color() {
+        let theme = ColorTheme::classic();
+        let attr = AttributeByte::new(true, false, false, false, false); // protected
+        let style = cell_style(Some(&attr), Some(&FieldColor::Red), None, &theme);
+        // Extended color should override the base attribute color
+        assert_eq!(style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn test_cell_style_with_highlight() {
+        let theme = ColorTheme::classic();
+        let attr = AttributeByte::new(true, false, false, false, false);
+        let style = cell_style(Some(&attr), None, Some(&FieldHighlight::Reverse), &theme);
+        assert!(style.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn test_cell_style_with_color_and_highlight() {
+        let theme = ColorTheme::classic();
+        let attr = AttributeByte::new(false, false, false, false, false); // unprotected
+        let style = cell_style(
+            Some(&attr),
+            Some(&FieldColor::Yellow),
+            Some(&FieldHighlight::Underscore),
+            &theme,
+        );
+        assert_eq!(style.fg, Some(Color::Yellow));
+        assert!(style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn test_highlight_modifier_mapping() {
+        assert_eq!(highlight_to_modifier(&FieldHighlight::Normal), Modifier::empty());
+        assert_eq!(highlight_to_modifier(&FieldHighlight::Blink), Modifier::SLOW_BLINK);
+        assert_eq!(highlight_to_modifier(&FieldHighlight::Reverse), Modifier::REVERSED);
+        assert_eq!(highlight_to_modifier(&FieldHighlight::Underscore), Modifier::UNDERLINED);
+    }
 }
