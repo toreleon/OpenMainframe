@@ -16,6 +16,7 @@ default = []
 llvm = ["zos-cobol/llvm", "dep:inkwell"]
 
 [dependencies]
+atty = "0.2"
 inkwell = { workspace = true, optional = true }
 clap.workspace = true
 clap_complete.workspace = true

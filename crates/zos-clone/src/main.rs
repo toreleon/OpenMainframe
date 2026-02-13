@@ -145,6 +145,12 @@ enum Commands {
         action: commands::gdg::GdgAction,
     },
 
+    /// Run IDCAMS commands for dataset management
+    Idcams {
+        #[command(subcommand)]
+        action: commands::idcams::IdcamsAction,
+    },
+
     /// Manage configuration
     Config {
         #[command(subcommand)]
@@ -194,6 +200,7 @@ fn main() -> Result<()> {
         Commands::Lex { input, format } => commands::lex::run(input, format),
         Commands::Interpret { input } => commands::interpret::interpret(input),
         Commands::Gdg { action } => commands::gdg::run(action),
+        Commands::Idcams { action } => commands::idcams::run(action),
         Commands::Config { action } => match action {
             ConfigAction::Show => {
                 let config = config::Config::load();
