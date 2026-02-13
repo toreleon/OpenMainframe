@@ -38,6 +38,10 @@ pub struct CicsBridge {
     pub last_map_name: Option<String>,
     /// Last SEND MAP mapset name.
     pub last_mapset_name: Option<String>,
+    /// System values for EXEC CICS ASSIGN — a generic key→value map.
+    /// The bridge performs a plain lookup; it has zero knowledge of which
+    /// option names exist or how the values are derived.
+    assign_values: HashMap<String, CobolValue>,
 }
 
 impl CicsBridge {
@@ -62,7 +66,14 @@ impl CicsBridge {
             terminal_callback: None,
             last_map_name: None,
             last_mapset_name: None,
+            assign_values: HashMap::new(),
         }
+    }
+
+    /// Populate ASSIGN values from a generic key→value map.
+    /// The caller decides what keys and values to provide.
+    pub fn set_assign_values(&mut self, values: HashMap<String, CobolValue>) {
+        self.assign_values = values;
     }
 
     /// Register a VSAM file with the bridge's file manager.
@@ -641,30 +652,25 @@ impl CicsBridge {
         Ok(())
     }
 
-    /// Handle ASSIGN command (retrieve system values).
+    /// Handle ASSIGN command — generic key→value lookup.
+    ///
+    /// The bridge has no knowledge of specific option names.  It simply
+    /// looks up each requested option in `self.assign_values` and sets
+    /// the target COBOL variable.  All derivation logic lives in the
+    /// caller that populates `assign_values`.
     fn handle_assign(
         &mut self,
         options: &[(String, Option<CobolValue>)],
         env: &mut Environment,
     ) -> Result<()> {
-        for (name, _value) in options {
-            let upper = name.to_uppercase();
-            match upper.as_str() {
-                "APPLID" => {
-                    // Application ID - provide a default
-                    if let Some(val) = _value {
-                        let var_name = val.to_display_string().trim().to_string();
-                        env.set(&var_name, CobolValue::Alphanumeric("CARDDEMO".to_string()))?;
-                    }
-                }
-                "SYSID" => {
-                    if let Some(val) = _value {
-                        let var_name = val.to_display_string().trim().to_string();
-                        env.set(&var_name, CobolValue::Alphanumeric("ZOS1".to_string()))?;
-                    }
-                }
-                _ => {
-                    // Unknown ASSIGN option - ignore
+        for (name, value) in options {
+            if let Some(val) = value {
+                let var_name = val.to_display_string().trim().to_string();
+                let key = name.to_uppercase();
+                if let Some(system_val) = self.assign_values.get(&key) {
+                    env.set(&var_name, system_val.clone())?;
+                } else {
+                    tracing::debug!("ASSIGN option '{}' has no configured value", key);
                 }
             }
         }
@@ -968,18 +974,53 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_command() {
+    fn test_assign_generic_lookup() {
         let mut bridge = CicsBridge::new("MENU", "T001");
         let mut env = create_test_env();
 
+        // Caller provides arbitrary key→value pairs — bridge has no opinion
+        let mut values = HashMap::new();
+        values.insert("APPLID".to_string(), CobolValue::Alphanumeric("MYAPP".to_string()));
+        values.insert("USERID".to_string(), CobolValue::Alphanumeric("JDOE".to_string()));
+        values.insert("SYSID".to_string(), CobolValue::Alphanumeric("SY01".to_string()));
+        values.insert("CUSTOM".to_string(), CobolValue::Alphanumeric("HELLO".to_string()));
+        bridge.set_assign_values(values);
+
         let options = vec![
             ("APPLID".to_string(), Some(CobolValue::Alphanumeric("WS-APPLID".to_string()))),
+            ("USERID".to_string(), Some(CobolValue::Alphanumeric("WS-USERID".to_string()))),
+            ("SYSID".to_string(), Some(CobolValue::Alphanumeric("WS-SYSID".to_string()))),
+            ("CUSTOM".to_string(), Some(CobolValue::Alphanumeric("WS-CUSTOM".to_string()))),
         ];
 
         bridge.execute("ASSIGN", &options, &mut env).unwrap();
-        // ASSIGN sets the variable named in the value
-        let applid = env.get("WS-APPLID").unwrap();
-        assert_eq!(applid.to_display_string(), "CARDDEMO");
+
+        assert_eq!(env.get("WS-APPLID").unwrap().to_display_string(), "MYAPP");
+        assert_eq!(env.get("WS-USERID").unwrap().to_display_string(), "JDOE");
+        assert_eq!(env.get("WS-SYSID").unwrap().to_display_string(), "SY01");
+        assert_eq!(env.get("WS-CUSTOM").unwrap().to_display_string(), "HELLO");
+    }
+
+    #[test]
+    fn test_assign_missing_option_is_silent() {
+        let mut bridge = CicsBridge::new("MENU", "T001");
+        let mut env = create_test_env();
+
+        // Provide only APPLID — no USERID
+        let mut values = HashMap::new();
+        values.insert("APPLID".to_string(), CobolValue::Alphanumeric("APP1".to_string()));
+        bridge.set_assign_values(values);
+
+        let options = vec![
+            ("APPLID".to_string(), Some(CobolValue::Alphanumeric("WS-APPLID".to_string()))),
+            ("USERID".to_string(), Some(CobolValue::Alphanumeric("WS-USERID".to_string()))),
+        ];
+
+        bridge.execute("ASSIGN", &options, &mut env).unwrap();
+
+        assert_eq!(env.get("WS-APPLID").unwrap().to_display_string(), "APP1");
+        // USERID was not provided, so the variable should not be set
+        assert!(env.get("WS-USERID").is_none());
     }
 
     #[test]

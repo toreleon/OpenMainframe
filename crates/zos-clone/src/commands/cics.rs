@@ -3,7 +3,7 @@
 //! Launches a full-screen TUI that renders 3270 screens from BMS maps,
 //! allowing interactive execution of CICS-based COBOL programs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +12,7 @@ use miette::Result;
 use zos_cics::bms::{BmsMap, BmsParser};
 use zos_cics::terminal::{SendMapOptions, TerminalCallback};
 use zos_cics::CicsResult;
-use zos_runtime::interpreter::Environment;
+use zos_runtime::interpreter::{Environment, SimpleProgram, SimpleStatement};
 use zos_runtime::value::CobolValue;
 
 use zos_tui::session::{Session, SessionConfig, TuiTerminal, setup_terminal, restore_terminal};
@@ -172,6 +172,105 @@ impl TerminalCallback for TuiCallback {
     }
 }
 
+// ---------- ASSIGN Auto-Extraction ----------
+
+/// Scan a SimpleProgram's statements for EXEC CICS ASSIGN commands and
+/// return the set of system value names the program references.
+///
+/// This enables auto-derivation: instead of hardcoding values like "CARDDEMO",
+/// we discover what the program needs at load time and derive sensible defaults.
+fn extract_assign_options(program: &SimpleProgram) -> HashSet<String> {
+    let mut options = HashSet::new();
+
+    fn scan_statements(stmts: &[SimpleStatement], options: &mut HashSet<String>) {
+        for stmt in stmts {
+            if let SimpleStatement::ExecCics { command, options: opts } = stmt {
+                if command.eq_ignore_ascii_case("ASSIGN") {
+                    for (name, _) in opts {
+                        options.insert(name.to_uppercase());
+                    }
+                }
+            }
+        }
+    }
+
+    scan_statements(&program.statements, &mut options);
+    for stmts in program.paragraphs.values() {
+        scan_statements(stmts, &mut options);
+    }
+
+    options
+}
+
+/// Derive ASSIGN values purely from environment variables.
+///
+/// For every option the program needs, looks up `ZOS_CLONE_<OPTION>`
+/// (e.g. `ZOS_CLONE_APPLID`, `ZOS_CLONE_USERID`).  No hardcoded
+/// option names, no special cases — any CICS ASSIGN option is
+/// supported automatically by setting the matching env var.
+fn derive_assign_values(needed: &HashSet<String>) -> HashMap<String, CobolValue> {
+    let mut values = HashMap::new();
+
+    for key in needed {
+        let env_name = format!("ZOS_CLONE_{}", key);
+        if let Ok(val) = std::env::var(&env_name) {
+            values.insert(key.clone(), CobolValue::Alphanumeric(val));
+        } else {
+            tracing::debug!("No env var '{}' set for ASSIGN option '{}'", env_name, key);
+        }
+    }
+
+    values
+}
+
+/// Compute current EIBDATE and EIBTIME from the system clock.
+///
+/// EIBDATE format: 0CYYDDD (packed decimal as integer)
+///   C = century (0 = 1900s, 1 = 2000s), YY = year, DDD = day of year
+/// EIBTIME format: 0HHMMSS
+fn current_eib_date_time() -> (i64, i64) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Convert Unix timestamp to date components
+    // Simple conversion: days since epoch → year/day-of-year
+    let days_since_epoch = (secs / 86400) as i64;
+    let time_of_day = secs % 86400;
+
+    let hour = (time_of_day / 3600) as i64;
+    let minute = ((time_of_day % 3600) / 60) as i64;
+    let second = (time_of_day % 60) as i64;
+
+    // Calculate year and day-of-year from days since 1970-01-01
+    let mut year = 1970i64;
+    let mut remaining = days_since_epoch;
+    loop {
+        let days_in_year = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if remaining < days_in_year {
+            break;
+        }
+        remaining -= days_in_year;
+        year += 1;
+    }
+    let day_of_year = remaining + 1; // 1-based
+
+    // CICS format: 0CYYDDD where C=century (0=1900s, 1=2000s)
+    let century = if year >= 2000 { 1i64 } else { 0i64 };
+    let yy = year % 100;
+    let eibdate = century * 1_000_000 + yy * 1000 + day_of_year;
+    let eibtime = hour * 10000 + minute * 100 + second;
+
+    (eibdate, eibtime)
+}
+
 /// Run an interactive CICS session with TUI rendering.
 pub fn run_session(
     input: PathBuf,
@@ -210,8 +309,20 @@ pub fn run_session(
     let mut program_cache: HashMap<String, zos_runtime::interpreter::SimpleProgram> = HashMap::new();
     program_cache.insert(program_name.clone(), simple);
 
-    // Set up CICS bridge
+    // Set up CICS bridge with auto-derived system values
     let mut bridge = CicsBridge::new("CICS", "T001");
+
+    // Auto-extract ASSIGN options from the COBOL source, then derive values
+    // only for the options the program actually uses.
+    let needed_options = extract_assign_options(&program_cache[&program_name]);
+    if !needed_options.is_empty() {
+        tracing::info!("Program uses ASSIGN options: {:?}", needed_options);
+    }
+    let assign_values = derive_assign_values(&needed_options);
+    for (k, v) in &assign_values {
+        tracing::info!("ASSIGN {}={}", k, v.to_display_string().trim());
+    }
+    bridge.set_assign_values(assign_values);
 
     // Load VSAM data files
     for spec in &data_files {
@@ -268,6 +379,11 @@ pub fn run_session(
     env.set("EIBRESP2", CobolValue::from_i64(0)).ok();
     env.set("EIBTRMID", CobolValue::alphanumeric("T001")).ok();
     env.set("EIBTRNID", CobolValue::alphanumeric("CICS")).ok();
+
+    // Initialize EIBDATE and EIBTIME from current wall clock
+    let (eibdate, eibtime) = current_eib_date_time();
+    env.set("EIBDATE", CobolValue::from_i64(eibdate)).ok();
+    env.set("EIBTIME", CobolValue::from_i64(eibtime)).ok();
 
     let mut current_program = program_name.clone();
 
