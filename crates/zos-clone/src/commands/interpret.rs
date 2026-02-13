@@ -10,7 +10,7 @@ use miette::{IntoDiagnostic, Result, WrapErr};
 use zos_cobol::ast::{
     DataItem, DataItemName, Expression, LiteralKind, ProcedureBody, Program, Statement,
 };
-use zos_cobol::{scan, FileId, SourceFile, SourceFormat};
+use zos_cobol::{scan, FileId, SourceFile, SourceFormat, CopybookConfig, Preprocessor};
 use zos_runtime::interpreter::{
     DataItemMeta, Environment, SimpleBinaryOp, SimpleCompareOp, SimpleCondition, SimpleExpr,
     SimpleProgram, SimpleStatement,
@@ -19,12 +19,32 @@ use zos_runtime::interpreter::{
 use super::cics_bridge::CicsBridge;
 
 /// Load and parse a single COBOL source file into a SimpleProgram.
-fn load_program(path: &std::path::Path) -> Result<SimpleProgram> {
+/// Preprocesses COPY statements using the given include paths.
+fn load_program(path: &std::path::Path, include_paths: &[PathBuf]) -> Result<SimpleProgram> {
     let source_text = std::fs::read_to_string(path)
         .into_diagnostic()
         .wrap_err_with(|| format!("Failed to read: {}", path.display()))?;
 
-    let source_file = SourceFile::from_text(FileId(0), source_text, SourceFormat::Fixed);
+    // Preprocess - expand COPY statements
+    let mut copybook_config = CopybookConfig::new();
+
+    // Add the directory containing the source file
+    if let Some(parent) = path.parent() {
+        copybook_config.add_path(parent);
+    }
+
+    // Add user-specified include paths
+    for inc in include_paths {
+        copybook_config.add_path(inc);
+        tracing::debug!("Added include path: {}", inc.display());
+    }
+
+    let mut preprocessor = Preprocessor::new(copybook_config, SourceFormat::Fixed);
+    let preprocessed = preprocessor.preprocess(&source_text).map_err(|e| {
+        miette::miette!("Preprocessing failed for {}: {}", path.display(), e)
+    })?;
+
+    let source_file = SourceFile::from_text(FileId(0), preprocessed, SourceFormat::Fixed);
     let (tokens, lex_errors) = scan(&source_file);
 
     if !lex_errors.is_empty() {
@@ -68,11 +88,66 @@ fn find_program_source(program_name: &str, search_dir: &std::path::Path) -> Opti
     None
 }
 
+/// Load fixed-length VSAM records from a data file.
+/// Each record is `rec_len` bytes, key is the first `key_len` bytes.
+fn load_vsam_data(
+    path: &str,
+    key_len: usize,
+    rec_len: usize,
+) -> std::result::Result<Vec<zos_cics::runtime::FileRecord>, String> {
+    let data =
+        std::fs::read(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+
+    let mut records = Vec::new();
+    let mut offset = 0;
+    while offset + rec_len <= data.len() {
+        let record_bytes = &data[offset..offset + rec_len];
+        let key = record_bytes[..key_len.min(rec_len)].to_vec();
+        records.push(zos_cics::runtime::FileRecord {
+            key,
+            data: record_bytes.to_vec(),
+        });
+        offset += rec_len;
+    }
+    Ok(records)
+}
+
+/// Map an AID key name to its EBCDIC hex value.
+fn aid_key_to_byte(name: &str) -> u8 {
+    match name.to_uppercase().as_str() {
+        "ENTER" => 0x7D,
+        "CLEAR" => 0x6D,
+        "PA1" => 0x6C,
+        "PA2" => 0x6E,
+        "PA3" => 0x6B,
+        "PF1" => 0xF1,
+        "PF2" => 0xF2,
+        "PF3" => 0xF3,
+        "PF4" => 0xF4,
+        "PF5" => 0xF5,
+        "PF6" => 0xF6,
+        "PF7" => 0xF7,
+        "PF8" => 0xF8,
+        "PF9" => 0xF9,
+        "PF10" => 0x7A,
+        "PF11" => 0x7B,
+        "PF12" => 0x7C,
+        _ => 0x7D, // Default to ENTER
+    }
+}
+
 /// Interpret a COBOL program directly.
-pub fn interpret(input: PathBuf) -> Result<()> {
+pub fn interpret(
+    input: PathBuf,
+    include_paths: Vec<PathBuf>,
+    data_files: Vec<String>,
+    eibcalen: Option<i64>,
+    eibaid: Option<String>,
+    set_vars: Vec<String>,
+) -> Result<()> {
     tracing::info!("Interpreting: {}", input.display());
 
-    let simple = load_program(&input)?;
+    let simple = load_program(&input, &include_paths)?;
     let program_name = simple.name.clone();
     tracing::info!("Program: {}", program_name);
 
@@ -100,35 +175,78 @@ pub fn interpret(input: PathBuf) -> Result<()> {
     let mut program_cache: HashMap<String, SimpleProgram> = HashMap::new();
     program_cache.insert(program_name.to_uppercase(), simple);
 
-    let bridge = CicsBridge::new("CARD", "T001");
+    let mut bridge = CicsBridge::new("CARD", "T001");
+
+    // Load VSAM data files (format: DDNAME=path or DDNAME=path:key_len:rec_len)
+    for spec in &data_files {
+        if let Some((ddname, rest)) = spec.split_once('=') {
+            let parts: Vec<&str> = rest.split(':').collect();
+            let file_path = parts[0];
+            let key_len: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(8);
+            let rec_len: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(80);
+
+            match load_vsam_data(file_path, key_len, rec_len) {
+                Ok(records) => {
+                    tracing::info!(
+                        "Loaded {} records for VSAM file {} from {}",
+                        records.len(),
+                        ddname,
+                        file_path
+                    );
+                    bridge.register_file(ddname, rec_len, key_len, records);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load VSAM data for {}: {}", ddname, e);
+                }
+            }
+        }
+    }
+
     let mut env = Environment::new().with_cics_handler(Box::new(bridge));
+
+    // Inject CICS EIB (Execute Interface Block) fields
+    use zos_runtime::CobolValue;
+    let calen = eibcalen.unwrap_or(0);
+    let aid_byte = eibaid
+        .as_ref()
+        .map(|s| aid_key_to_byte(s))
+        .unwrap_or(0x7D); // Default: ENTER key
+    env.set("EIBCALEN", CobolValue::from_i64(calen)).ok();
+    env.set("EIBAID", CobolValue::alphanumeric(String::from(aid_byte as char))).ok();
+    env.set("EIBRESP", CobolValue::from_i64(0)).ok();
+    env.set("EIBRESP2", CobolValue::from_i64(0)).ok();
+    env.set("EIBTRMID", CobolValue::alphanumeric("T001")).ok();
+    env.set("EIBTRNID", CobolValue::alphanumeric("CARD")).ok();
+
+    // Set user-specified variables (for simulating terminal input, COMMAREA, etc.)
+    for spec in &set_vars {
+        if let Some((name, value)) = spec.split_once('=') {
+            env.set(name, CobolValue::alphanumeric(value)).ok();
+        }
+    }
 
     let mut current_program = program_name.to_uppercase();
     let max_xctl_chain = 50; // Safety limit to prevent infinite XCTL loops
 
     for xctl_depth in 0..max_xctl_chain {
-        let program = program_cache.get(&current_program).cloned();
-        let program = match program {
-            Some(p) => p,
-            None => {
-                // Try to load the program from the search directory
-                match find_program_source(&current_program, &search_dir) {
-                    Some(path) => {
-                        tracing::info!("Loading program {} from {}", current_program, path.display());
-                        let p = load_program(&path)?;
-                        program_cache.insert(current_program.clone(), p.clone());
-                        p
-                    }
-                    None => {
-                        return Err(miette::miette!(
-                            "XCTL target program not found: {} (searched in {})",
-                            current_program,
-                            search_dir.display()
-                        ));
-                    }
+        // Ensure program is in cache
+        if !program_cache.contains_key(&current_program) {
+            match find_program_source(&current_program, &search_dir) {
+                Some(path) => {
+                    tracing::info!("Loading program {} from {}", current_program, path.display());
+                    let p = load_program(&path, &include_paths)?;
+                    program_cache.insert(current_program.clone(), p);
+                }
+                None => {
+                    return Err(miette::miette!(
+                        "XCTL target program not found: {} (searched in {})",
+                        current_program,
+                        search_dir.display()
+                    ));
                 }
             }
-        };
+        }
+        let program = program_cache.get(&current_program).unwrap();
 
         tracing::info!(
             "Executing program {} (XCTL depth {})",
@@ -151,6 +269,13 @@ pub fn interpret(input: PathBuf) -> Result<()> {
 
             if let Some(bridge) = bridge {
                 if let Some(ref xctl_target) = bridge.xctl_program.clone() {
+                    // Extract COMMAREA data before resetting
+                    let commarea_data = if let Some(ref ca_var) = bridge.commarea_var {
+                        env.get(ca_var).map(|v| v.to_display_string())
+                    } else {
+                        None
+                    };
+
                     tracing::info!(
                         "XCTL from {} to {} (RC={})",
                         current_program,
@@ -160,6 +285,21 @@ pub fn interpret(input: PathBuf) -> Result<()> {
                     current_program = xctl_target.to_uppercase();
                     bridge.reset_for_xctl();
                     env.cics_handler = Some(handler);
+
+                    // Pass COMMAREA data as DFHCOMMAREA in the target program
+                    if let Some(data) = commarea_data {
+                        let data_len = data.len();
+                        tracing::debug!(
+                            "Passing COMMAREA ({} bytes) to {} as DFHCOMMAREA",
+                            data_len,
+                            current_program
+                        );
+                        env.set("DFHCOMMAREA", CobolValue::Alphanumeric(data))
+                            .ok();
+                        // Also set EIBCALEN to the COMMAREA length
+                        env.set("EIBCALEN", CobolValue::from_i64(data_len as i64))
+                            .ok();
+                    }
                     continue;
                 }
 
@@ -194,11 +334,19 @@ pub fn interpret(input: PathBuf) -> Result<()> {
 fn convert_program(program: &Program) -> Result<SimpleProgram> {
     let name = program.identification.program_id.name.clone();
 
-    // Collect data items and initial values
+    // Collect data items, initial values, level-88 condition names, and group layouts
     let mut data_items = Vec::new();
     let mut initial_values = Vec::new();
+    let mut condition_names: HashMap<String, (String, String)> = HashMap::new();
+    let mut group_layouts: HashMap<String, Vec<zos_runtime::interpreter::GroupField>> = HashMap::new();
     if let Some(ref data) = program.data {
-        collect_data_items(&data.working_storage, &mut data_items, &mut initial_values);
+        collect_data_items(
+            &data.working_storage,
+            &mut data_items,
+            &mut initial_values,
+            &mut condition_names,
+        );
+        collect_group_layouts(&data.working_storage, &mut group_layouts);
     }
 
     // Convert statements
@@ -269,6 +417,8 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
         data_items,
         statements,
         paragraphs,
+        condition_names,
+        group_layouts,
     })
 }
 
@@ -277,6 +427,7 @@ fn collect_data_items(
     items: &[DataItem],
     out: &mut Vec<(String, DataItemMeta)>,
     inits: &mut Vec<(String, SimpleExpr)>,
+    cond_names: &mut HashMap<String, (String, String)>,
 ) {
     for item in items {
         if let DataItemName::Named(ref name) = item.name {
@@ -308,9 +459,108 @@ fn collect_data_items(
                     inits.push((name.clone(), expr));
                 }
             }
+
+            // Collect level-88 condition names
+            for cv in &item.condition_values {
+                if let Some(first_val) = cv.values.first() {
+                    let val_str = match first_val {
+                        zos_cobol::ast::ConditionValueEntry::Single(lit) => {
+                            match &lit.kind {
+                                LiteralKind::String(s) => s.clone(),
+                                LiteralKind::Integer(n) => n.to_string(),
+                                LiteralKind::Hex(s) => decode_hex_string(s),
+                                _ => String::new(),
+                            }
+                        }
+                        _ => String::new(),
+                    };
+                    cond_names.insert(
+                        cv.name.to_uppercase(),
+                        (name.to_uppercase(), val_str),
+                    );
+                }
+            }
         }
         // Recurse into children
-        collect_data_items(&item.children, out, inits);
+        collect_data_items(&item.children, out, inits, cond_names);
+    }
+}
+
+/// Compute the byte size of a data item (recursive for group items).
+fn compute_item_size(item: &DataItem) -> usize {
+    if let Some(ref pic) = item.picture {
+        pic.size as usize
+    } else if !item.children.is_empty() {
+        // Group item: sum of children sizes (excluding level-88)
+        item.children
+            .iter()
+            .filter(|c| c.level != 88)
+            .map(compute_item_size)
+            .sum()
+    } else {
+        0
+    }
+}
+
+/// Collect group layouts: for each group item, record sub-field offsets.
+fn collect_group_layouts(
+    items: &[DataItem],
+    layouts: &mut HashMap<String, Vec<zos_runtime::interpreter::GroupField>>,
+) {
+    for item in items {
+        if !item.children.is_empty() && item.level != 88 {
+            // This is a group item - collect its sub-fields with offsets
+            let mut fields = Vec::new();
+            collect_sub_fields(&item.children, 0, &mut fields);
+
+            if let DataItemName::Named(ref name) = item.name {
+                if !fields.is_empty() {
+                    layouts.insert(name.to_uppercase(), fields);
+                }
+            }
+
+            // Recurse for nested groups
+            collect_group_layouts(&item.children, layouts);
+        }
+    }
+}
+
+/// Recursively collect sub-fields of a group item with their byte offsets.
+fn collect_sub_fields(
+    items: &[DataItem],
+    base_offset: usize,
+    fields: &mut Vec<zos_runtime::interpreter::GroupField>,
+) {
+    let mut offset = base_offset;
+    for item in items {
+        if item.level == 88 {
+            continue; // Skip condition names
+        }
+        let size = compute_item_size(item);
+        if let DataItemName::Named(ref name) = item.name {
+            let is_numeric = item
+                .picture
+                .as_ref()
+                .map(|p| {
+                    matches!(
+                        p.category,
+                        zos_cobol::ast::PictureCategory::Numeric
+                            | zos_cobol::ast::PictureCategory::NumericEdited
+                    )
+                })
+                .unwrap_or(false);
+            fields.push(zos_runtime::interpreter::GroupField {
+                name: name.to_uppercase(),
+                offset,
+                size,
+                is_numeric,
+            });
+        }
+        // If this is a sub-group, also collect its children at the same offset
+        if !item.children.is_empty() {
+            collect_sub_fields(&item.children, offset, fields);
+        }
+        offset += size;
     }
 }
 
@@ -323,7 +573,7 @@ fn convert_literal(lit: &zos_cobol::ast::Literal) -> Result<SimpleExpr> {
             Ok(SimpleExpr::Integer(n))
         }
         LiteralKind::String(s) => Ok(SimpleExpr::String(s.clone())),
-        LiteralKind::Hex(s) => Ok(SimpleExpr::String(s.clone())),
+        LiteralKind::Hex(s) => Ok(SimpleExpr::String(decode_hex_string(s))),
         LiteralKind::Figurative(f) => {
             use zos_cobol::ast::FigurativeConstant;
             match f {
@@ -341,6 +591,19 @@ fn convert_literal(lit: &zos_cobol::ast::Literal) -> Result<SimpleExpr> {
         }
         LiteralKind::AllOf(inner) => convert_literal(inner),
     }
+}
+
+/// Decode a hex literal string (e.g., "7D" -> "\x7D", "F1F2" -> "\xF1\xF2").
+fn decode_hex_string(hex: &str) -> String {
+    let bytes: Vec<u8> = hex
+        .as_bytes()
+        .chunks(2)
+        .filter_map(|chunk| {
+            let s = std::str::from_utf8(chunk).ok()?;
+            u8::from_str_radix(s, 16).ok()
+        })
+        .collect();
+    String::from_utf8_lossy(&bytes).to_string()
 }
 
 /// Convert a COBOL Statement to SimpleStatement.
@@ -445,10 +708,27 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
                     .iter()
                     .filter_map(|s| convert_statement(s).ok().flatten())
                     .collect();
-                let until = p.until.as_ref().and_then(|c| convert_condition(c).ok());
+                // For PERFORM VARYING, use varying's UNTIL; for plain PERFORM, use p.until
+                let until = if let Some(ref v) = p.varying {
+                    Some(convert_condition(&v.until)?)
+                } else {
+                    p.until.as_ref().and_then(|c| convert_condition(c).ok())
+                };
+
+                // Convert VARYING clause
+                let varying = if let Some(ref v) = p.varying {
+                    let var_name = v.variable.name.clone();
+                    let from_expr = convert_expr(&v.from)?;
+                    let by_expr = convert_expr(&v.by)?;
+                    Some((var_name, from_expr, by_expr))
+                } else {
+                    None
+                };
+
                 return Ok(Some(SimpleStatement::PerformInline {
                     until,
                     statements: stmts,
+                    varying,
                 }));
             }
 
@@ -566,15 +846,10 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
             match &s.mode {
                 SetMode::ConditionTo { target, value } => {
                     // SET condition-name TO TRUE/FALSE
-                    // Map as setting the condition variable to 1 (TRUE) or 0 (FALSE)
-                    let val = if *value {
-                        SimpleExpr::Integer(1)
-                    } else {
-                        SimpleExpr::Integer(0)
-                    };
-                    Ok(Some(SimpleStatement::Set {
-                        target: target.name.clone(),
-                        value: val,
+                    // At runtime, resolves parent field from condition_names map
+                    Ok(Some(SimpleStatement::SetCondition {
+                        condition_name: target.name.clone(),
+                        value: *value,
                     }))
                 }
                 SetMode::IndexTo { targets, value } => {
@@ -649,7 +924,7 @@ fn convert_expr(expr: &Expression) -> Result<SimpleExpr> {
                 Ok(SimpleExpr::Integer(n))
             }
             LiteralKind::String(s) => Ok(SimpleExpr::String(s.clone())),
-            LiteralKind::Hex(s) => Ok(SimpleExpr::String(s.clone())),
+            LiteralKind::Hex(s) => Ok(SimpleExpr::String(decode_hex_string(s))),
             LiteralKind::Figurative(f) => {
                 use zos_cobol::ast::FigurativeConstant;
                 match f {
@@ -668,7 +943,14 @@ fn convert_expr(expr: &Expression) -> Result<SimpleExpr> {
             LiteralKind::AllOf(inner) => convert_literal(inner),
         },
 
-        Expression::Variable(q) => Ok(SimpleExpr::Variable(q.name.clone())),
+        Expression::Variable(q) => {
+            // Handle COBOL figurative constants TRUE/FALSE
+            match q.name.to_uppercase().as_str() {
+                "TRUE" => Ok(SimpleExpr::Integer(1)),
+                "FALSE" => Ok(SimpleExpr::Integer(0)),
+                _ => Ok(SimpleExpr::Variable(q.name.clone())),
+            }
+        }
 
         Expression::Binary(b) => {
             let left = Box::new(convert_expr(&b.left)?);
@@ -701,21 +983,70 @@ fn convert_expr(expr: &Expression) -> Result<SimpleExpr> {
         Expression::Paren(inner) => convert_expr(inner),
 
         Expression::RefMod(r) => {
-            // Reference modification - just use the variable
-            Ok(SimpleExpr::Variable(r.variable.name.clone()))
+            // Reference modification: variable(start:length)
+            let variable = Box::new(SimpleExpr::Variable(r.variable.name.clone()));
+            let start = Box::new(convert_expr(&r.start)?);
+            let length = if let Some(ref len) = r.length {
+                Some(Box::new(convert_expr(len)?))
+            } else {
+                None
+            };
+            Ok(SimpleExpr::RefMod { variable, start, length })
         }
 
         Expression::Function(f) => {
-            // Functions not fully supported, return 0
-            tracing::warn!("Function {} not implemented, returning 0", f.name);
-            Ok(SimpleExpr::Integer(0))
+            match f.name.to_uppercase().as_str() {
+                "UPPER-CASE" => {
+                    if let Some(arg) = f.arguments.first() {
+                        let inner = convert_expr(arg)?;
+                        // Wrap the argument in a special function expression
+                        Ok(SimpleExpr::FunctionCall {
+                            name: "UPPER-CASE".to_string(),
+                            args: vec![inner],
+                        })
+                    } else {
+                        Ok(SimpleExpr::String(String::new()))
+                    }
+                }
+                "LOWER-CASE" => {
+                    if let Some(arg) = f.arguments.first() {
+                        let inner = convert_expr(arg)?;
+                        Ok(SimpleExpr::FunctionCall {
+                            name: "LOWER-CASE".to_string(),
+                            args: vec![inner],
+                        })
+                    } else {
+                        Ok(SimpleExpr::String(String::new()))
+                    }
+                }
+                "CURRENT-DATE" => Ok(SimpleExpr::FunctionCall {
+                    name: "CURRENT-DATE".to_string(),
+                    args: vec![],
+                }),
+                "LENGTH" => {
+                    if let Some(arg) = f.arguments.first() {
+                        let inner = convert_expr(arg)?;
+                        Ok(SimpleExpr::FunctionCall {
+                            name: "LENGTH".to_string(),
+                            args: vec![inner],
+                        })
+                    } else {
+                        Ok(SimpleExpr::Integer(0))
+                    }
+                }
+                _ => {
+                    tracing::warn!("Function {} not implemented, returning 0", f.name);
+                    Ok(SimpleExpr::Integer(0))
+                }
+            }
         }
 
         Expression::LengthOf(l) => {
-            // LENGTH OF returns the length of a data item
-            // In interpreter mode, we just return a placeholder
-            tracing::debug!("LENGTH OF {} evaluated as placeholder", l.item.name);
-            Ok(SimpleExpr::Integer(0))
+            // LENGTH OF returns the size of a data item - resolved at runtime
+            Ok(SimpleExpr::FunctionCall {
+                name: "LENGTH".to_string(),
+                args: vec![SimpleExpr::Variable(l.item.name.clone())],
+            })
         }
 
         Expression::AddressOf(a) => {
@@ -837,11 +1168,9 @@ fn convert_condition(cond: &zos_cobol::ast::Condition) -> Result<SimpleCondition
             right: SimpleExpr::Integer(1),
         }),
 
-        // Condition name - evaluate to true for now
-        zos_cobol::ast::Condition::ConditionName(_) => Ok(SimpleCondition::Compare {
-            left: SimpleExpr::Integer(1),
-            op: SimpleCompareOp::Equal,
-            right: SimpleExpr::Integer(1),
-        }),
+        // Level-88 condition name - resolved at runtime
+        zos_cobol::ast::Condition::ConditionName(q) => {
+            Ok(SimpleCondition::ConditionName(q.name.clone()))
+        }
     }
 }

@@ -273,11 +273,21 @@ impl CicsBridge {
         let ridfld_var = Self::get_option_str(options, "RIDFLD");
         let update = Self::has_option(options, "UPDATE");
 
-        // Get the key from RIDFLD variable
+        // Get KEYLENGTH if specified
+        let key_length: Option<usize> = Self::get_option_str(options, "KEYLENGTH")
+            .and_then(|s| s.parse().ok());
+
+        // Get the key from RIDFLD variable, padded to KEYLENGTH if specified
         let key = if let Some(ref ridfld) = ridfld_var {
-            env.get(ridfld)
-                .map(|v| v.to_display_string().trim().to_string().into_bytes())
-                .unwrap_or_default()
+            let raw = env.get(ridfld)
+                .map(|v| v.to_display_string())
+                .unwrap_or_default();
+            let mut key_bytes = raw.into_bytes();
+            // Pad with spaces to match KEYLENGTH (COBOL keys are space-padded)
+            if let Some(kl) = key_length {
+                key_bytes.resize(kl, b' ');
+            }
+            key_bytes
         } else {
             Vec::new()
         };

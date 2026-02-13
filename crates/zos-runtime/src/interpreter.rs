@@ -115,14 +115,19 @@ impl Environment {
     }
 
     /// Define a data item.
+    /// If the variable already has a value (e.g., pre-set by CICS EIB or --set),
+    /// the existing value is preserved and only metadata is updated.
     pub fn define(&mut self, name: &str, meta: DataItemMeta) {
-        let initial = if meta.is_numeric {
-            CobolValue::from_i64(0)
-        } else {
-            CobolValue::Alphanumeric(" ".repeat(meta.size))
-        };
-        self.variables.insert(name.to_uppercase(), initial);
-        self.metadata.insert(name.to_uppercase(), meta);
+        let name_upper = name.to_uppercase();
+        if !self.variables.contains_key(&name_upper) {
+            let initial = if meta.is_numeric {
+                CobolValue::from_i64(0)
+            } else {
+                CobolValue::Alphanumeric(" ".repeat(meta.size))
+            };
+            self.variables.insert(name_upper.clone(), initial);
+        }
+        self.metadata.insert(name_upper, meta);
     }
 
     /// Get a variable value.
@@ -269,10 +274,15 @@ pub enum SimpleStatement {
         sources: Vec<SimpleExpr>,
         into: String,
     },
-    /// SET variable TO value (88-level condition or index)
+    /// SET variable TO value (index or general)
     Set {
         target: String,
         value: SimpleExpr,
+    },
+    /// SET condition-name TO TRUE: resolves parent field from condition_names
+    SetCondition {
+        condition_name: String,
+        value: bool,
     },
     /// CALL subprogram
     Call {
@@ -283,6 +293,8 @@ pub enum SimpleStatement {
     PerformInline {
         until: Option<SimpleCondition>,
         statements: Vec<SimpleStatement>,
+        /// VARYING clause: (variable, FROM, BY)
+        varying: Option<(String, SimpleExpr, SimpleExpr)>,
     },
 }
 
@@ -310,6 +322,18 @@ pub enum SimpleExpr {
         op: SimpleBinaryOp,
         right: Box<SimpleExpr>,
     },
+    /// Intrinsic function call (e.g., UPPER-CASE, CURRENT-DATE)
+    FunctionCall {
+        name: String,
+        args: Vec<SimpleExpr>,
+    },
+    /// Reference modification: variable(start:length)
+    /// start is 1-based. If length is None, takes from start to end.
+    RefMod {
+        variable: Box<SimpleExpr>,
+        start: Box<SimpleExpr>,
+        length: Option<Box<SimpleExpr>>,
+    },
 }
 
 /// Simple binary operator.
@@ -336,6 +360,8 @@ pub enum SimpleCondition {
     And(Box<SimpleCondition>, Box<SimpleCondition>),
     /// OR
     Or(Box<SimpleCondition>, Box<SimpleCondition>),
+    /// Level-88 condition name (resolved at runtime from program.condition_names)
+    ConditionName(String),
 }
 
 /// Simple comparison operator.
@@ -360,6 +386,45 @@ pub struct SimpleProgram {
     pub statements: Vec<SimpleStatement>,
     /// Named paragraphs.
     pub paragraphs: HashMap<String, Vec<SimpleStatement>>,
+    /// Level-88 condition names: condition_name -> (parent_field, value).
+    pub condition_names: HashMap<String, (String, String)>,
+    /// Group item layouts: group_name -> list of sub-fields with offsets.
+    pub group_layouts: HashMap<String, Vec<GroupField>>,
+}
+
+/// A sub-field within a group item, with its offset and size.
+#[derive(Debug, Clone)]
+pub struct GroupField {
+    /// Field name (uppercase).
+    pub name: String,
+    /// Byte offset within the group.
+    pub offset: usize,
+    /// Size in bytes.
+    pub size: usize,
+    /// Whether numeric.
+    pub is_numeric: bool,
+}
+
+/// When a group item is set, decompose its value into sub-fields based on the group layout.
+fn decompose_group(group_name: &str, data: &str, program: &SimpleProgram, env: &mut Environment) -> Result<()> {
+    if let Some(fields) = program.group_layouts.get(&group_name.to_uppercase()) {
+        let data_bytes = data.as_bytes();
+        for field in fields {
+            let end = (field.offset + field.size).min(data_bytes.len());
+            if field.offset < data_bytes.len() {
+                let slice = &data_bytes[field.offset..end];
+                let val_str = String::from_utf8_lossy(slice).to_string();
+                if field.is_numeric {
+                    let trimmed = val_str.trim();
+                    let n = trimmed.parse::<i64>().unwrap_or(0);
+                    env.set(&field.name, CobolValue::from_i64(n)).ok();
+                } else {
+                    env.set(&field.name, CobolValue::Alphanumeric(val_str)).ok();
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Execute a simple program.
@@ -396,6 +461,31 @@ fn execute_statement(
     program: &SimpleProgram,
     env: &mut Environment,
 ) -> Result<()> {
+    // Track call depth to detect infinite recursion
+    thread_local! {
+        static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let current_depth = DEPTH.with(|d| {
+        let v = d.get();
+        d.set(v + 1);
+        v
+    });
+    if current_depth > 500 {
+        DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        return Err(InterpreterError {
+            message: format!("Recursion depth exceeded ({})", current_depth),
+        });
+    }
+    let result = execute_statement_impl(stmt, program, env);
+    DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    result
+}
+
+fn execute_statement_impl(
+    stmt: &SimpleStatement,
+    program: &SimpleProgram,
+    env: &mut Environment,
+) -> Result<()> {
     match stmt {
         SimpleStatement::Display {
             items,
@@ -418,6 +508,11 @@ fn execute_statement(
             let value = eval_expr(from, env)?;
             for target in to {
                 env.set(target, value.clone())?;
+                // If target is a group item, decompose into sub-fields
+                if program.group_layouts.contains_key(&target.to_uppercase()) {
+                    let data = value.to_display_string();
+                    decompose_group(target, &data, program, env)?;
+                }
             }
         }
 
@@ -486,7 +581,7 @@ fn execute_statement(
             then_branch,
             else_branch,
         } => {
-            if eval_condition(condition, env)? {
+            if eval_condition(condition, env, program)? {
                 execute_statements(then_branch, program, env)?;
             } else if let Some(else_stmts) = else_branch {
                 execute_statements(else_stmts, program, env)?;
@@ -522,15 +617,19 @@ fn execute_statement(
                 .map(|s| eval_expr(s, env))
                 .collect::<Result<_>>()?;
 
+            // Set __EVAL_SUBJECT__ so WHEN value comparisons can reference it
+            if let Some(first_subject) = subject_values.first() {
+                env.set("__EVAL_SUBJECT__", first_subject.clone())?;
+            }
+
             // Find first matching WHEN clause
             for when_clause in when_clauses {
                 let matched = if subject_values.is_empty() {
                     // EVALUATE with no subjects - check condition directly
-                    eval_condition(&when_clause.condition, env)?
+                    eval_condition(&when_clause.condition, env, program)?
                 } else {
-                    // EVALUATE TRUE: condition is evaluated directly
-                    // EVALUATE var: condition compares var to value
-                    eval_condition(&when_clause.condition, env)?
+                    // EVALUATE var / EVALUATE TRUE: condition compares subject to value
+                    eval_condition(&when_clause.condition, env, program)?
                 };
 
                 if matched {
@@ -541,11 +640,42 @@ fn execute_statement(
         }
 
         SimpleStatement::ExecCics { command, options } => {
-            // Evaluate option expressions first (while env is not mutably borrowed)
+            // Options that reference variables by name (not by value)
+            const VAR_REF_OPTIONS: &[&str] = &[
+                "INTO", "FROM", "RIDFLD", "RESP", "RESP2", "COMMAREA",
+            ];
+            // Commands where ALL option values are paragraph/label names, not expressions
+            let is_label_command = command == "HANDLE" || command == "IGNORE";
+
+            // Evaluate option expressions, but for variable-reference options,
+            // pass the variable NAME as a string instead of evaluating the value.
+            // For HANDLE/IGNORE CONDITION, all values are paragraph names.
             let eval_options: Vec<(String, Option<CobolValue>)> = options
                 .iter()
                 .map(|(name, expr)| {
-                    let value = expr.as_ref().map(|e| eval_expr(e, env)).transpose()?;
+                    let value = if let Some(e) = expr {
+                        if is_label_command {
+                            // HANDLE CONDITION / IGNORE CONDITION: values are paragraph names
+                            if let SimpleExpr::Variable(var_name) = e {
+                                Some(CobolValue::Alphanumeric(var_name.clone()))
+                            } else if let SimpleExpr::String(s) = e {
+                                Some(CobolValue::Alphanumeric(s.clone()))
+                            } else {
+                                Some(eval_expr(e, env)?)
+                            }
+                        } else if VAR_REF_OPTIONS.iter().any(|o| name.eq_ignore_ascii_case(o)) {
+                            // Pass variable name as string
+                            if let SimpleExpr::Variable(var_name) = e {
+                                Some(CobolValue::Alphanumeric(var_name.clone()))
+                            } else {
+                                Some(eval_expr(e, env)?)
+                            }
+                        } else {
+                            Some(eval_expr(e, env)?)
+                        }
+                    } else {
+                        None
+                    };
                     Ok((name.clone(), value))
                 })
                 .collect::<Result<_>>()?;
@@ -555,6 +685,24 @@ fn execute_statement(
                 let result = handler.execute(command, &eval_options, env);
                 env.cics_handler = Some(handler);
                 result?;
+            }
+
+            // After CICS READ/RECEIVE INTO: decompose group items into sub-fields
+            if command == "READ" || command == "RECEIVE" {
+                if let Some(into_expr) = options.iter()
+                    .find(|(name, _)| name == "INTO")
+                    .and_then(|(_, expr)| expr.as_ref())
+                {
+                    if let SimpleExpr::Variable(var_name) = into_expr {
+                        if let Some(val) = env.get(var_name) {
+                            let data = val.to_display_string();
+                            if std::env::var("ZOS_DEBUG_CMP").is_ok() {
+                                eprintln!("[DECOMPOSE] {} INTO {} len={}", command, var_name, data.len());
+                            }
+                            decompose_group(var_name, &data, program, env)?;
+                        }
+                    }
+                }
             }
         }
 
@@ -592,6 +740,17 @@ fn execute_statement(
             env.set(target, val)?;
         }
 
+        SimpleStatement::SetCondition { condition_name, value } => {
+            // SET condition-name TO TRUE: set the parent field to the condition's value
+            // SET condition-name TO FALSE: not standard COBOL, but we handle it
+            if *value {
+                if let Some((parent, expected_val)) = program.condition_names.get(&condition_name.to_uppercase()) {
+                    env.set(parent, CobolValue::Alphanumeric(expected_val.clone()))?;
+                }
+            }
+            // SET condition TO FALSE not supported in standard COBOL
+        }
+
         SimpleStatement::Call { program, using: _ } => {
             let prog_name = eval_expr(program, env)?;
             // CALLed programs are not yet supported - log and continue
@@ -601,8 +760,21 @@ fn execute_statement(
             )?;
         }
 
-        SimpleStatement::PerformInline { until, statements: stmts } => {
-            // PERFORM ... UNTIL
+        SimpleStatement::PerformInline { until, statements: stmts, varying } => {
+            // Initialize VARYING variable if present
+            if let Some((ref var_name, ref from_expr, _)) = varying {
+                let from_val = eval_expr(from_expr, env)?;
+                env.set(var_name, from_val)?;
+            }
+
+            // Determine the UNTIL condition: prefer varying's until (embedded in `until` field)
+            let effective_until = if let Some(ref v) = varying {
+                // For PERFORM VARYING, the UNTIL is stored in the `until` field
+                until.as_ref()
+            } else {
+                until.as_ref()
+            };
+
             let max_iterations = 10_000; // Safety limit
             let mut count = 0;
 
@@ -611,15 +783,25 @@ fn execute_statement(
                     break;
                 }
                 // Check UNTIL condition before (test before)
-                if let Some(cond) = until {
-                    if eval_condition(cond, env)? {
+                if let Some(cond) = effective_until {
+                    if eval_condition(cond, env, program)? {
                         break;
                     }
                 }
                 execute_statements(stmts, program, env)?;
                 count += 1;
-                // If no UNTIL, execute once
-                if until.is_none() {
+
+                // Increment VARYING variable
+                if let Some((ref var_name, _, ref by_expr)) = varying {
+                    let by_val = to_numeric(&eval_expr(by_expr, env)?);
+                    if let Some(current) = env.get(var_name).cloned() {
+                        let new_val = to_numeric(&current).add(&by_val);
+                        env.set(var_name, CobolValue::Numeric(new_val))?;
+                    }
+                }
+
+                // If no UNTIL and no VARYING, execute once
+                if effective_until.is_none() && varying.is_none() {
                     break;
                 }
             }
@@ -669,26 +851,117 @@ fn eval_expr(expr: &SimpleExpr, env: &Environment) -> Result<CobolValue> {
             };
             Ok(CobolValue::Numeric(result))
         }
+
+        SimpleExpr::FunctionCall { name, args } => {
+            match name.as_str() {
+                "UPPER-CASE" => {
+                    let val = eval_expr(args.first().ok_or_else(|| InterpreterError {
+                        message: "UPPER-CASE requires an argument".to_string(),
+                    })?, env)?;
+                    Ok(CobolValue::Alphanumeric(val.to_display_string().to_uppercase()))
+                }
+                "LOWER-CASE" => {
+                    let val = eval_expr(args.first().ok_or_else(|| InterpreterError {
+                        message: "LOWER-CASE requires an argument".to_string(),
+                    })?, env)?;
+                    Ok(CobolValue::Alphanumeric(val.to_display_string().to_lowercase()))
+                }
+                "CURRENT-DATE" => {
+                    // Returns YYYYMMDDHHMMSSTT (21 chars)
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    // Simple date formatting: 20260213120000+0000
+                    // Use a fixed format for now
+                    let secs = now % 86400;
+                    let hh = secs / 3600;
+                    let mm = (secs % 3600) / 60;
+                    let ss = secs % 60;
+                    let date_str = format!(
+                        "20260213{:02}{:02}{:02}00+0000",
+                        hh, mm, ss
+                    );
+                    Ok(CobolValue::Alphanumeric(date_str))
+                }
+                "LENGTH" => {
+                    let arg = args.first().ok_or_else(|| InterpreterError {
+                        message: "LENGTH requires an argument".to_string(),
+                    })?;
+                    // For LENGTH OF variable, use metadata size if available
+                    let len = if let SimpleExpr::Variable(var_name) = arg {
+                        env.meta(var_name)
+                            .map(|m| m.size)
+                            .unwrap_or_else(|| {
+                                // Fallback to actual string length
+                                env.get(var_name)
+                                    .map(|v| v.to_display_string().len())
+                                    .unwrap_or(0)
+                            })
+                    } else {
+                        let val = eval_expr(arg, env)?;
+                        val.to_display_string().len()
+                    };
+                    Ok(CobolValue::from_i64(len as i64))
+                }
+                _ => {
+                    // Unknown function - return 0
+                    Ok(CobolValue::from_i64(0))
+                }
+            }
+        }
+
+        SimpleExpr::RefMod { variable, start, length } => {
+            let val = eval_expr(variable, env)?;
+            let s = val.to_display_string();
+            let start_pos = to_numeric(&eval_expr(start, env)?).integer_part() as usize;
+            // COBOL reference modification is 1-based
+            let zero_start = if start_pos > 0 { start_pos - 1 } else { 0 };
+            let end_pos = if let Some(len_expr) = length {
+                let len = to_numeric(&eval_expr(len_expr, env)?).integer_part() as usize;
+                (zero_start + len).min(s.len())
+            } else {
+                s.len()
+            };
+            let zero_start = zero_start.min(s.len());
+            let substring = &s[zero_start..end_pos];
+            Ok(CobolValue::Alphanumeric(substring.to_string()))
+        }
     }
+}
+
+/// Compare two alphanumeric strings using COBOL rules (pad shorter with spaces).
+fn compare_alpha(l: &str, r: &str) -> std::cmp::Ordering {
+    let max_len = l.len().max(r.len());
+    let l_padded: String = format!("{:<width$}", l, width = max_len);
+    let r_padded: String = format!("{:<width$}", r, width = max_len);
+    l_padded.cmp(&r_padded)
 }
 
 /// Compare two CobolValues.
 fn compare_values(left: &CobolValue, right: &CobolValue) -> std::cmp::Ordering {
     match (left, right) {
         (CobolValue::Numeric(l), CobolValue::Numeric(r)) => l.value.cmp(&r.value),
-        (CobolValue::Alphanumeric(l), CobolValue::Alphanumeric(r)) => l.cmp(r),
-        (CobolValue::Numeric(l), CobolValue::Alphanumeric(r)) => l.to_display_string().cmp(r),
-        (CobolValue::Alphanumeric(l), CobolValue::Numeric(r)) => l.cmp(&r.to_display_string()),
+        (CobolValue::Alphanumeric(l), CobolValue::Alphanumeric(r)) => compare_alpha(l, r),
+        (CobolValue::Numeric(l), CobolValue::Alphanumeric(r)) => {
+            compare_alpha(&l.to_display_string(), r)
+        }
+        (CobolValue::Alphanumeric(l), CobolValue::Numeric(r)) => {
+            compare_alpha(l, &r.to_display_string())
+        }
         _ => std::cmp::Ordering::Equal,
     }
 }
 
 /// Evaluate a condition.
-fn eval_condition(cond: &SimpleCondition, env: &Environment) -> Result<bool> {
+fn eval_condition(cond: &SimpleCondition, env: &Environment, program: &SimpleProgram) -> Result<bool> {
     match cond {
         SimpleCondition::Compare { left, op, right } => {
             let l = eval_expr(left, env)?;
             let r = eval_expr(right, env)?;
+            if std::env::var("ZOS_DEBUG_CMP").is_ok() {
+                eprintln!("[CMP] {:?} {:?} {:?} => {:?}", l, op, r, compare_values(&l, &r));
+            }
             Ok(match op {
                 SimpleCompareOp::Equal => compare_values(&l, &r) == std::cmp::Ordering::Equal,
                 SimpleCompareOp::NotEqual => compare_values(&l, &r) != std::cmp::Ordering::Equal,
@@ -705,14 +978,34 @@ fn eval_condition(cond: &SimpleCondition, env: &Environment) -> Result<bool> {
             })
         }
 
-        SimpleCondition::Not(inner) => Ok(!eval_condition(inner, env)?),
+        SimpleCondition::Not(inner) => Ok(!eval_condition(inner, env, program)?),
 
         SimpleCondition::And(left, right) => {
-            Ok(eval_condition(left, env)? && eval_condition(right, env)?)
+            Ok(eval_condition(left, env, program)? && eval_condition(right, env, program)?)
         }
 
         SimpleCondition::Or(left, right) => {
-            Ok(eval_condition(left, env)? || eval_condition(right, env)?)
+            Ok(eval_condition(left, env, program)? || eval_condition(right, env, program)?)
+        }
+
+        SimpleCondition::ConditionName(name) => {
+            // Look up the level-88 condition: condition_name -> (parent_field, expected_value)
+            if let Some((parent, expected_val)) = program.condition_names.get(&name.to_uppercase()) {
+                let actual = env.get(parent)
+                    .map(|v| v.to_display_string().trim().to_string())
+                    .unwrap_or_default();
+                let result = actual == *expected_val;
+                if std::env::var("ZOS_DEBUG_CMP").is_ok() {
+                    eprintln!("[COND88] {} => {}={:?} expected={:?} => {}",
+                        name, parent, actual, expected_val, result);
+                }
+                Ok(result)
+            } else {
+                if std::env::var("ZOS_DEBUG_CMP").is_ok() {
+                    eprintln!("[COND88] {} => NOT FOUND in condition_names", name);
+                }
+                Ok(false)
+            }
         }
     }
 }
@@ -754,6 +1047,8 @@ mod tests {
         let program = SimpleProgram {
             name: "TEST".to_string(),
             data_items: vec![],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
             statements: vec![
                 SimpleStatement::Move {
                     from: SimpleExpr::Integer(10),
@@ -806,6 +1101,8 @@ mod tests {
         let program = SimpleProgram {
             name: "TEST".to_string(),
             data_items: vec![],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
             statements: vec![SimpleStatement::If {
                 condition: SimpleCondition::Compare {
                     left: SimpleExpr::Variable("X".to_string()),
@@ -849,6 +1146,8 @@ mod tests {
         let program = SimpleProgram {
             name: "TEST".to_string(),
             data_items: vec![],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
             statements: vec![SimpleStatement::Add {
                 values: vec![SimpleExpr::Integer(5), SimpleExpr::Integer(3)],
                 to: vec!["X".to_string()],
@@ -869,6 +1168,8 @@ mod tests {
         let program = SimpleProgram {
             name: "TEST".to_string(),
             data_items: vec![],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
             statements: vec![
                 SimpleStatement::StopRun {
                     return_code: Some(4),

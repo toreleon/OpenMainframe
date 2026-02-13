@@ -584,25 +584,32 @@ impl Parser {
 
         self.expect(TokenKind::Period)?;
 
-        // Parse subordinate items (for group items)
+        // Parse subordinate items (for group items) and level-88 conditions
         let mut children = Vec::new();
         let mut condition_values = Vec::new();
 
-        // If this is a group item (no PIC), parse children
-        if picture.is_none() && level < 77 && level != 66 && level != 88 {
+        // Level-88 condition names can follow any data item (with or without PIC)
+        // Group items (no PIC) can also have child data items
+        if level != 88 && level != 66 {
             while self.check_level_number() {
                 let child_level = self.peek_level_number();
-                if child_level > level || child_level == 88 {
+                if child_level == 88 {
+                    // Level-88 condition name - always collect under current item
                     let child = self.parse_data_item()?;
-                    if child.level == 88 {
-                        condition_values.push(ConditionValue {
-                            name: child.name.as_str().unwrap_or("").to_string(),
-                            values: vec![], // TODO: Parse condition values
-                            span: child.span,
-                        });
+                    let cond_values = if let Some(ref val) = child.value {
+                        vec![ConditionValueEntry::Single(val.clone())]
                     } else {
-                        children.push(child);
-                    }
+                        vec![]
+                    };
+                    condition_values.push(ConditionValue {
+                        name: child.name.as_str().unwrap_or("").to_string(),
+                        values: cond_values,
+                        span: child.span,
+                    });
+                } else if picture.is_none() && level < 77 && child_level > level {
+                    // Child data item of a group (no PIC clause)
+                    let child = self.parse_data_item()?;
+                    children.push(child);
                 } else {
                     break;
                 }
@@ -979,6 +986,11 @@ impl Parser {
             || (self.check_identifier() && self.peek_keyword(Keyword::Section))
             || (self.check_identifier() && self.peek(TokenKind::Period)))
         {
+            // Skip stray periods (sentence terminators) between statements
+            if self.check(TokenKind::Period) {
+                self.advance();
+                continue;
+            }
             match self.parse_statement() {
                 Ok(stmt) => statements.push(stmt),
                 Err(e) => {
@@ -1235,6 +1247,9 @@ impl Parser {
             if self.check_keyword(Keyword::EndPerform) {
                 self.advance();
             }
+
+            // Consume optional trailing period after END-PERFORM
+            self.skip_if(TokenKind::Period);
 
             let end = self.previous_span();
 

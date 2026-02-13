@@ -137,6 +137,26 @@ enum Commands {
         /// Input COBOL source file
         #[arg(value_name = "FILE")]
         input: PathBuf,
+
+        /// Additional copybook search paths
+        #[arg(short = 'I', long = "include", value_name = "DIR")]
+        include_paths: Vec<PathBuf>,
+
+        /// VSAM data files to load (format: DDNAME=path[:key_len[:rec_len]])
+        #[arg(long = "data", value_name = "DDNAME=FILE")]
+        data_files: Vec<String>,
+
+        /// Set CICS EIB COMMAREA length (simulates returning from a pseudo-conversation)
+        #[arg(long)]
+        eibcalen: Option<i64>,
+
+        /// Set CICS EIB AID key (e.g., ENTER, PF3, PF7)
+        #[arg(long)]
+        eibaid: Option<String>,
+
+        /// Set CICS variables before execution (format: NAME=VALUE)
+        #[arg(long = "set", value_name = "NAME=VALUE")]
+        set_vars: Vec<String>,
     },
 
     /// Manage Generation Data Groups (GDG)
@@ -216,7 +236,9 @@ fn main() -> Result<()> {
         } => commands::check::run(input, include_paths),
         Commands::ParseJcl { input } => commands::parse_jcl::run(input),
         Commands::Lex { input, format } => commands::lex::run(input, format),
-        Commands::Interpret { input } => commands::interpret::interpret(input),
+        Commands::Interpret { input, include_paths, data_files, eibcalen, eibaid, set_vars } => {
+            commands::interpret::interpret(input, include_paths, data_files, eibcalen, eibaid, set_vars)
+        }
         Commands::Gdg { action } => commands::gdg::run(action),
         Commands::Idcams { action } => commands::idcams::run(action),
         Commands::Bms { input, output, all } => {
