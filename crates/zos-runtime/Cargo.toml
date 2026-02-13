@@ -10,6 +10,7 @@ description = "Runtime library for zOS-clone COBOL execution"
 [dependencies]
 miette.workspace = true
 thiserror.workspace = true
+rust_decimal.workspace = true
 zos-encoding.workspace = true
 
 [dev-dependencies]

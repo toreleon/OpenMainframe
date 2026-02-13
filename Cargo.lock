@@ -1255,6 +1255,7 @@ name = "zos-runtime"
 version = "0.1.0"
 dependencies = [
  "miette",
+ "rust_decimal",
  "thiserror",
  "zos-encoding",
 ]
