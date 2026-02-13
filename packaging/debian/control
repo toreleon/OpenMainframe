@@ -1,0 +1,24 @@
+Source: zos-clone
+Section: devel
+Priority: optional
+Maintainer: zOS-clone Maintainers <maintainers@zos-clone.dev>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.82)
+Standards-Version: 4.6.2
+Homepage: https://github.com/zos-clone/zos-clone
+Vcs-Browser: https://github.com/zos-clone/zos-clone
+Vcs-Git: https://github.com/zos-clone/zos-clone.git
+Rules-Requires-Root: no
+
+Package: zos-clone
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Mainframe COBOL compiler and JCL interpreter
+ zOS-clone is a mainframe emulator that provides:
+  - COBOL compiler with LLVM backend
+  - JCL (Job Control Language) interpreter
+  - VSAM dataset support (KSDS, ESDS, RRDS)
+  - GDG (Generation Data Group) management
+  - IDCAMS utility for catalog operations
+  - SORT/DFSORT utility
+ .
+ This package enables running legacy mainframe workloads on modern Linux systems.

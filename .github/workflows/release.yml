@@ -62,9 +62,133 @@ jobs:
           name: zos-clone-${{ matrix.target }}
           path: zos-clone-${{ matrix.target }}.${{ matrix.archive }}
 
+  build-deb:
+    name: Build Debian Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev fakeroot
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create package structure
+        run: |
+          mkdir -p pkg/DEBIAN
+          mkdir -p pkg/usr/bin
+          mkdir -p pkg/usr/share/man/man1
+          mkdir -p pkg/usr/share/bash-completion/completions
+          mkdir -p pkg/usr/share/zsh/vendor-completions
+          mkdir -p pkg/usr/share/fish/vendor_completions.d
+          mkdir -p pkg/usr/share/doc/zos-clone
+
+          # Binary
+          cp target/release/zos-clone pkg/usr/bin/
+
+          # Man pages
+          cp packaging/man/*.1 pkg/usr/share/man/man1/
+          gzip -9 pkg/usr/share/man/man1/*.1
+
+          # Completions
+          cp packaging/completions/zos-clone.bash pkg/usr/share/bash-completion/completions/zos-clone
+          cp packaging/completions/zos-clone.zsh pkg/usr/share/zsh/vendor-completions/_zos-clone
+          cp packaging/completions/zos-clone.fish pkg/usr/share/fish/vendor_completions.d/
+
+          # Documentation
+          cp README.md pkg/usr/share/doc/zos-clone/
+          cp LICENSE pkg/usr/share/doc/zos-clone/copyright
+
+          # Control file
+          cat > pkg/DEBIAN/control << EOF
+          Package: zos-clone
+          Version: ${{ steps.version.outputs.version }}
+          Section: devel
+          Priority: optional
+          Architecture: amd64
+          Depends: libc6 (>= 2.17)
+          Maintainer: zOS-clone Maintainers <maintainers@zos-clone.dev>
+          Description: Mainframe COBOL compiler and JCL interpreter
+           zOS-clone is a mainframe emulator that provides COBOL compilation,
+           JCL interpretation, and dataset management for running legacy
+           mainframe workloads on modern Linux systems.
+          Homepage: https://github.com/zos-clone/zos-clone
+          EOF
+
+      - name: Build .deb package
+        run: |
+          fakeroot dpkg-deb --build pkg
+          mv pkg.deb zos-clone_${{ steps.version.outputs.version }}_amd64.deb
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zos-clone-deb
+          path: zos-clone_*.deb
+
+  build-rpm:
+    name: Build RPM Package
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          dnf install -y rust cargo rpm-build gcc
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create RPM build tree
+        run: |
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+          # Create tarball
+          mkdir zos-clone-${{ steps.version.outputs.version }}
+          cp -r * zos-clone-${{ steps.version.outputs.version }}/ 2>/dev/null || true
+          tar czvf ~/rpmbuild/SOURCES/zos-clone-${{ steps.version.outputs.version }}.tar.gz \
+            zos-clone-${{ steps.version.outputs.version }}
+
+          # Copy spec file
+          cp packaging/rpm/zos-clone.spec ~/rpmbuild/SPECS/
+
+          # Update version in spec
+          sed -i "s/^Version:.*/Version:        ${{ steps.version.outputs.version }}/" ~/rpmbuild/SPECS/zos-clone.spec
+
+      - name: Build RPM
+        run: |
+          cd ~/rpmbuild
+          rpmbuild -bb SPECS/zos-clone.spec --define "_topdir $(pwd)" \
+            --define "_binary_payload w2.xzdio" \
+            --define "debug_package %{nil}"
+
+      - name: Copy RPM
+        run: |
+          cp ~/rpmbuild/RPMS/*/*.rpm ./zos-clone-${{ steps.version.outputs.version }}.x86_64.rpm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zos-clone-rpm
+          path: zos-clone-*.rpm
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, build-deb, build-rpm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,10 +198,81 @@ jobs:
         with:
           path: artifacts
 
+      - name: Flatten artifacts
+        run: |
+          mkdir release
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" \) \
+            -exec cp {} release/ \;
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*
+          files: release/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-apt:
+    name: Publish to APT Repository
+    needs: release
+    runs-on: ubuntu-latest
+    if: github.repository == 'zos-clone/zos-clone'
+    steps:
+      - name: Download deb package
+        uses: actions/download-artifact@v4
+        with:
+          name: zos-clone-deb
+          path: packages
+
+      - name: Setup GPG
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
+        if: env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Sign package
+        run: |
+          dpkg-sig --sign builder packages/*.deb
+        if: env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      # Note: Actual repository publishing requires external storage
+      # This is a placeholder for when repository infrastructure is set up
+      - name: Upload to repository
+        run: |
+          echo "APT repository publishing requires additional infrastructure setup"
+          echo "Package ready for manual upload: $(ls packages/*.deb)"
+
+  publish-yum:
+    name: Publish to YUM Repository
+    needs: release
+    runs-on: ubuntu-latest
+    if: github.repository == 'zos-clone/zos-clone'
+    steps:
+      - name: Download rpm package
+        uses: actions/download-artifact@v4
+        with:
+          name: zos-clone-rpm
+          path: packages
+
+      - name: Setup GPG
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
+        if: env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Sign package
+        run: |
+          rpm --addsign packages/*.rpm
+        if: env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      # Note: Actual repository publishing requires external storage
+      - name: Upload to repository
+        run: |
+          echo "YUM repository publishing requires additional infrastructure setup"
+          echo "Package ready for manual upload: $(ls packages/*.rpm)"

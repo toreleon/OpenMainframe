@@ -1,0 +1,61 @@
+.TH ZOS-CLONE-COMPILE 1 "February 2026" "zOS-clone 0.1.0" "User Commands"
+.SH NAME
+zos-clone-compile \- compile COBOL source files
+.SH SYNOPSIS
+.B zos-clone compile
+[\fIOPTIONS\fR] \fIFILE\fR
+.SH DESCRIPTION
+Compile a COBOL source file to native code using the LLVM backend.
+The compiler supports both fixed-format (columns 1-72) and free-format
+COBOL source.
+.SH OPTIONS
+.TP
+.BR \-o ", " \-\-output " " \fIFILE\fR
+Output file path. Defaults to input filename without extension.
+.TP
+.BR \-O ", " \-\-optimize " " \fILEVEL\fR
+Optimization level (0-3). Default: 0.
+.RS
+.TP
+.B 0
+No optimization (fastest compile).
+.TP
+.B 1
+Basic optimizations.
+.TP
+.B 2
+Standard optimizations.
+.TP
+.B 3
+Aggressive optimizations.
+.RE
+.TP
+.BR \-\-emit\-asm
+Emit assembly instead of object file.
+.TP
+.BR \-\-emit\-llvm
+Emit LLVM IR instead of object file.
+.TP
+.BR \-I ", " \-\-include " " \fIDIR\fR
+Additional copybook search paths. Can be specified multiple times.
+.SH EXAMPLES
+.TP
+Basic compilation:
+.B zos-clone compile program.cbl
+.TP
+Compile with output name:
+.B zos-clone compile program.cbl -o myprogram
+.TP
+Compile with optimization:
+.B zos-clone compile program.cbl -O2
+.TP
+Emit LLVM IR for debugging:
+.B zos-clone compile program.cbl --emit-llvm
+.TP
+Include copybook paths:
+.B zos-clone compile program.cbl -I /copy1 -I /copy2
+.SH SEE ALSO
+.BR zos-clone (1),
+.BR zos-clone-check (1)
+.SH AUTHORS
+zOS-clone Contributors

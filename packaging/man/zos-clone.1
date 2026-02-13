@@ -1,0 +1,104 @@
+.TH ZOS-CLONE 1 "February 2026" "zOS-clone 0.1.0" "User Commands"
+.SH NAME
+zos-clone \- mainframe COBOL compiler and JCL interpreter
+.SH SYNOPSIS
+.B zos-clone
+[\fIOPTIONS\fR] \fICOMMAND\fR [\fIARGS\fR]
+.SH DESCRIPTION
+.B zos-clone
+is a mainframe emulator that provides COBOL compilation, JCL interpretation,
+and dataset management capabilities for running legacy mainframe workloads
+on modern Linux systems.
+.SH OPTIONS
+.TP
+.BR \-v ", " \-\-verbose
+Enable verbose output for debugging.
+.TP
+.BR \-h ", " \-\-help
+Print help information.
+.TP
+.BR \-V ", " \-\-version
+Print version information.
+.SH COMMANDS
+.TP
+.B compile
+Compile a COBOL source file to native code. See \fBzos-clone-compile\fR(1).
+.TP
+.B run
+Execute a JCL job. See \fBzos-clone-run\fR(1).
+.TP
+.B check
+Parse and validate COBOL syntax without compiling. See \fBzos-clone-check\fR(1).
+.TP
+.B interpret
+Run a COBOL program using the interpreter (no compilation).
+.TP
+.B lex
+Display COBOL tokens for debugging.
+.TP
+.B parse-jcl
+Parse JCL and display the job structure.
+.TP
+.B gdg
+Manage Generation Data Groups. See \fBzos-clone-gdg\fR(1).
+.TP
+.B idcams
+Execute IDCAMS commands for dataset management. See \fBzos-clone-idcams\fR(1).
+.TP
+.B config
+Manage configuration settings.
+.TP
+.B completions
+Generate shell completion scripts.
+.SH ENVIRONMENT
+.TP
+.B ZOS_CLONE_SOURCE_FORMAT
+Source format: fixed, free, or auto (default: auto).
+.TP
+.B ZOS_CLONE_COPYBOOK_PATH
+Colon-separated list of copybook search paths.
+.TP
+.B ZOS_CLONE_OPTIMIZATION
+Optimization level 0-3 (default: 0).
+.TP
+.B ZOS_CLONE_DATASET_DIR
+Base directory for dataset files.
+.TP
+.B ZOS_CLONE_PROGRAM_DIR
+Directory for compiled programs.
+.TP
+.B ZOS_CLONE_WORK_DIR
+Working directory for job execution.
+.SH FILES
+.TP
+.I ./zos-clone.toml
+Project configuration file.
+.TP
+.I ~/.config/zos-clone/config.toml
+User configuration file.
+.SH EXAMPLES
+.TP
+Compile a COBOL program:
+.B zos-clone compile program.cbl -o program
+.TP
+Run a JCL job:
+.B zos-clone run job.jcl
+.TP
+Check COBOL syntax:
+.B zos-clone check program.cbl
+.TP
+Create a GDG:
+.B zos-clone gdg create MY.GDG --limit 5
+.TP
+Run IDCAMS command:
+.B zos-clone idcams exec "LISTCAT ENTRIES(MY.DATASET)"
+.SH SEE ALSO
+.BR zos-clone-compile (1),
+.BR zos-clone-run (1),
+.BR zos-clone-check (1),
+.BR zos-clone-gdg (1),
+.BR zos-clone-idcams (1)
+.SH AUTHORS
+zOS-clone Contributors
+.SH BUGS
+Report bugs at: https://github.com/zos-clone/zos-clone/issues

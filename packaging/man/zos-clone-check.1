@@ -1,0 +1,43 @@
+.TH ZOS-CLONE-CHECK 1 "February 2026" "zOS-clone 0.1.0" "User Commands"
+.SH NAME
+zos-clone-check \- validate COBOL syntax
+.SH SYNOPSIS
+.B zos-clone check
+[\fIOPTIONS\fR] \fIFILE\fR
+.SH DESCRIPTION
+Parse and validate COBOL source code without generating any output files.
+This is useful for syntax checking and identifying errors before compilation.
+.PP
+The checker performs lexical analysis, parsing, and semantic analysis to
+identify issues such as:
+.IP \(bu 2
+Syntax errors
+.IP \(bu 2
+Undefined identifiers
+.IP \(bu 2
+Type mismatches
+.IP \(bu 2
+Invalid COBOL constructs
+.SH OPTIONS
+.TP
+.BR \-I ", " \-\-include " " \fIDIR\fR
+Additional copybook search paths. Can be specified multiple times.
+.SH EXIT STATUS
+.TP
+.B 0
+No errors found.
+.TP
+.B 1
+Syntax or semantic errors detected.
+.SH EXAMPLES
+.TP
+Check a COBOL file:
+.B zos-clone check program.cbl
+.TP
+Check with copybook paths:
+.B zos-clone check program.cbl -I ./copybooks
+.SH SEE ALSO
+.BR zos-clone (1),
+.BR zos-clone-compile (1)
+.SH AUTHORS
+zOS-clone Contributors
