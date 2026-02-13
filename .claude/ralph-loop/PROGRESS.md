@@ -4,12 +4,12 @@
 
 ```yaml
 active: true
-iteration: 2
+iteration: 3
 started: 2026-02-13
 last_updated: 2026-02-13
 current_version: v1.1
 current_epic: 15
-current_story: 15.2
+current_story: 15.3
 status: in_progress
 ```
 
@@ -48,7 +48,7 @@ status: in_progress
 
 | Epic | Name | Stories | Status | Progress |
 |------|------|---------|--------|----------|
-| 15 | VSAM Core (KSDS) | 8 | 🔄 In Progress | 1/8 |
+| 15 | VSAM Core (KSDS) | 8 | 🔄 In Progress | 2/8 |
 | 16 | VSAM ESDS/RRDS | 5 | ⏳ Pending | 0/5 |
 | 17 | SORT Utility | 9 | ⏳ Pending | 0/9 |
 | 18 | GDG Support | 7 | ⏳ Pending | 0/7 |
@@ -58,8 +58,8 @@ status: in_progress
 **v1.1 Metrics:**
 - Total Epics: 6
 - Total Stories: 42
-- Completed: 1
-- Remaining: 41
+- Completed: 2
+- Remaining: 40
 
 ---
 
@@ -76,7 +76,8 @@ status: in_progress
 | Story | Name | Status | Notes |
 |-------|------|--------|-------|
 | 15.1 | B+ Tree Index | ✅ Complete | B+ tree with insert, search, range, delete |
-| 15.2 | Cluster Definition | ⏳ Next | |
+| 15.2 | Cluster Definition | ✅ Complete | VsamCluster, KeySpec, file format |
+| 15.3 | Keyed Read | ⏳ Next | |
 | 15.3 | Keyed Read | ⏳ Pending | |
 | 15.4 | Keyed Write | ⏳ Pending | |
 | 15.5 | Update/Delete | ⏳ Pending | |
@@ -98,11 +99,20 @@ status: in_progress
 
 ### Iteration 2 - 2026-02-13
 **Focus:** VSAM Cluster Definition
+**Status:** Complete
+**Actions:**
+- [x] Implement VsamCluster struct with create/open/delete
+- [x] Add key specification validation (KeySpec)
+- [x] Create cluster file format (.vsam with 128-byte header)
+- [x] Add 10 cluster tests
+
+### Iteration 3 - 2026-02-13
+**Focus:** KSDS Keyed Read
 **Status:** Starting
 **Actions:**
-- [ ] Implement VsamCluster struct
-- [ ] Add key specification validation
-- [ ] Create cluster file format
+- [ ] Implement read_key() method
+- [ ] Implement read_key_generic() method
+- [ ] Add file status code support
 
 ---
 

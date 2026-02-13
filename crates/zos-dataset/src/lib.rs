@@ -39,4 +39,4 @@ pub use qsam::{read_all_records, write_records, OpenMode, QsamReader, QsamWriter
 pub use types::{
     DatasetAttributes, DatasetOrg, DatasetRef, DispAction, DispSpec, Disposition, RecordFormat,
 };
-pub use vsam::{BPlusTree, DEFAULT_ORDER};
+pub use vsam::{BPlusTree, ClusterParams, KeySpec, VsamCluster, VsamType, DEFAULT_ORDER};

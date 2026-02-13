@@ -93,6 +93,11 @@ pub enum DatasetError {
         /// Name of the dataset.
         name: String,
     },
+
+    /// Invalid parameter.
+    #[error("Invalid parameter: {0}")]
+    #[diagnostic(code(dataset::invalid_parameter))]
+    InvalidParameter(String),
 }
 
 impl From<std::io::Error> for DatasetError {

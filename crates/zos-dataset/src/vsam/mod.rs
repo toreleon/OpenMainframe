@@ -16,15 +16,16 @@
 //! # Example
 //!
 //! ```ignore
-//! use zos_dataset::vsam::{BPlusTree, DEFAULT_ORDER};
+//! use zos_dataset::vsam::{VsamCluster, ClusterParams, VsamType};
 //!
-//! let mut tree = BPlusTree::with_order(100);
-//! tree.insert(key, value);
-//! if let Some(val) = tree.get(&key) {
-//!     // Use value
-//! }
+//! // Create a KSDS cluster
+//! let params = ClusterParams::ksds("MY.VSAM.DATA", 100, 0, 10);
+//! let mut cluster = VsamCluster::new(params)?;
+//! cluster.create()?;
 //! ```
 
 mod btree;
+mod cluster;
 
 pub use btree::{BPlusTree, DEFAULT_ORDER};
+pub use cluster::{ClusterParams, KeySpec, VsamCluster, VsamType};
