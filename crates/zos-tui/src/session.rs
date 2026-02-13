@@ -222,6 +222,13 @@ impl Session {
                 }
 
                 InputAction::AidKey(aid_code) => {
+                    // CLEAR key: clear all unprotected fields first
+                    if aid_code == zos_cics::runtime::eib::aid::CLEAR {
+                        self.field_table.clear_unprotected();
+                        self.field_table.home();
+                        self.update_cursor_status();
+                    }
+
                     // Collect modified field data
                     let mut fields = HashMap::new();
                     for (name, data) in self.field_table.get_all_input_fields() {

@@ -327,17 +327,46 @@ fn run_session_loop(
             match find_program_source(ctx.current_program, ctx.search_dir) {
                 Some(path) => {
                     tracing::info!("Loading program {} from {}", ctx.current_program, path.display());
-                    let p = load_interpret_program(&path, ctx.include_paths)
-                        .map_err(|e| zos_tui::SessionError::Execution {
-                            program: ctx.current_program.clone(),
-                            message: e.to_string(),
-                        })?;
-                    ctx.program_cache.insert(ctx.current_program.clone(), p);
+                    match load_interpret_program(&path, ctx.include_paths) {
+                        Ok(p) => {
+                            ctx.program_cache.insert(ctx.current_program.clone(), p);
+                        }
+                        Err(e) => {
+                            let err_msg = format!(
+                                "Failed to load {}: {}",
+                                ctx.current_program,
+                                e
+                            );
+                            tracing::error!("{}", err_msg);
+                            session.set_message(&err_msg);
+                            loop {
+                                let (aid, _) = session.wait_for_input(terminal)?;
+                                if aid == zos_cics::runtime::eib::aid::PF3
+                                    || aid == zos_cics::runtime::eib::aid::CLEAR
+                                {
+                                    return Ok(());
+                                }
+                                session.set_message(&err_msg);
+                            }
+                        }
+                    }
                 }
                 None => {
-                    return Err(zos_tui::SessionError::ProgramNotFound {
-                        name: ctx.current_program.clone(),
-                    });
+                    let err_msg = format!(
+                        "PGMIDERR: Program {} not found",
+                        ctx.current_program
+                    );
+                    tracing::error!("{}", err_msg);
+                    session.set_message(&err_msg);
+                    loop {
+                        let (aid, _) = session.wait_for_input(terminal)?;
+                        if aid == zos_cics::runtime::eib::aid::PF3
+                            || aid == zos_cics::runtime::eib::aid::CLEAR
+                        {
+                            return Ok(());
+                        }
+                        session.set_message(&err_msg);
+                    }
                 }
             }
         }
@@ -348,15 +377,32 @@ fn run_session_loop(
         env.resume();
         let program = ctx.program_cache.get(ctx.current_program.as_str()).unwrap();
 
-        let _rc = zos_runtime::interpreter::execute(program, env)
-            .map_err(|e| zos_tui::SessionError::Execution {
-                program: ctx.current_program.clone(),
-                message: e.to_string(),
-            })?;
+        let exec_result = zos_runtime::interpreter::execute(program, env);
 
         // After execution, apply any SEND MAP/TEXT events captured by the callback
-        // to the session so the TUI renders the correct screen.
+        // to the session so the TUI renders the correct screen (even if execution
+        // had an error, there may be a partial screen to display).
         apply_pending_events(session, ctx.callback_state);
+
+        // Handle execution errors gracefully: show on status line and wait for
+        // user to press PF3 to exit, rather than immediately terminating.
+        if let Err(e) = exec_result {
+            let err_msg = format!("ABEND in {}: {}", ctx.current_program, e);
+            tracing::error!("{}", err_msg);
+            session.set_message(&err_msg);
+
+            // Show the error and wait for user to press PF3 or Ctrl+C
+            loop {
+                let (aid, _fields) = session.wait_for_input(terminal)?;
+                if aid == zos_cics::runtime::eib::aid::PF3
+                    || aid == zos_cics::runtime::eib::aid::CLEAR
+                {
+                    return Ok(());
+                }
+                // Any other key: keep showing the error screen
+                session.set_message(&err_msg);
+            }
+        }
 
         // Check bridge state
         if let Some(mut handler) = env.cics_handler.take() {
