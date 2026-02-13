@@ -7,10 +7,15 @@ license.workspace = true
 repository.workspace = true
 description = "COBOL compiler for zOS-clone"
 
+[features]
+default = []
+llvm = ["inkwell"]
+
 [dependencies]
 miette.workspace = true
 thiserror.workspace = true
 bumpalo.workspace = true
+inkwell = { workspace = true, optional = true }
 zos-encoding.workspace = true
 zos-runtime.workspace = true
 

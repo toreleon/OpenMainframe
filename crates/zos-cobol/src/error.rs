@@ -97,4 +97,12 @@ pub enum CobolError {
         /// Column number.
         column: u32,
     },
+
+    /// Code generation error.
+    #[error("Code generation error: {message}")]
+    #[diagnostic(code(cobol::codegen_error))]
+    CodegenError {
+        /// Description of the code generation error.
+        message: String,
+    },
 }

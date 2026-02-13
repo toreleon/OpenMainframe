@@ -17,6 +17,8 @@
 //! 6. LLVM compiles to native code
 
 pub mod ast;
+#[cfg(feature = "llvm")]
+pub mod codegen;
 pub mod error;
 pub mod lexer;
 pub mod parser;
