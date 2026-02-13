@@ -4,13 +4,13 @@
 
 ```yaml
 active: true
-iteration: 6
+iteration: 7
 started: 2026-02-13
 last_updated: 2026-02-13
 current_version: v1.1
 current_epic: 17
-current_story: 17.1
-status: ready
+current_story: 17.9
+status: in_progress
 ```
 
 ---
@@ -50,7 +50,7 @@ status: ready
 |------|------|---------|--------|----------|
 | 15 | VSAM Core (KSDS) | 8 | ✅ Complete | 8/8 |
 | 16 | VSAM ESDS/RRDS | 5 | ✅ Complete | 5/5 |
-| 17 | SORT Utility | 9 | ⏳ Pending | 0/9 |
+| 17 | SORT Utility | 9 | 🔄 In Progress | 7/9 |
 | 18 | GDG Support | 7 | ⏳ Pending | 0/7 |
 | 19 | IDCAMS | 8 | ⏳ Pending | 0/8 |
 | 20 | Package Distribution | 5 | ⏳ Pending | 0/5 |
@@ -58,8 +58,8 @@ status: ready
 **v1.1 Metrics:**
 - Total Epics: 6
 - Total Stories: 42
-- Completed: 13
-- Remaining: 29
+- Completed: 20
+- Remaining: 22
 
 ---
 
@@ -157,6 +157,31 @@ status: ready
   - 9 tests
 - [x] All tests passing: 243 tests
 
+### Iteration 7 - 2026-02-13
+**Focus:** Epic 17 - SORT Utility
+**Status:** In Progress
+**Actions:**
+- [x] Create zos-sort crate (Story 17.1)
+  - DFSORT control statement parser
+  - SortSpec, SortField, DataType, SortOrder types
+  - Parse SORT FIELDS, INCLUDE, OMIT, OUTREC, INREC, SUM
+- [x] Implement in-memory sort engine (Story 17.2)
+  - SortEngine with sort_file() method
+  - Multi-field sort with numeric data type support
+- [x] Implement INCLUDE/OMIT filtering (Story 17.4)
+  - FilterSpec with Condition evaluation
+  - EQ, NE, GT, GE, LT, LE comparisons
+- [x] Implement OUTREC/INREC reformatting (Stories 17.5-17.6)
+  - OutrecSpec with Field, Literal, Spaces
+- [x] Implement SUM operation (Story 17.7)
+  - FIELDS=NONE removes duplicates
+- [x] Implement MERGE and COPY (Story 17.8)
+  - merge_files() for pre-sorted inputs
+  - Copy mode without sorting
+- [ ] Story 17.3: External merge sort (large files)
+- [ ] Story 17.9: JCL/CLI integration
+- [x] 33 new tests, 276 total passing
+
 ---
 
 ## Blockers
@@ -231,9 +256,9 @@ cargo clippy -- -D warnings
 ```
 
 ### Next Steps
-1. Start Epic 17: SORT Utility
-2. Implement SORT/MERGE functionality
-3. Add INCLUDE/OMIT record selection
+1. Complete Epic 17: External merge sort, JCL/CLI integration
+2. Start Epic 18: GDG Support
+3. Start Epic 19: IDCAMS utility
 
 ---
 
