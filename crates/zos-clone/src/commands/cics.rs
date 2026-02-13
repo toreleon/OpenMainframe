@@ -93,10 +93,24 @@ impl TerminalCallback for TuiCallback {
 
         if let Some(bms_map) = resolved_map {
             // Filter out metadata keys from data.
-            let clean_data: HashMap<String, Vec<u8>> = data.iter()
+            let mut clean_data: HashMap<String, Vec<u8>> = data.iter()
                 .filter(|(k, _)| !k.starts_with("__"))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
+
+            // If FROM data is present, decompose it into individual field values
+            // using the symbolic map layout (TIOAPFX + L/F/A/data per field).
+            if let Some(from_data) = data.get("__FROM__") {
+                let from_str = String::from_utf8_lossy(from_data);
+                let decomposed = zos_cics::bms::decompose_from_display_string(
+                    &bms_map,
+                    &from_str,
+                );
+                // Merge decomposed fields into clean_data (FROM fields take precedence).
+                for (name, value) in decomposed {
+                    clean_data.insert(name, value);
+                }
+            }
 
             state.pending_maps.push(PendingSendMap {
                 map: bms_map,

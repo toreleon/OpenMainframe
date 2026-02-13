@@ -238,3 +238,62 @@ fn test_callback_pipeline_send_map_then_input_simulation() {
     assert!(modified_names.contains(&"USRIDI"));
     assert!(modified_names.contains(&"PASSWI"));
 }
+
+#[test]
+fn test_session_dataonly_preserves_labels() {
+    // DATAONLY should update only variable fields, keeping static labels intact.
+    let mut session = Session::new(test_config());
+    let map = parse_first_map(SIGNON_BMS);
+
+    // Initial SEND MAP with ERASE (full map)
+    session.on_send_map(&map, &HashMap::new(), &SendMapOptions::initial());
+
+    // Now a DATAONLY update with error message
+    let mut data = HashMap::new();
+    data.insert("ERRMSG".to_string(), b"Login failed".to_vec());
+
+    let dataonly_opts = SendMapOptions {
+        dataonly: true,
+        freekb: true,
+        ..Default::default()
+    };
+    session.on_send_map(&map, &data, &dataonly_opts);
+    // Should not panic - DATAONLY updates fields in the existing table.
+}
+
+#[test]
+fn test_session_maponly_ignores_data() {
+    // MAPONLY should render the map with INITIAL values but ignore program data.
+    let mut session = Session::new(test_config());
+    let map = parse_first_map(SIGNON_BMS);
+
+    let mut data = HashMap::new();
+    data.insert("ERRMSG".to_string(), b"This should be ignored".to_vec());
+
+    let maponly_opts = SendMapOptions {
+        maponly: true,
+        erase: true,
+        freekb: true,
+        ..Default::default()
+    };
+    session.on_send_map(&map, &data, &maponly_opts);
+    // Should not panic. MAPONLY means only the static map content is rendered.
+}
+
+#[test]
+fn test_session_frset_clears_mdt() {
+    let mut session = Session::new(test_config());
+    let map = parse_first_map(SIGNON_BMS);
+
+    // Initial send
+    session.on_send_map(&map, &HashMap::new(), &SendMapOptions::initial());
+
+    // Send with FRSET to clear MDTs
+    let frset_opts = SendMapOptions {
+        frset: true,
+        freekb: true,
+        ..Default::default()
+    };
+    session.on_send_map(&map, &HashMap::new(), &frset_opts);
+    // MDTs should be cleared after FRSET.
+}

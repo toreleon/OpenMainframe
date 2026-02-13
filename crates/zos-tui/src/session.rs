@@ -121,6 +121,13 @@ impl Session {
 
     /// Update the screen from a SEND MAP operation.
     /// Called by the CICS bridge when a program issues SEND MAP.
+    ///
+    /// Handles three modes:
+    /// - **Full (default):** Rebuilds the field table from the BMS map and applies data.
+    /// - **DATAONLY:** Updates only variable data fields in the existing table,
+    ///   preserving static labels and current field content.
+    /// - **MAPONLY:** Rebuilds the field table from the BMS map with INITIAL values
+    ///   but does not apply any data from the program.
     pub fn on_send_map(
         &mut self,
         map: &BmsMap,
@@ -131,12 +138,22 @@ impl Session {
             self.screen.clear();
         }
 
-        // Build field table from BMS map
-        self.field_table = FieldTable::from_bms_map(map);
+        if options.dataonly {
+            // DATAONLY: Update only variable fields in existing field table.
+            // Don't rebuild the map - just merge in the new data values.
+            for (name, value) in data {
+                self.field_table.set_field_data(name, value);
+            }
+        } else {
+            // Full send or MAPONLY: rebuild field table from BMS map.
+            self.field_table = FieldTable::from_bms_map(map);
 
-        // Apply data to field table
-        for (name, value) in data {
-            self.field_table.set_field_data(name, value);
+            if !options.maponly {
+                // Apply data to field table (not for MAPONLY).
+                for (name, value) in data {
+                    self.field_table.set_field_data(name, value);
+                }
+            }
         }
 
         // Reset MDTs if FRSET
