@@ -227,13 +227,19 @@ impl BmsParser {
         let mut current = String::new();
 
         for line in source.lines() {
-            // Check if line ends with continuation character (X followed by optional whitespace)
             let trimmed_end = line.trim_end();
-            if trimmed_end.ends_with('X') || trimmed_end.ends_with('x') {
-                // Check if it's a continuation (typically X at end of code area)
-                // Remove the X and append
-                let without_x = &trimmed_end[..trimmed_end.len()-1];
-                current.push_str(without_x.trim_end());
+
+            // BMS continuation: line ends with '-' or 'X'/'x' as the continuation
+            // character (typically in column 72 of assembler format).
+            // Also handle cases where the '-' is the last non-space character.
+            let is_continuation = trimmed_end.ends_with('-')
+                || trimmed_end.ends_with('X')
+                || trimmed_end.ends_with('x');
+
+            if is_continuation && !trimmed_end.starts_with('*') {
+                // Remove continuation char and trailing spaces before it
+                let without_cont = &trimmed_end[..trimmed_end.len()-1];
+                current.push_str(without_cont.trim_end());
                 current.push(' ');
             } else {
                 current.push_str(line);
@@ -707,5 +713,74 @@ OUT1     DFHMDF POS=(2,1),LENGTH=10,ATTRB=(PROT)
         assert_eq!(parser.parse_color("GREEN"), FieldColor::Green);
         assert_eq!(parser.parse_color("BLUE"), FieldColor::Blue);
         assert_eq!(parser.parse_color("YELLOW"), FieldColor::Yellow);
+    }
+
+    #[test]
+    fn test_parse_carddemo_login_bms() {
+        // Real CardDemo login screen BMS (COSGN00) using '-' continuation
+        let source = r#"
+COSGN00 DFHMSD CTRL=(ALARM,FREEKB),                                    -
+               LANG=COBOL,                                             -
+               STORAGE=AUTO,                                           -
+               TYPE=&&SYSPARM
+COSGN0A DFHMDI COLUMN=1,                                               -
+               LINE=1,                                                 -
+               SIZE=(24,80)
+        DFHMDF ATTRB=(ASKIP,NORM),                                     -
+               COLOR=BLUE,                                             -
+               LENGTH=6,                                               -
+               POS=(1,1),                                              -
+               INITIAL='Tran :'
+TRNNAME DFHMDF ATTRB=(ASKIP,FSET,NORM),                                -
+               COLOR=BLUE,                                             -
+               LENGTH=4,                                               -
+               POS=(1,8)
+USERID  DFHMDF ATTRB=(FSET,IC,NORM,UNPROT),                            -
+               COLOR=GREEN,                                            -
+               LENGTH=8,                                               -
+               POS=(19,43)
+PASSWD  DFHMDF ATTRB=(DRK,FSET,UNPROT),                                -
+               COLOR=GREEN,                                            -
+               LENGTH=8,                                               -
+               POS=(20,43)
+ERRMSG  DFHMDF ATTRB=(ASKIP,BRT,FSET),                                 -
+               COLOR=RED,                                              -
+               LENGTH=78,                                              -
+               POS=(23,1)
+        DFHMSD TYPE=FINAL
+"#;
+
+        let mut parser = BmsParser::new();
+        let mapset = parser.parse(source).unwrap();
+
+        assert_eq!(mapset.name, "COSGN00");
+        assert_eq!(mapset.lang, MapLanguage::Cobol);
+        assert_eq!(mapset.maps.len(), 1);
+
+        let map = &mapset.maps[0];
+        assert_eq!(map.name, "COSGN0A");
+        assert_eq!(map.size, (24, 80));
+
+        // Should have 5 named fields + 1 unnamed
+        let named: Vec<_> = map.fields.iter().filter(|f| !f.name.is_empty()).collect();
+        assert_eq!(named.len(), 4); // TRNNAME, USERID, PASSWD, ERRMSG
+
+        // Check USERID field
+        let userid = map.get_field("USERID").unwrap();
+        assert_eq!(userid.row, 19);
+        assert_eq!(userid.column, 43);
+        assert_eq!(userid.length, 8);
+        assert!(userid.is_input());
+        assert!(userid.attributes.initial_cursor);
+
+        // Check PASSWD field (dark)
+        let passwd = map.get_field("PASSWD").unwrap();
+        assert!(passwd.attributes.dark);
+        assert!(!passwd.attributes.protected);
+
+        // Check ERRMSG field (bright, protected)
+        let errmsg = map.get_field("ERRMSG").unwrap();
+        assert!(errmsg.attributes.bright);
+        assert!(errmsg.attributes.protected);
     }
 }

@@ -1,6 +1,8 @@
 //! CLI command implementations.
 
+pub mod bms;
 pub mod check;
+pub mod cics_bridge;
 pub mod compile;
 pub mod db2;
 pub mod gdg;

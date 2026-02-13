@@ -47,6 +47,17 @@ impl Default for DataItemMeta {
     }
 }
 
+/// Trait for handling EXEC CICS commands.
+pub trait CicsCommandHandler {
+    /// Execute a CICS command.
+    fn execute(
+        &mut self,
+        command: &str,
+        options: &[(String, Option<CobolValue>)],
+        env: &mut Environment,
+    ) -> Result<()>;
+}
+
 /// Runtime environment for interpreter.
 pub struct Environment {
     /// Data item values.
@@ -61,6 +72,8 @@ pub struct Environment {
     return_code: i32,
     /// Stop flag.
     stopped: bool,
+    /// CICS command handler (optional).
+    pub cics_handler: Option<Box<dyn CicsCommandHandler>>,
 }
 
 impl Environment {
@@ -73,6 +86,7 @@ impl Environment {
             stdin: Box::new(std::io::BufReader::new(std::io::stdin())),
             return_code: 0,
             stopped: false,
+            cics_handler: None,
         }
     }
 
@@ -85,7 +99,14 @@ impl Environment {
             stdin,
             return_code: 0,
             stopped: false,
+            cics_handler: None,
         }
+    }
+
+    /// Install a CICS command handler.
+    pub fn with_cics_handler(mut self, handler: Box<dyn CicsCommandHandler>) -> Self {
+        self.cics_handler = Some(handler);
+        self
     }
 
     /// Define a data item.
@@ -219,6 +240,49 @@ pub enum SimpleStatement {
     Perform { target: String, times: Option<u32> },
     /// STOP RUN
     StopRun { return_code: Option<i32> },
+    /// EVALUATE statement
+    Evaluate {
+        subjects: Vec<SimpleExpr>,
+        when_clauses: Vec<SimpleWhenClause>,
+    },
+    /// EXEC CICS command
+    ExecCics {
+        command: String,
+        options: Vec<(String, Option<SimpleExpr>)>,
+    },
+    /// GO TO paragraph
+    GoTo { target: String },
+    /// INITIALIZE variable
+    Initialize { targets: Vec<String> },
+    /// STRING concatenation
+    StringConcat {
+        sources: Vec<SimpleExpr>,
+        into: String,
+    },
+    /// SET variable TO value (88-level condition or index)
+    Set {
+        target: String,
+        value: SimpleExpr,
+    },
+    /// CALL subprogram
+    Call {
+        program: SimpleExpr,
+        using: Vec<String>,
+    },
+    /// PERFORM inline (with statements)
+    PerformInline {
+        until: Option<SimpleCondition>,
+        statements: Vec<SimpleStatement>,
+    },
+}
+
+/// EVALUATE WHEN clause.
+#[derive(Debug, Clone)]
+pub struct SimpleWhenClause {
+    /// Condition to match (for EVALUATE TRUE: condition; for EVALUATE var: value)
+    pub condition: SimpleCondition,
+    /// Statements to execute
+    pub statements: Vec<SimpleStatement>,
 }
 
 /// Simple expression for interpreter.
@@ -436,6 +500,119 @@ fn execute_statement(
                 env.set_return_code(*rc);
             }
             env.stop();
+        }
+
+        SimpleStatement::Evaluate {
+            subjects,
+            when_clauses,
+        } => {
+            // Evaluate subject(s)
+            let subject_values: Vec<CobolValue> = subjects
+                .iter()
+                .map(|s| eval_expr(s, env))
+                .collect::<Result<_>>()?;
+
+            // Find first matching WHEN clause
+            for when_clause in when_clauses {
+                let matched = if subject_values.is_empty() {
+                    // EVALUATE with no subjects - check condition directly
+                    eval_condition(&when_clause.condition, env)?
+                } else {
+                    // EVALUATE TRUE: condition is evaluated directly
+                    // EVALUATE var: condition compares var to value
+                    eval_condition(&when_clause.condition, env)?
+                };
+
+                if matched {
+                    execute_statements(&when_clause.statements, program, env)?;
+                    break;
+                }
+            }
+        }
+
+        SimpleStatement::ExecCics { command, options } => {
+            // Evaluate option expressions first (while env is not mutably borrowed)
+            let eval_options: Vec<(String, Option<CobolValue>)> = options
+                .iter()
+                .map(|(name, expr)| {
+                    let value = expr.as_ref().map(|e| eval_expr(e, env)).transpose()?;
+                    Ok((name.clone(), value))
+                })
+                .collect::<Result<_>>()?;
+
+            // Take the handler out temporarily to avoid borrow conflict
+            if let Some(mut handler) = env.cics_handler.take() {
+                let result = handler.execute(command, &eval_options, env);
+                env.cics_handler = Some(handler);
+                result?;
+            }
+        }
+
+        SimpleStatement::GoTo { target } => {
+            // GO TO requires special flow control - for now, try PERFORM-like semantics
+            if let Some(para) = program.paragraphs.get(&target.to_uppercase()) {
+                execute_statements(para, program, env)?;
+                env.stop(); // GO TO means transfer, stop current flow
+            }
+        }
+
+        SimpleStatement::Initialize { targets } => {
+            for target in targets {
+                if let Some(meta) = env.meta(target).cloned() {
+                    if meta.is_numeric {
+                        env.set(target, CobolValue::from_i64(0))?;
+                    } else {
+                        env.set(target, CobolValue::Alphanumeric(" ".repeat(meta.size)))?;
+                    }
+                }
+            }
+        }
+
+        SimpleStatement::StringConcat { sources, into } => {
+            let mut result = String::new();
+            for src in sources {
+                let val = eval_expr(src, env)?;
+                result.push_str(&val.to_display_string());
+            }
+            env.set(into, CobolValue::Alphanumeric(result))?;
+        }
+
+        SimpleStatement::Set { target, value } => {
+            let val = eval_expr(value, env)?;
+            env.set(target, val)?;
+        }
+
+        SimpleStatement::Call { program, using: _ } => {
+            let prog_name = eval_expr(program, env)?;
+            // CALLed programs are not yet supported - log and continue
+            env.display(
+                &format!("[CALL] {} - not yet supported", prog_name.to_display_string().trim()),
+                false,
+            )?;
+        }
+
+        SimpleStatement::PerformInline { until, statements: stmts } => {
+            // PERFORM ... UNTIL
+            let max_iterations = 10_000; // Safety limit
+            let mut count = 0;
+
+            loop {
+                if env.is_stopped() || count >= max_iterations {
+                    break;
+                }
+                // Check UNTIL condition before (test before)
+                if let Some(cond) = until {
+                    if eval_condition(cond, env)? {
+                        break;
+                    }
+                }
+                execute_statements(stmts, program, env)?;
+                count += 1;
+                // If no UNTIL, execute once
+                if until.is_none() {
+                    break;
+                }
+            }
         }
     }
 

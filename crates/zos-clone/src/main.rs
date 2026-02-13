@@ -151,6 +151,21 @@ enum Commands {
         action: commands::idcams::IdcamsAction,
     },
 
+    /// Compile BMS map definitions into COBOL copybooks
+    Bms {
+        /// Input BMS source file (or directory with --all)
+        #[arg(value_name = "FILE")]
+        input: PathBuf,
+
+        /// Output directory for generated copybooks
+        #[arg(short, long, value_name = "DIR")]
+        output: Option<PathBuf>,
+
+        /// Compile all .bms files in the input directory
+        #[arg(long)]
+        all: bool,
+    },
+
     /// DB2 SQL preprocessing and utilities
     Db2(commands::db2::Db2Args),
 
@@ -204,6 +219,13 @@ fn main() -> Result<()> {
         Commands::Interpret { input } => commands::interpret::interpret(input),
         Commands::Gdg { action } => commands::gdg::run(action),
         Commands::Idcams { action } => commands::idcams::run(action),
+        Commands::Bms { input, output, all } => {
+            if all {
+                commands::bms::run_all(input, output)
+            } else {
+                commands::bms::run(input, output)
+            }
+        }
         Commands::Db2(args) => commands::db2::execute(args),
         Commands::Config { action } => match action {
             ConfigAction::Show => {

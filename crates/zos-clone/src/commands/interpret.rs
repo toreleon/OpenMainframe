@@ -16,6 +16,8 @@ use zos_runtime::interpreter::{
     SimpleProgram, SimpleStatement,
 };
 
+use super::cics_bridge::CicsBridge;
+
 /// Interpret a COBOL program directly.
 pub fn interpret(input: PathBuf) -> Result<()> {
     // Read source file
@@ -60,8 +62,18 @@ pub fn interpret(input: PathBuf) -> Result<()> {
     // Convert to SimpleProgram
     let simple = convert_program(&program)?;
 
+    // Check if program uses CICS (has any ExecCics statements)
+    let uses_cics = has_cics_statements(&simple);
+
     // Execute
-    let mut env = Environment::new();
+    let mut env = if uses_cics {
+        tracing::info!("CICS program detected, installing CICS bridge");
+        let bridge = CicsBridge::new("CARD", "T001");
+        Environment::new().with_cics_handler(Box::new(bridge))
+    } else {
+        Environment::new()
+    };
+
     let rc = zos_runtime::interpreter::execute(&simple, &mut env)
         .map_err(|e| miette::miette!("Runtime error: {}", e))?;
 
@@ -327,6 +339,19 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
         }
 
         Statement::Perform(p) => {
+            // Inline PERFORM with statements
+            if let Some(ref inline_stmts) = p.inline {
+                let stmts: Vec<SimpleStatement> = inline_stmts
+                    .iter()
+                    .filter_map(|s| convert_statement(s).ok().flatten())
+                    .collect();
+                let until = p.until.as_ref().and_then(|c| convert_condition(c).ok());
+                return Ok(Some(SimpleStatement::PerformInline {
+                    until,
+                    statements: stmts,
+                }));
+            }
+
             let target = p
                 .target
                 .as_ref()
@@ -358,7 +383,157 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
         Statement::Continue(_) => Ok(None),
         Statement::Exit(_) => Ok(None),
 
-        // Other statements not yet implemented
+        Statement::ExecCics(e) => {
+            let options = e
+                .options
+                .iter()
+                .map(|opt| {
+                    let value = opt.value.as_ref().map(|v| convert_expr(v)).transpose()?;
+                    Ok((opt.name.clone(), value))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Some(SimpleStatement::ExecCics {
+                command: e.command.clone(),
+                options,
+            }))
+        }
+
+        Statement::Evaluate(e) => {
+            let subjects = e
+                .subjects
+                .iter()
+                .filter_map(|s| convert_expr(s).ok())
+                .collect();
+
+            let mut when_clauses: Vec<zos_runtime::interpreter::SimpleWhenClause> = e
+                .when_clauses
+                .iter()
+                .filter_map(|w| {
+                    // Use first condition (simplified - ignore ALSO for now)
+                    let condition = if let Some(cond) = w.conditions.first() {
+                        convert_when_condition(cond).ok()?
+                    } else {
+                        return None;
+                    };
+
+                    let statements: Vec<SimpleStatement> = w
+                        .statements
+                        .iter()
+                        .filter_map(|s| convert_statement(s).ok().flatten())
+                        .collect();
+
+                    Some(zos_runtime::interpreter::SimpleWhenClause {
+                        condition,
+                        statements,
+                    })
+                })
+                .collect();
+
+            // Add WHEN OTHER as a catch-all clause
+            if let Some(other_stmts) = &e.when_other {
+                let statements: Vec<SimpleStatement> = other_stmts
+                    .iter()
+                    .filter_map(|s| convert_statement(s).ok().flatten())
+                    .collect();
+                when_clauses.push(zos_runtime::interpreter::SimpleWhenClause {
+                    condition: SimpleCondition::Compare {
+                        left: SimpleExpr::Integer(1),
+                        op: SimpleCompareOp::Equal,
+                        right: SimpleExpr::Integer(1),
+                    },
+                    statements,
+                });
+            }
+
+            Ok(Some(SimpleStatement::Evaluate {
+                subjects,
+                when_clauses,
+            }))
+        }
+
+        Statement::GoTo(g) => {
+            let target = g.targets.first().cloned().unwrap_or_default();
+            Ok(Some(SimpleStatement::GoTo { target }))
+        }
+
+        Statement::Initialize(i) => {
+            let targets = i.variables.iter().map(|v| v.name.clone()).collect();
+            Ok(Some(SimpleStatement::Initialize { targets }))
+        }
+
+        Statement::Set(s) => {
+            use zos_cobol::ast::SetMode;
+            match &s.mode {
+                SetMode::ConditionTo { target, value } => {
+                    // SET condition-name TO TRUE/FALSE
+                    // Map as setting the condition variable to 1 (TRUE) or 0 (FALSE)
+                    let val = if *value {
+                        SimpleExpr::Integer(1)
+                    } else {
+                        SimpleExpr::Integer(0)
+                    };
+                    Ok(Some(SimpleStatement::Set {
+                        target: target.name.clone(),
+                        value: val,
+                    }))
+                }
+                SetMode::IndexTo { targets, value } => {
+                    let val = convert_expr(value)?;
+                    if let Some(first) = targets.first() {
+                        Ok(Some(SimpleStatement::Set {
+                            target: first.name.clone(),
+                            value: val,
+                        }))
+                    } else {
+                        Ok(None)
+                    }
+                }
+                SetMode::IndexUpDown { targets, up, value } => {
+                    let val = convert_expr(value)?;
+                    if let Some(first) = targets.first() {
+                        let op = if *up { SimpleBinaryOp::Add } else { SimpleBinaryOp::Subtract };
+                        Ok(Some(SimpleStatement::Compute {
+                            target: first.name.clone(),
+                            expr: SimpleExpr::Binary {
+                                left: Box::new(SimpleExpr::Variable(first.name.clone())),
+                                op,
+                                right: Box::new(val),
+                            },
+                        }))
+                    } else {
+                        Ok(None)
+                    }
+                }
+                SetMode::AddressOf { .. } => {
+                    // Pointer operations not meaningful in interpreter
+                    Ok(None)
+                }
+            }
+        }
+
+        Statement::Call(c) => {
+            let program = convert_expr(&c.program)?;
+            let using = c.using.iter().filter_map(|a| {
+                if let Expression::Variable(q) = &a.value {
+                    Some(q.name.clone())
+                } else {
+                    None
+                }
+            }).collect();
+            Ok(Some(SimpleStatement::Call { program, using }))
+        }
+
+        Statement::String(s) => {
+            let sources = s.sources.iter()
+                .filter_map(|src| convert_expr(&src.value).ok())
+                .collect();
+            Ok(Some(SimpleStatement::StringConcat {
+                sources,
+                into: s.into.name.clone(),
+            }))
+        }
+
+        // Other statements not yet implemented (Open, Close, Read, Write, etc.)
         _ => Ok(None),
     }
 }
@@ -450,6 +625,70 @@ fn convert_expr(expr: &Expression) -> Result<SimpleExpr> {
             Ok(SimpleExpr::Integer(0))
         }
     }
+}
+
+/// Convert a WhenCondition to SimpleCondition.
+fn convert_when_condition(cond: &zos_cobol::ast::WhenCondition) -> Result<SimpleCondition> {
+    use zos_cobol::ast::WhenCondition;
+    match cond {
+        WhenCondition::Any => Ok(SimpleCondition::Compare {
+            left: SimpleExpr::Integer(1),
+            op: SimpleCompareOp::Equal,
+            right: SimpleExpr::Integer(1),
+        }),
+        WhenCondition::True => Ok(SimpleCondition::Compare {
+            left: SimpleExpr::Integer(1),
+            op: SimpleCompareOp::Equal,
+            right: SimpleExpr::Integer(1),
+        }),
+        WhenCondition::False => Ok(SimpleCondition::Compare {
+            left: SimpleExpr::Integer(0),
+            op: SimpleCompareOp::Equal,
+            right: SimpleExpr::Integer(1),
+        }),
+        WhenCondition::Value(expr) => {
+            // For EVALUATE variable: the runtime compares subject == value
+            let val = convert_expr(expr)?;
+            Ok(SimpleCondition::Compare {
+                left: SimpleExpr::Variable("__EVAL_SUBJECT__".to_string()),
+                op: SimpleCompareOp::Equal,
+                right: val,
+            })
+        }
+        WhenCondition::Condition(c) => convert_condition(c),
+        WhenCondition::Range { .. } => {
+            // Approximate range as always-true
+            Ok(SimpleCondition::Compare {
+                left: SimpleExpr::Integer(1),
+                op: SimpleCompareOp::Equal,
+                right: SimpleExpr::Integer(1),
+            })
+        }
+    }
+}
+
+/// Check if a SimpleProgram contains any EXEC CICS statements.
+fn has_cics_statements(program: &SimpleProgram) -> bool {
+    fn stmts_have_cics(stmts: &[SimpleStatement]) -> bool {
+        stmts.iter().any(|s| match s {
+            SimpleStatement::ExecCics { .. } => true,
+            SimpleStatement::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                stmts_have_cics(then_branch)
+                    || else_branch.as_ref().is_some_and(|eb| stmts_have_cics(eb))
+            }
+            SimpleStatement::Evaluate { when_clauses, .. } => {
+                when_clauses.iter().any(|w| stmts_have_cics(&w.statements))
+            }
+            _ => false,
+        })
+    }
+
+    stmts_have_cics(&program.statements)
+        || program.paragraphs.values().any(|stmts| stmts_have_cics(stmts))
 }
 
 /// Convert a Condition to SimpleCondition.

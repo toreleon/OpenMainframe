@@ -158,6 +158,34 @@ fn test_missing_file_error() {
 }
 
 #[test]
+fn test_interpret_cics_return() {
+    let (stdout, stderr, success) =
+        run_cli(&["interpret", fixture("cics-return.cbl").to_str().unwrap()]);
+    if !success {
+        eprintln!("STDERR: {}", stderr);
+    }
+    assert!(success, "Command failed with stderr: {}", stderr);
+    // Program should display the starting message
+    assert!(
+        stdout.contains("CICS TEST STARTING"),
+        "Output: {}",
+        stdout
+    );
+    // CICS RETURN should log the return
+    assert!(
+        stdout.contains("[CICS] RETURN TRANSID(MENU)"),
+        "Expected CICS RETURN message, got: {}",
+        stdout
+    );
+    // RETURN should stop execution, so "SHOULD NOT REACH HERE" must NOT appear
+    assert!(
+        !stdout.contains("SHOULD NOT REACH HERE"),
+        "RETURN did not stop execution! Output: {}",
+        stdout
+    );
+}
+
+#[test]
 fn test_completions() {
     let (stdout, _, success) = run_cli(&["completions", "bash"]);
     assert!(success);

@@ -8,7 +8,7 @@ mod files;
 
 pub use commands::{CicsRuntime, ProgramRegistry};
 pub use eib::Eib;
-pub use files::{CicsFile, FileManager};
+pub use files::{CicsFile, FileManager, FileMode, FileRecord};
 
 
 /// COMMAREA (Communication Area) for passing data between programs.
