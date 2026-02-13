@@ -4,13 +4,13 @@
 
 ```yaml
 active: true
-iteration: 8
+iteration: 9
 started: 2026-02-13
 last_updated: 2026-02-13
 current_version: v1.1
 current_epic: 18
-current_story: 18.1
-status: ready
+current_story: 18.5
+status: in_progress
 ```
 
 ---
@@ -51,15 +51,15 @@ status: ready
 | 15 | VSAM Core (KSDS) | 8 | ✅ Complete | 8/8 |
 | 16 | VSAM ESDS/RRDS | 5 | ✅ Complete | 5/5 |
 | 17 | SORT Utility | 9 | ✅ Complete | 9/9 |
-| 18 | GDG Support | 7 | ⏳ Pending | 0/7 |
+| 18 | GDG Support | 7 | 🔄 In Progress | 4/7 |
 | 19 | IDCAMS | 8 | ⏳ Pending | 0/8 |
 | 20 | Package Distribution | 5 | ⏳ Pending | 0/5 |
 
 **v1.1 Metrics:**
 - Total Epics: 6
 - Total Stories: 42
-- Completed: 29
-- Remaining: 13
+- Completed: 33
+- Remaining: 9
 
 ---
 
@@ -193,6 +193,26 @@ status: ready
   - Full integration with SortEngine
   - Added JCL SORT integration test
 - [x] All tests passing: 277 tests
+
+### Iteration 9 - 2026-02-13
+**Focus:** Epic 18 - GDG Support (Part 1)
+**Status:** Complete
+**Actions:**
+- [x] Story 18.1: GDG Base Definition
+  - Created gdg module (mod.rs, base.rs, generation.rs)
+  - GdgBase struct with create/open/delete
+  - GdgOptions (limit, scratch, empty, noempty)
+  - Binary catalog file format (.gdg)
+- [x] Story 18.2: Relative Generation References
+  - GdgBase.relative_generation() for (0), (-1), (-2), etc.
+  - Returns current, previous, or earlier generations
+- [x] Story 18.3: Absolute Generation References
+  - GdgBase.absolute_generation() for GxxxxVyy
+  - GenerationNumber parsing and formatting
+- [x] Story 18.4: GDG Limit Rolloff
+  - Automatic rolloff when LIMIT exceeded
+  - SCRATCH mode deletes files, NOSCRATCH uncatalogs only
+- [x] 14 new tests, 289 total passing
 
 ---
 
