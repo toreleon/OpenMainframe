@@ -26,8 +26,12 @@
 
 mod btree;
 mod cluster;
+mod esds;
 mod ksds;
+mod rrds;
 
 pub use btree::{BPlusTree, DEFAULT_ORDER};
 pub use cluster::{ClusterParams, KeySpec, VsamCluster, VsamType};
+pub use esds::{Esds, EsdsResult};
 pub use ksds::{FileStatus, Ksds, KsdsResult};
+pub use rrds::{Rrds, RrdsResult};

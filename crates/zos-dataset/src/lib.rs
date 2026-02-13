@@ -40,6 +40,6 @@ pub use types::{
     DatasetAttributes, DatasetOrg, DatasetRef, DispAction, DispSpec, Disposition, RecordFormat,
 };
 pub use vsam::{
-    BPlusTree, ClusterParams, FileStatus, KeySpec, Ksds, KsdsResult, VsamCluster, VsamType,
-    DEFAULT_ORDER,
+    BPlusTree, ClusterParams, Esds, EsdsResult, FileStatus, KeySpec, Ksds, KsdsResult, Rrds,
+    RrdsResult, VsamCluster, VsamType, DEFAULT_ORDER,
 };

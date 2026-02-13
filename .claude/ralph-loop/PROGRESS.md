@@ -4,12 +4,12 @@
 
 ```yaml
 active: true
-iteration: 5
+iteration: 6
 started: 2026-02-13
 last_updated: 2026-02-13
 current_version: v1.1
-current_epic: 16
-current_story: 16.1
+current_epic: 17
+current_story: 17.1
 status: ready
 ```
 
@@ -49,7 +49,7 @@ status: ready
 | Epic | Name | Stories | Status | Progress |
 |------|------|---------|--------|----------|
 | 15 | VSAM Core (KSDS) | 8 | ✅ Complete | 8/8 |
-| 16 | VSAM ESDS/RRDS | 5 | ⏳ Pending | 0/5 |
+| 16 | VSAM ESDS/RRDS | 5 | ✅ Complete | 5/5 |
 | 17 | SORT Utility | 9 | ⏳ Pending | 0/9 |
 | 18 | GDG Support | 7 | ⏳ Pending | 0/7 |
 | 19 | IDCAMS | 8 | ⏳ Pending | 0/8 |
@@ -58,8 +58,8 @@ status: ready
 **v1.1 Metrics:**
 - Total Epics: 6
 - Total Stories: 42
-- Completed: 8
-- Remaining: 34
+- Completed: 13
+- Remaining: 29
 
 ---
 
@@ -140,6 +140,23 @@ status: ready
   - Fixed DISP parsing bug for simple DISP=SHR syntax
 - [x] All tests passing: 226 tests
 
+### Iteration 6 - 2026-02-13
+**Focus:** Epic 16 - VSAM ESDS & RRDS
+**Status:** Complete
+**Actions:**
+- [x] Implement ESDS (Entry-Sequenced Data Set)
+  - Create esds.rs with Esds struct and EsdsResult
+  - Sequential write with RBA tracking
+  - RBA-based read access
+  - Sequential read with start()/read_next()
+  - 8 tests
+- [x] Implement RRDS (Relative Record Data Set)
+  - Create rrds.rs with Rrds struct and RrdsResult
+  - Slot-based write/read/rewrite/delete
+  - Sequential read skipping empty slots
+  - 9 tests
+- [x] All tests passing: 243 tests
+
 ---
 
 ## Blockers
@@ -214,9 +231,9 @@ cargo clippy -- -D warnings
 ```
 
 ### Next Steps
-1. Start Epic 16: VSAM ESDS/RRDS
-2. Implement ESDS (Entry-Sequenced Data Set)
-3. Implement RRDS (Relative Record Data Set)
+1. Start Epic 17: SORT Utility
+2. Implement SORT/MERGE functionality
+3. Add INCLUDE/OMIT record selection
 
 ---
 
@@ -227,3 +244,4 @@ cargo clippy -- -D warnings
 | 2026-02-13 | Setup | Create loop structure | ✅ Loop ready |
 | 2026-02-13 | Planning | v1.1 artifacts | ✅ PRD, Arch, Epics done |
 | 2026-02-13 | Epic 15 | VSAM KSDS | ✅ Epic complete |
+| 2026-02-13 | Epic 16 | VSAM ESDS/RRDS | ✅ Epic complete |
