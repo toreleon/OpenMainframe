@@ -18,22 +18,32 @@ pub enum FileStatus {
     Success = 0,
     /// End of file reached during sequential read.
     EndOfFile = 10,
+    /// Key sequence error (key changed on rewrite).
+    KeySequenceError = 21,
     /// Duplicate key on write.
     DuplicateKey = 22,
     /// Record not found.
     RecordNotFound = 23,
-    /// Key sequence error (key changed on rewrite).
-    KeySequenceError = 21,
+    /// File not found.
+    FileNotFound = 35,
+    /// File not open.
+    FileNotOpen = 41,
     /// No current record (REWRITE/DELETE without prior READ).
     NoCurrentRecord = 43,
     /// Record length error.
     RecordLengthError = 44,
-    /// File not open.
-    FileNotOpen = 41,
-    /// Logic error (operation not valid for file state).
-    LogicError = 92,
+    /// Read past end of sequential read.
+    ReadPastEnd = 46,
+    /// File not open for input.
+    NotOpenInput = 47,
+    /// File not open for output.
+    NotOpenOutput = 48,
     /// I/O error.
     IoError = 90,
+    /// Logic error (operation not valid for file state).
+    LogicError = 92,
+    /// Resource unavailable.
+    ResourceUnavailable = 93,
 }
 
 impl FileStatus {
@@ -45,11 +55,16 @@ impl FileStatus {
             FileStatus::KeySequenceError => "21",
             FileStatus::DuplicateKey => "22",
             FileStatus::RecordNotFound => "23",
+            FileStatus::FileNotFound => "35",
+            FileStatus::FileNotOpen => "41",
             FileStatus::NoCurrentRecord => "43",
             FileStatus::RecordLengthError => "44",
-            FileStatus::FileNotOpen => "41",
-            FileStatus::LogicError => "92",
+            FileStatus::ReadPastEnd => "46",
+            FileStatus::NotOpenInput => "47",
+            FileStatus::NotOpenOutput => "48",
             FileStatus::IoError => "90",
+            FileStatus::LogicError => "92",
+            FileStatus::ResourceUnavailable => "93",
         }
     }
 

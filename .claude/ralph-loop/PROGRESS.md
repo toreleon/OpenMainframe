@@ -8,9 +8,9 @@ iteration: 5
 started: 2026-02-13
 last_updated: 2026-02-13
 current_version: v1.1
-current_epic: 15
-current_story: 15.7
-status: in_progress
+current_epic: 16
+current_story: 16.1
+status: ready
 ```
 
 ---
@@ -48,7 +48,7 @@ status: in_progress
 
 | Epic | Name | Stories | Status | Progress |
 |------|------|---------|--------|----------|
-| 15 | VSAM Core (KSDS) | 8 | 🔄 In Progress | 6/8 |
+| 15 | VSAM Core (KSDS) | 8 | ✅ Complete | 8/8 |
 | 16 | VSAM ESDS/RRDS | 5 | ⏳ Pending | 0/5 |
 | 17 | SORT Utility | 9 | ⏳ Pending | 0/9 |
 | 18 | GDG Support | 7 | ⏳ Pending | 0/7 |
@@ -58,14 +58,14 @@ status: in_progress
 **v1.1 Metrics:**
 - Total Epics: 6
 - Total Stories: 42
-- Completed: 6
-- Remaining: 36
+- Completed: 8
+- Remaining: 34
 
 ---
 
 ## Current Focus
 
-### Epic 15: VSAM Core Infrastructure
+### Epic 15: VSAM Core Infrastructure ✅ COMPLETE
 
 **Goal:** Implement KSDS (Key-Sequenced Data Set) with B+ tree indexing.
 
@@ -81,10 +81,8 @@ status: in_progress
 | 15.4 | Keyed Write | ✅ Complete | write() with duplicate key detection |
 | 15.5 | Update/Delete | ✅ Complete | rewrite(), delete(), status 21/43 |
 | 15.6 | Sequential Access | ✅ Complete | start(), read_next(), status 10 |
-| 15.7 | File Status Codes | ⏳ Next | Already implemented in 15.3-15.6 |
-| 15.6 | Sequential Access | ⏳ Pending | |
-| 15.7 | File Status Codes | ⏳ Pending | |
-| 15.8 | JCL Integration | ⏳ Pending | |
+| 15.7 | File Status Codes | ✅ Complete | 14 status codes (00-93) |
+| 15.8 | JCL Integration | ✅ Complete | AMP parsing, VSAM DD support |
 
 ---
 
@@ -130,10 +128,17 @@ status: in_progress
 
 ### Iteration 5 - 2026-02-13
 **Focus:** Complete Epic 15 (File Status, JCL Integration)
-**Status:** Starting
+**Status:** Complete
 **Actions:**
-- [ ] Verify file status codes complete (Story 15.7)
-- [ ] Implement JCL VSAM DD support (Story 15.8)
+- [x] Verify/add file status codes (Story 15.7)
+  - Added: FileNotFound (35), ReadPastEnd (46), NotOpenInput (47), NotOpenOutput (48), ResourceUnavailable (93)
+  - Total: 14 status codes matching IBM documentation
+- [x] Implement JCL VSAM DD support (Story 15.8)
+  - Added AmpParams and VsamAccessMode to JCL AST
+  - Added AMP parameter parsing to JCL parser
+  - Updated executor to detect VSAM clusters (.vsam files)
+  - Fixed DISP parsing bug for simple DISP=SHR syntax
+- [x] All tests passing: 226 tests
 
 ---
 
@@ -157,18 +162,18 @@ status: in_progress
 
 ```
 crates/zos-dataset/src/
-├── vsam/           # NEW - VSAM implementation
+├── vsam/           # VSAM implementation
 │   ├── mod.rs
 │   ├── btree.rs    # B+ tree index
 │   ├── ksds.rs     # Key-sequenced dataset
-│   ├── esds.rs     # Entry-sequenced dataset
-│   ├── rrds.rs     # Relative record dataset
+│   ├── esds.rs     # Entry-sequenced dataset (next)
+│   ├── rrds.rs     # Relative record dataset (next)
 │   └── cluster.rs  # Cluster definition
-├── gdg/            # NEW - GDG support
+├── gdg/            # GDG support (Epic 18)
 │   ├── mod.rs
 │   ├── base.rs
 │   └── generation.rs
-└── idcams/         # NEW - IDCAMS utility
+└── idcams/         # IDCAMS utility (Epic 19)
     ├── mod.rs
     ├── parser.rs
     └── commands/
@@ -209,10 +214,9 @@ cargo clippy -- -D warnings
 ```
 
 ### Next Steps
-1. Create `crates/zos-dataset/src/vsam/` directory
-2. Implement B+ tree in `btree.rs`
-3. Add tests for B+ tree operations
-4. Run tests and verify
+1. Start Epic 16: VSAM ESDS/RRDS
+2. Implement ESDS (Entry-Sequenced Data Set)
+3. Implement RRDS (Relative Record Data Set)
 
 ---
 
@@ -222,3 +226,4 @@ cargo clippy -- -D warnings
 |------|---------|-------|---------|
 | 2026-02-13 | Setup | Create loop structure | ✅ Loop ready |
 | 2026-02-13 | Planning | v1.1 artifacts | ✅ PRD, Arch, Epics done |
+| 2026-02-13 | Epic 15 | VSAM KSDS | ✅ Epic complete |

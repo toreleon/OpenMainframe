@@ -446,6 +446,10 @@ impl<'a> Parser<'a> {
                                 def.dcb = Some(self.parse_dcb(tokens, &mut idx)?);
                                 continue;
                             }
+                            "AMP" => {
+                                def.amp = Some(self.parse_amp(tokens, &mut idx)?);
+                                continue;
+                            }
                             _ => {}
                         }
                         idx += 1;
@@ -519,7 +523,9 @@ impl<'a> Parser<'a> {
         let mut normal = None;
         let mut abnormal = None;
 
-        if *idx < tokens.len() && matches!(tokens[*idx], Token::LParen) {
+        // Check if we have parentheses (full DISP syntax)
+        let has_parens = *idx < tokens.len() && matches!(tokens[*idx], Token::LParen);
+        if has_parens {
             *idx += 1;
         }
 
@@ -537,35 +543,38 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Skip comma
-        if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
-            *idx += 1;
-
-            // Normal disposition
-            if *idx < tokens.len() {
-                if let Token::Ident(s) = &tokens[*idx] {
-                    normal = self.parse_disp_action(s);
-                    *idx += 1;
-                }
-            }
-
+        // Only parse normal/abnormal disposition if we had parens
+        if has_parens {
             // Skip comma
             if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
                 *idx += 1;
 
-                // Abnormal disposition
+                // Normal disposition
                 if *idx < tokens.len() {
                     if let Token::Ident(s) = &tokens[*idx] {
-                        abnormal = self.parse_disp_action(s);
+                        normal = self.parse_disp_action(s);
                         *idx += 1;
                     }
                 }
-            }
-        }
 
-        // Skip closing paren
-        if *idx < tokens.len() && matches!(tokens[*idx], Token::RParen) {
-            *idx += 1;
+                // Skip comma
+                if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+                    *idx += 1;
+
+                    // Abnormal disposition
+                    if *idx < tokens.len() {
+                        if let Token::Ident(s) = &tokens[*idx] {
+                            abnormal = self.parse_disp_action(s);
+                            *idx += 1;
+                        }
+                    }
+                }
+            }
+
+            // Skip closing paren
+            if *idx < tokens.len() && matches!(tokens[*idx], Token::RParen) {
+                *idx += 1;
+            }
         }
 
         Ok(Disposition {
@@ -748,6 +757,74 @@ impl<'a> Parser<'a> {
 
         Ok(dcb)
     }
+
+    /// Parse AMP (Access Method Parameters) for VSAM.
+    fn parse_amp(&self, tokens: &[Token], idx: &mut usize) -> Result<AmpParams, JclError> {
+        let mut amp = AmpParams::default();
+
+        if *idx < tokens.len() && matches!(tokens[*idx], Token::LParen) {
+            *idx += 1;
+        }
+
+        while *idx < tokens.len() {
+            if matches!(tokens[*idx], Token::RParen) {
+                *idx += 1;
+                break;
+            }
+
+            if let Token::Ident(key) = &tokens[*idx] {
+                *idx += 1;
+                if *idx < tokens.len() && matches!(tokens[*idx], Token::Equals) {
+                    *idx += 1;
+                    if *idx < tokens.len() {
+                        match key.as_str() {
+                            "BUFND" => {
+                                if let Token::Number(n) = &tokens[*idx] {
+                                    amp.bufnd = Some(*n as u32);
+                                }
+                            }
+                            "BUFNI" => {
+                                if let Token::Number(n) = &tokens[*idx] {
+                                    amp.bufni = Some(*n as u32);
+                                }
+                            }
+                            "BUFSP" => {
+                                if let Token::Number(n) = &tokens[*idx] {
+                                    amp.bufsp = Some(*n as u32);
+                                }
+                            }
+                            "STRNO" => {
+                                if let Token::Number(n) = &tokens[*idx] {
+                                    amp.strno = Some(*n as u32);
+                                }
+                            }
+                            "MODE" => {
+                                if let Token::Ident(v) = &tokens[*idx] {
+                                    amp.mode = match v.as_str() {
+                                        "SEQ" => Some(VsamAccessMode::Sequential),
+                                        "DIR" => Some(VsamAccessMode::Direct),
+                                        "SKP" => Some(VsamAccessMode::Skip),
+                                        _ => None,
+                                    };
+                                }
+                            }
+                            _ => {}
+                        }
+                        *idx += 1;
+                    }
+                }
+            } else {
+                *idx += 1;
+            }
+
+            // Skip comma
+            if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+                *idx += 1;
+            }
+        }
+
+        Ok(amp)
+    }
 }
 
 /// Parse JCL source into a Job.
@@ -859,6 +936,30 @@ mod tests {
             assert!(matches!(disp.status, DispStatus::New));
             assert!(matches!(disp.normal, Some(DispAction::Catlg)));
             assert!(matches!(disp.abnormal, Some(DispAction::Delete)));
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    #[test]
+    fn test_parse_vsam_with_amp() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=VSAMPROC
+//VSAMDD   DD DSN=MY.KSDS.CLUSTER,DISP=SHR,AMP=(BUFND=10,BUFNI=5,MODE=DIR)
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let step = &job.steps[0];
+        assert_eq!(step.dd_statements.len(), 1);
+        let dd = &step.dd_statements[0];
+        assert_eq!(dd.name, "VSAMDD");
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "MY.KSDS.CLUSTER");
+            assert!(def.disp.is_some());
+            let amp = def.amp.as_ref().expect("AMP should be parsed");
+            assert_eq!(amp.bufnd, Some(10));
+            assert_eq!(amp.bufni, Some(5));
+            assert_eq!(amp.mode, Some(VsamAccessMode::Direct));
         } else {
             panic!("Expected Dataset definition");
         }

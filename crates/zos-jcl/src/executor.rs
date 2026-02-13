@@ -232,6 +232,16 @@ impl JobExecutor {
         dsn: &str,
         disp: &Option<Disposition>,
     ) -> Result<PathBuf, JclError> {
+        self.resolve_dataset_with_amp(dsn, disp, &None)
+    }
+
+    /// Resolve a dataset name to a file path, with AMP parameters for VSAM.
+    fn resolve_dataset_with_amp(
+        &mut self,
+        dsn: &str,
+        disp: &Option<Disposition>,
+        _amp: &Option<AmpParams>,
+    ) -> Result<PathBuf, JclError> {
         // Check if passed from previous step
         if let Some(path) = self.passed_datasets.get(dsn) {
             return Ok(path.clone());
@@ -258,6 +268,12 @@ impl JobExecutor {
         if let Some(member_name) = member {
             // PDS member - add member file
             path.push(format!("{}.cbl", member_name));
+        } else {
+            // Check if this is a VSAM cluster by looking for .vsam file
+            let vsam_path = path.with_extension("vsam");
+            if vsam_path.exists() {
+                return Ok(vsam_path);
+            }
         }
 
         // Handle disposition

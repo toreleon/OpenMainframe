@@ -143,6 +143,34 @@ pub struct DatasetDef {
     pub space: Option<Space>,
     /// Data Control Block parameters.
     pub dcb: Option<DcbParams>,
+    /// Access Method Parameters (for VSAM).
+    pub amp: Option<AmpParams>,
+}
+
+/// VSAM Access Method Parameters.
+#[derive(Debug, Clone, Default)]
+pub struct AmpParams {
+    /// Data buffer count.
+    pub bufnd: Option<u32>,
+    /// Index buffer count.
+    pub bufni: Option<u32>,
+    /// Buffer space in bytes.
+    pub bufsp: Option<u32>,
+    /// String count (concurrent requests).
+    pub strno: Option<u32>,
+    /// Access mode (SEQ, DIR, SKP).
+    pub mode: Option<VsamAccessMode>,
+}
+
+/// VSAM access modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VsamAccessMode {
+    /// Sequential access.
+    Sequential,
+    /// Direct (keyed) access.
+    Direct,
+    /// Skip sequential access.
+    Skip,
 }
 
 /// Dataset disposition.
