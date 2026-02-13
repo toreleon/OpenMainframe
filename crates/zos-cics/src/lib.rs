@@ -23,9 +23,13 @@
 //! ```
 
 pub mod bms;
+pub mod interval;
 pub mod preprocess;
+pub mod queues;
 pub mod runtime;
+pub mod sync;
 pub mod terminal;
+pub mod time;
 
 use thiserror::Error;
 
