@@ -1,0 +1,161 @@
+//! Integration tests for the zOS-clone CLI.
+//!
+//! These tests verify that the CLI commands work correctly end-to-end.
+
+use std::process::Command;
+
+/// Get the path to the built binary.
+fn get_bin_path() -> std::path::PathBuf {
+    let mut path = std::env::current_exe().unwrap();
+    path.pop(); // Remove test binary name
+    path.pop(); // Remove deps
+    path.push("zos-clone");
+    path
+}
+
+/// Helper to get fixture path.
+fn fixture(name: &str) -> std::path::PathBuf {
+    let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("tests");
+    path.push("fixtures");
+    path.push(name);
+    path
+}
+
+/// Run the CLI with given arguments and return (stdout, stderr, success).
+fn run_cli(args: &[&str]) -> (String, String, bool) {
+    let output = Command::new(get_bin_path())
+        .args(args)
+        .output()
+        .expect("Failed to execute command");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    (stdout, stderr, output.status.success())
+}
+
+#[test]
+fn test_help_command() {
+    let (stdout, _, success) = run_cli(&["--help"]);
+    assert!(success);
+    assert!(stdout.contains("zOS-clone mainframe emulator"));
+    assert!(stdout.contains("compile"));
+    assert!(stdout.contains("run"));
+    assert!(stdout.contains("interpret"));
+}
+
+#[test]
+fn test_version_command() {
+    let (stdout, _, success) = run_cli(&["--version"]);
+    assert!(success);
+    assert!(stdout.contains("zos-clone"));
+}
+
+#[test]
+fn test_interpret_hello() {
+    let (stdout, stderr, success) = run_cli(&["interpret", fixture("hello.cbl").to_str().unwrap()]);
+    if !success {
+        eprintln!("STDERR: {}", stderr);
+    }
+    assert!(success, "Command failed with stderr: {}", stderr);
+    assert!(stdout.contains("Hello, World!"), "Output: {}", stdout);
+}
+
+#[test]
+fn test_interpret_compute() {
+    let (stdout, stderr, success) =
+        run_cli(&["interpret", fixture("compute.cbl").to_str().unwrap()]);
+    if !success {
+        eprintln!("STDERR: {}", stderr);
+    }
+    assert!(success, "Command failed with stderr: {}", stderr);
+    assert!(stdout.contains("SUM:"), "Output: {}", stdout);
+    assert!(stdout.contains("125"), "Expected 125 in output: {}", stdout);
+    assert!(stdout.contains("DIFF:"), "Output: {}", stdout);
+    assert!(stdout.contains("75"), "Expected 75 in output: {}", stdout);
+    assert!(stdout.contains("DOUBLE:"), "Output: {}", stdout);
+    assert!(stdout.contains("200"), "Expected 200 in output: {}", stdout);
+}
+
+#[test]
+fn test_interpret_conditions() {
+    let (stdout, stderr, success) =
+        run_cli(&["interpret", fixture("conditions.cbl").to_str().unwrap()]);
+    if !success {
+        eprintln!("STDERR: {}", stderr);
+    }
+    assert!(success, "Command failed with stderr: {}", stderr);
+    assert!(
+        stdout.contains("NUM IS LESS THAN LIMIT"),
+        "Output: {}",
+        stdout
+    );
+    assert!(stdout.contains("NUM EQUALS 50"), "Output: {}", stdout);
+    assert!(stdout.contains("NUM IS GREATER THAN 25"), "Output: {}", stdout);
+}
+
+#[test]
+fn test_interpret_perform() {
+    let (stdout, stderr, success) =
+        run_cli(&["interpret", fixture("perform.cbl").to_str().unwrap()]);
+    if !success {
+        eprintln!("STDERR: {}", stderr);
+    }
+    assert!(success, "Command failed with stderr: {}", stderr);
+    assert!(stdout.contains("COUNTING TO 5"), "Output: {}", stdout);
+    assert!(stdout.contains("COUNT: 1"), "Output: {}", stdout);
+    assert!(stdout.contains("COUNT: 5"), "Output: {}", stdout);
+    assert!(stdout.contains("DONE COUNTING"), "Output: {}", stdout);
+}
+
+#[test]
+fn test_check_valid_cobol() {
+    let (_, stderr, success) = run_cli(&["check", fixture("hello.cbl").to_str().unwrap()]);
+    assert!(success, "Check command failed: {}", stderr);
+}
+
+#[test]
+fn test_lex_command() {
+    let (stdout, stderr, success) = run_cli(&["lex", fixture("hello.cbl").to_str().unwrap()]);
+    assert!(success, "Lex command failed: {}", stderr);
+    assert!(stdout.contains("Identification"), "Output: {}", stdout);
+    assert!(stdout.contains("Division"), "Output: {}", stdout);
+    assert!(stdout.contains("ProgramId"), "Output: {}", stdout);
+}
+
+#[test]
+fn test_config_show() {
+    let (stdout, _, success) = run_cli(&["config", "show"]);
+    assert!(success);
+    assert!(stdout.contains("[compiler]"));
+    assert!(stdout.contains("[runtime]"));
+    assert!(stdout.contains("[dataset]"));
+    assert!(stdout.contains("[jcl]"));
+}
+
+#[test]
+fn test_config_paths() {
+    let (stdout, _, success) = run_cli(&["config", "paths"]);
+    assert!(success);
+    assert!(stdout.contains("Configuration file search paths"));
+    assert!(stdout.contains("Environment variables"));
+    assert!(stdout.contains("ZOS_CLONE_SOURCE_FORMAT"));
+}
+
+#[test]
+fn test_missing_file_error() {
+    let (_, stderr, success) = run_cli(&["interpret", "nonexistent.cbl"]);
+    assert!(!success);
+    assert!(
+        stderr.contains("No such file") || stderr.contains("not found") || stderr.contains("error"),
+        "Expected error message, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_completions() {
+    let (stdout, _, success) = run_cli(&["completions", "bash"]);
+    assert!(success);
+    assert!(stdout.contains("zos-clone"));
+}

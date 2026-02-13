@@ -1,0 +1,14 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. COND-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-NUM   PIC 9(3) VALUE 50.
+       01  WS-LIMIT PIC 9(3) VALUE 100.
+       PROCEDURE DIVISION.
+           IF WS-NUM < WS-LIMIT
+               DISPLAY "NUM IS LESS THAN LIMIT".
+           IF WS-NUM = 50
+               DISPLAY "NUM EQUALS 50".
+           IF WS-NUM > 25
+               DISPLAY "NUM IS GREATER THAN 25".
+           STOP RUN.

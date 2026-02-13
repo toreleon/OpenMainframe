@@ -1,0 +1,15 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. COMPUTE-TEST.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A      PIC 9(5) VALUE 100.
+       01  WS-B      PIC 9(5) VALUE 25.
+       01  WS-RESULT PIC 9(5) VALUE 0.
+       PROCEDURE DIVISION.
+           COMPUTE WS-RESULT = WS-A + WS-B.
+           DISPLAY "SUM: " WS-RESULT.
+           COMPUTE WS-RESULT = WS-A - WS-B.
+           DISPLAY "DIFF: " WS-RESULT.
+           COMPUTE WS-RESULT = WS-A * 2.
+           DISPLAY "DOUBLE: " WS-RESULT.
+           STOP RUN.

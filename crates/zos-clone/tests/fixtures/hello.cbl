@@ -1,0 +1,8 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. HELLO.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-MSG PIC X(13) VALUE "Hello, World!".
+       PROCEDURE DIVISION.
+           DISPLAY WS-MSG.
+           STOP RUN.
