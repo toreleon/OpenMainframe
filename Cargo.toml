@@ -7,6 +7,7 @@ members = [
     "crates/zos-runtime",
     "crates/zos-dataset",
     "crates/zos-encoding",
+    "crates/zos-sort",
 ]
 
 [workspace.package]
@@ -51,3 +52,4 @@ zos-runtime = { path = "crates/zos-runtime" }
 zos-dataset = { path = "crates/zos-dataset" }
 zos-cobol = { path = "crates/zos-cobol" }
 zos-jcl = { path = "crates/zos-jcl" }
+zos-sort = { path = "crates/zos-sort" }

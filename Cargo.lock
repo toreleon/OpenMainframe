@@ -1514,3 +1514,10 @@ dependencies = [
  "thiserror",
  "zos-encoding",
 ]
+
+[[package]]
+name = "zos-sort"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
