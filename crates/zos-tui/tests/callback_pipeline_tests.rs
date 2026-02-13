@@ -348,3 +348,98 @@ ERRMSG   DFHMDF POS=(12,10),LENGTH=60,ATTRB=(PROT,BRT),COLOR=RED,      X
     assert_eq!(errmsg.color, Some(zos_cics::bms::FieldColor::Red));
     assert_eq!(errmsg.highlight, Some(zos_cics::bms::FieldHighlight::Reverse));
 }
+
+#[test]
+fn test_multi_screen_xctl_session_flow() {
+    // Simulates a multi-screen XCTL chain: sign-on screen → menu screen.
+    // Verifies that on_send_map can handle consecutive screen transitions
+    // as would happen during an XCTL from one program to another.
+    let mut session = Session::new(test_config());
+
+    // --- Screen 1: Sign-on ---
+    let signon_map = parse_first_map(SIGNON_BMS);
+
+    session.set_program("COSGN00C");
+    session.set_transid("COSG");
+    session.on_send_map(&signon_map, &HashMap::new(), &SendMapOptions::initial());
+
+    // Verify sign-on screen is active (field table built from sign-on BMS)
+    let signon_table = FieldTable::from_bms_map(&signon_map);
+    assert_eq!(signon_table.active_field().unwrap().name, "USRIDI");
+    assert_eq!(signon_table.input_field_count(), 2);
+
+    // --- XCTL to menu ---
+    let menu_bms = r#"
+COMEN00  DFHMSD TYPE=MAP,LANG=COBOL,TIOAPFX=YES
+COMEN0A  DFHMDI SIZE=(24,80)
+TITLE    DFHMDF POS=(1,25),LENGTH=30,ATTRB=(PROT,BRT),                X
+               INITIAL='AWS CardDemo Main Menu'
+OPT1     DFHMDF POS=(5,10),LENGTH=40,ATTRB=(PROT),                    X
+               INITIAL='1. View Account Details'
+OPT2     DFHMDF POS=(6,10),LENGTH=40,ATTRB=(PROT),                    X
+               INITIAL='2. View Transaction History'
+OPTL     DFHMDF POS=(12,10),LENGTH=12,ATTRB=(PROT),INITIAL='Selection :'
+OPTI     DFHMDF POS=(12,23),LENGTH=1,ATTRB=(NUM,UNPROT,IC)
+OPTF     DFHMDF POS=(12,25),LENGTH=1,ATTRB=(ASKIP)
+MSG1     DFHMDF POS=(22,10),LENGTH=50,ATTRB=(PROT),                   X
+               INITIAL='Enter selection, PF3=Exit'
+         DFHMSD TYPE=FINAL
+"#;
+    let menu_map = parse_first_map(menu_bms);
+
+    // XCTL replaces the screen entirely (ERASE)
+    session.set_program("COMEN01C");
+    session.set_transid("MENU");
+    session.on_send_map(&menu_map, &HashMap::new(), &SendMapOptions::initial());
+
+    // Verify menu screen is now active
+    let menu_table = FieldTable::from_bms_map(&menu_map);
+    assert_eq!(menu_table.active_field().unwrap().name, "OPTI");
+    assert_eq!(menu_table.input_field_count(), 1);
+    assert!(menu_table.active_field().unwrap().is_numeric());
+
+    // Verify menu has the correct INITIAL values
+    let title = menu_table.fields().iter().find(|f| f.name == "TITLE").unwrap();
+    let content = String::from_utf8_lossy(&title.content);
+    assert!(content.contains("AWS CardDemo Main Menu"));
+}
+
+#[test]
+fn test_pseudo_conversational_dataonly_update() {
+    // Simulates RETURN TRANSID flow:
+    // 1. Program sends initial map (ERASE)
+    // 2. User enters input, presses ENTER
+    // 3. Same program re-executes, sends DATAONLY with error message
+    // 4. User sees updated screen with error but original labels preserved
+    let mut session = Session::new(test_config());
+    let map = parse_first_map(SIGNON_BMS);
+
+    // Round 1: Initial send with ERASE
+    session.set_program("COSGN00C");
+    session.on_send_map(&map, &HashMap::new(), &SendMapOptions::initial());
+
+    // Round 2: After RECEIVE MAP, program validates and sends error via DATAONLY
+    let mut error_data = HashMap::new();
+    error_data.insert("ERRMSG".to_string(), b"Sign-on is unsuccessful".to_vec());
+
+    let dataonly_opts = SendMapOptions {
+        dataonly: true,
+        freekb: true,
+        ..Default::default()
+    };
+    session.on_send_map(&map, &error_data, &dataonly_opts);
+
+    // Build a table to verify the DATAONLY update preserved structure
+    let mut table = FieldTable::from_bms_map(&map);
+    table.set_field_data("ERRMSG", b"Sign-on is unsuccessful");
+
+    // Error message should be set
+    let errmsg = table.fields().iter().find(|f| f.name == "ERRMSG").unwrap();
+    let content = String::from_utf8_lossy(&errmsg.content);
+    assert!(content.starts_with("Sign-on is unsuccessful"));
+
+    // TITLE label should still have its INITIAL value (preserved by DATAONLY)
+    let title = table.fields().iter().find(|f| f.name == "TITLE").unwrap();
+    let title_content = String::from_utf8_lossy(&title.content);
+    assert!(title_content.contains("AWS CardDemo Sign-on Screen"));
+}

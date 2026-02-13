@@ -260,6 +260,59 @@ fn test_interpret_cics_send_map() {
 }
 
 #[test]
+fn test_interpret_cics_xctl_chain() {
+    // Multi-program XCTL: login → menu via XCTL with COMMAREA
+    let (stdout, stderr, success) =
+        run_cli(&["interpret", fixture("CICSLOGIN.cbl").to_str().unwrap()]);
+    if !success {
+        eprintln!("STDERR: {}", stderr);
+    }
+    assert!(success, "Command failed with stderr: {}", stderr);
+    // Login program starts
+    assert!(
+        stdout.contains("LOGIN SCREEN"),
+        "Output: {}",
+        stdout
+    );
+    // XCTL issued to menu
+    assert!(
+        stdout.contains("[CICS] XCTL PROGRAM(CICSMENU)"),
+        "Expected XCTL to CICSMENU, got: {}",
+        stdout
+    );
+    // Menu program reached
+    assert!(
+        stdout.contains("MENU PROGRAM STARTING"),
+        "Menu program should start via XCTL! Output: {}",
+        stdout
+    );
+    // Menu sees COMMAREA
+    assert!(
+        stdout.contains("RECEIVED COMMAREA"),
+        "Menu should receive COMMAREA! Output: {}",
+        stdout
+    );
+    // SEND MAP issued by menu
+    assert!(
+        stdout.contains("[CICS] SEND MAP"),
+        "Menu should SEND MAP, got: {}",
+        stdout
+    );
+    // RETURN TRANSID from menu
+    assert!(
+        stdout.contains("[CICS] RETURN TRANSID(MENU)"),
+        "Menu should RETURN TRANSID(MENU), got: {}",
+        stdout
+    );
+    // Login should NOT continue after XCTL
+    assert!(
+        !stdout.contains("SHOULD NOT REACH HERE"),
+        "XCTL should stop login! Output: {}",
+        stdout
+    );
+}
+
+#[test]
 fn test_completions() {
     let (stdout, _, success) = run_cli(&["completions", "bash"]);
     assert!(success);
