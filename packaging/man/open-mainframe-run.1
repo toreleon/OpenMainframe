@@ -1,0 +1,75 @@
+.TH OPEN-MAINFRAME-RUN 1 "February 2026" "OpenMainframe 0.1.0" "User Commands"
+.SH NAME
+open-mainframe-run \- execute JCL jobs
+.SH SYNOPSIS
+.B open-mainframe run
+[\fIOPTIONS\fR] \fIFILE\fR
+.SH DESCRIPTION
+Execute a JCL (Job Control Language) job file. The interpreter processes
+JOB, EXEC, and DD statements to run programs and manage datasets.
+.PP
+Built-in programs include SORT, DFSORT, ICEMAN for sorting operations,
+and IDCAMS for dataset catalog management.
+.SH OPTIONS
+.TP
+.BR \-\-program\-dir " " \fIDIR\fR
+Directory containing compiled programs. Programs referenced in EXEC
+statements are searched in this directory.
+.TP
+.BR \-\-dataset\-dir " " \fIDIR\fR
+Base directory for dataset files. DD statements without absolute paths
+resolve relative to this directory.
+.TP
+.BR \-\-work\-dir " " \fIDIR\fR
+Working directory for job execution. Temporary files and job output
+are created here.
+.SH ENVIRONMENT
+.TP
+.B OPEN_MAINFRAME_PROGRAM_DIR
+Default program directory if \-\-program\-dir not specified.
+.TP
+.B OPEN_MAINFRAME_DATASET_DIR
+Default dataset directory if \-\-dataset\-dir not specified.
+.TP
+.B OPEN_MAINFRAME_WORK_DIR
+Default work directory if \-\-work\-dir not specified.
+.SH JCL SUPPORT
+The interpreter supports the following JCL statements:
+.TP
+.B JOB
+Job header with job name and optional parameters.
+.TP
+.B EXEC
+Execute a program or procedure.
+.TP
+.B DD
+Data Definition for datasets. Supports:
+.RS
+.IP \(bu 2
+DSN - Dataset name
+.IP \(bu 2
+DISP - Disposition (NEW, OLD, SHR, MOD)
+.IP \(bu 2
+DCB - Data Control Block (RECFM, LRECL, BLKSIZE)
+.IP \(bu 2
+AMP - Access Method Parameters for VSAM
+.RE
+.TP
+.B IF/THEN/ELSE/ENDIF
+Conditional execution based on step return codes.
+.TP
+.B SET
+Set symbolic parameters.
+.SH EXAMPLES
+.TP
+Run a JCL job:
+.B open-mainframe run job.jcl
+.TP
+Specify directories:
+.B open-mainframe run job.jcl --program-dir ./bin --dataset-dir ./data
+.SH SEE ALSO
+.BR open-mainframe (1),
+.BR open-mainframe-compile (1),
+.BR open-mainframe-idcams (1)
+.SH AUTHORS
+OpenMainframe Contributors

@@ -1,0 +1,22 @@
+[package]
+name = "open-mainframe-cobol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "COBOL compiler for OpenMainframe"
+
+[features]
+default = []
+llvm = ["inkwell"]
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+bumpalo.workspace = true
+inkwell = { workspace = true, optional = true }
+open-mainframe-encoding.workspace = true
+open-mainframe-runtime.workspace = true
+
+[dev-dependencies]

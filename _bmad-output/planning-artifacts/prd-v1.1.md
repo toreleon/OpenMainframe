@@ -6,7 +6,7 @@ status: 'draft'
 codename: 'Batch Workload Ready'
 ---
 
-# PRD - zOS-clone v1.1: Batch Workload Ready
+# PRD - OpenMainframe v1.1: Batch Workload Ready
 
 **Author:** Tore
 **Date:** 2026-02-13
@@ -18,7 +18,7 @@ codename: 'Batch Workload Ready'
 
 ### Version Overview
 
-zOS-clone v1.1 extends the MVP with capabilities required for production batch workloads. While v1.0 proved the compilation approach works with sequential files, v1.1 adds the file access methods and utilities that real enterprise batch jobs depend on: VSAM indexed files, SORT processing, generation data groups, and proper dataset management through IDCAMS.
+OpenMainframe v1.1 extends the MVP with capabilities required for production batch workloads. While v1.0 proved the compilation approach works with sequential files, v1.1 adds the file access methods and utilities that real enterprise batch jobs depend on: VSAM indexed files, SORT processing, generation data groups, and proper dataset management through IDCAMS.
 
 ### Key Deliverables
 
@@ -70,10 +70,10 @@ zOS-clone v1.1 extends the MVP with capabilities required for production batch w
 
 | Component | Dependency Type | Notes |
 |-----------|-----------------|-------|
-| zos-dataset crate | Extension | VSAM builds on existing file layer |
-| zos-encoding | Usage | EBCDIC handling for VSAM records |
-| zos-jcl | Extension | DD statements for VSAM/GDG |
-| zos-cobol runtime | Usage | COBOL VSAM verbs use runtime |
+| open-mainframe-dataset crate | Extension | VSAM builds on existing file layer |
+| open-mainframe-encoding | Usage | EBCDIC handling for VSAM records |
+| open-mainframe-jcl | Extension | DD statements for VSAM/GDG |
+| open-mainframe-cobol runtime | Usage | COBOL VSAM verbs use runtime |
 | CLI infrastructure | Extension | New commands (idcams, sort) |
 | CI/CD pipeline | Extension | Package building added |
 
@@ -146,18 +146,18 @@ zOS-clone v1.1 extends the MVP with capabilities required for production batch w
 
 ### Package Distribution
 
-- **FR-v1.1-045**: System administrator can install zOS-clone via apt (Debian/Ubuntu)
-- **FR-v1.1-046**: System administrator can install zOS-clone via yum/dnf (RHEL/Fedora)
-- **FR-v1.1-047**: System administrator can upgrade zOS-clone via package manager
+- **FR-v1.1-045**: System administrator can install OpenMainframe via apt (Debian/Ubuntu)
+- **FR-v1.1-046**: System administrator can install OpenMainframe via yum/dnf (RHEL/Fedora)
+- **FR-v1.1-047**: System administrator can upgrade OpenMainframe via package manager
 - **FR-v1.1-048**: System administrator can configure package repository via standard methods
 - **FR-v1.1-049**: Package includes man pages for all commands
 - **FR-v1.1-050**: Package includes shell completions (bash, zsh, fish)
 
 ### CLI Enhancements
 
-- **FR-v1.1-051**: Developer can invoke `zos-clone sort` for standalone SORT operations
-- **FR-v1.1-052**: Developer can invoke `zos-clone idcams` for dataset management
-- **FR-v1.1-053**: Developer can invoke `zos-clone gdg` for GDG operations
+- **FR-v1.1-051**: Developer can invoke `open-mainframe sort` for standalone SORT operations
+- **FR-v1.1-052**: Developer can invoke `open-mainframe idcams` for dataset management
+- **FR-v1.1-053**: Developer can invoke `open-mainframe gdg` for GDG operations
 
 ---
 

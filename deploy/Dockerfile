@@ -1,4 +1,4 @@
-# zOS-clone Production Dockerfile
+# OpenMainframe Production Dockerfile
 # Multi-stage build for minimal, secure container image
 
 # =============================================================================
@@ -17,7 +17,7 @@ WORKDIR /build
 
 # Copy dependency files first for better layer caching
 COPY Cargo.toml Cargo.lock ./
-COPY crates/zos-*/Cargo.toml ./crates/
+COPY crates/open-mainframe-*/Cargo.toml ./crates/
 
 # Create stub files to compile dependencies
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs
@@ -52,30 +52,30 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/cache/apt/*
 
 # Create non-root user
-RUN groupadd -r zos -g 1000 && \
-    useradd -r -g zos -u 1000 -d /app -s /sbin/nologin zos
+RUN groupadd -r openmainframe -g 1000 && \
+    useradd -r -g openmainframe -u 1000 -d /app -s /sbin/nologin openmainframe
 
 WORKDIR /app
 
 # Copy binaries from builder
-COPY --from=builder /build/target/release/zos-* /usr/local/bin/
+COPY --from=builder /build/target/release/open-mainframe-* /usr/local/bin/
 
 # Create required directories
-RUN mkdir -p /etc/zos-clone /var/log/zos-clone /tmp/zos-clone && \
-    chown -R zos:zos /etc/zos-clone /var/log/zos-clone /tmp/zos-clone
+RUN mkdir -p /etc/open-mainframe /var/log/open-mainframe /tmp/open-mainframe && \
+    chown -R openmainframe:openmainframe /etc/open-mainframe /var/log/open-mainframe /tmp/open-mainframe
 
 # Copy configuration template
-COPY --from=builder /build/deploy/kubernetes/configmap.yaml /etc/zos-clone/
+COPY --from=builder /build/deploy/kubernetes/configmap.yaml /etc/open-mainframe/
 
 # Switch to non-root user
-USER zos
+USER openmainframe
 
 # Environment variables
-ENV ZOS_LOG_LEVEL=info \
-    ZOS_LOG_FORMAT=json \
-    ZOS_SERVER_HOST=0.0.0.0 \
-    ZOS_SERVER_PORT=8080 \
-    ZOS_METRICS_PORT=9090
+ENV OPEN_MAINFRAME_LOG_LEVEL=info \
+    OPEN_MAINFRAME_LOG_FORMAT=json \
+    OPEN_MAINFRAME_SERVER_HOST=0.0.0.0 \
+    OPEN_MAINFRAME_SERVER_PORT=8080 \
+    OPEN_MAINFRAME_METRICS_PORT=9090
 
 # Expose ports
 EXPOSE 8080 9090
@@ -85,12 +85,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
 # Default command - can be overridden
-CMD ["zos-runtime"]
+CMD ["open-mainframe-runtime"]
 
 # Labels
-LABEL org.opencontainers.image.title="zOS-clone" \
+LABEL org.opencontainers.image.title="OpenMainframe" \
       org.opencontainers.image.description="Mainframe-compatible runtime for COBOL, CICS, and IMS" \
       org.opencontainers.image.version="1.3.0" \
-      org.opencontainers.image.vendor="zOS-clone Team" \
+      org.opencontainers.image.vendor="OpenMainframe Team" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.source="https://github.com/zos-clone/zos-clone"
+      org.opencontainers.image.source="https://github.com/toreleon/OpenMainframe"

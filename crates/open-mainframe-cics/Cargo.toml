@@ -1,0 +1,16 @@
+[package]
+name = "open-mainframe-cics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CICS transaction processing for OpenMainframe"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json = "1"
+open-mainframe-dataset = { path = "../open-mainframe-dataset" }
+
+[dev-dependencies]

@@ -1,0 +1,9 @@
+[package]
+name = "open-mainframe-sort"
+version = "0.1.0"
+edition = "2021"
+description = "DFSORT-compatible sort utility for OpenMainframe"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+thiserror = "1.0"

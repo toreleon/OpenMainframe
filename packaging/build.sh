@@ -28,9 +28,9 @@ generate_completions() {
 
     cargo build --release
 
-    "$ROOT_DIR/target/release/zos-clone" completions bash > "$SCRIPT_DIR/completions/zos-clone.bash"
-    "$ROOT_DIR/target/release/zos-clone" completions zsh > "$SCRIPT_DIR/completions/zos-clone.zsh"
-    "$ROOT_DIR/target/release/zos-clone" completions fish > "$SCRIPT_DIR/completions/zos-clone.fish"
+    "$ROOT_DIR/target/release/open-mainframe" completions bash > "$SCRIPT_DIR/completions/open-mainframe.bash"
+    "$ROOT_DIR/target/release/open-mainframe" completions zsh > "$SCRIPT_DIR/completions/open-mainframe.zsh"
+    "$ROOT_DIR/target/release/open-mainframe" completions fish > "$SCRIPT_DIR/completions/open-mainframe.fish"
 
     echo "Completions generated in $SCRIPT_DIR/completions/"
 }
@@ -51,44 +51,44 @@ build_deb() {
     mkdir -p "$BUILD_DIR/deb/usr/share/bash-completion/completions"
     mkdir -p "$BUILD_DIR/deb/usr/share/zsh/vendor-completions"
     mkdir -p "$BUILD_DIR/deb/usr/share/fish/vendor_completions.d"
-    mkdir -p "$BUILD_DIR/deb/usr/share/doc/zos-clone"
+    mkdir -p "$BUILD_DIR/deb/usr/share/doc/open-mainframe"
 
     # Binary
-    cp "$ROOT_DIR/target/release/zos-clone" "$BUILD_DIR/deb/usr/bin/"
+    cp "$ROOT_DIR/target/release/open-mainframe" "$BUILD_DIR/deb/usr/bin/"
 
     # Man pages
     cp "$SCRIPT_DIR/man/"*.1 "$BUILD_DIR/deb/usr/share/man/man1/"
     gzip -f -9 "$BUILD_DIR/deb/usr/share/man/man1/"*.1
 
     # Completions
-    cp "$SCRIPT_DIR/completions/zos-clone.bash" "$BUILD_DIR/deb/usr/share/bash-completion/completions/zos-clone"
-    cp "$SCRIPT_DIR/completions/zos-clone.zsh" "$BUILD_DIR/deb/usr/share/zsh/vendor-completions/_zos-clone"
-    cp "$SCRIPT_DIR/completions/zos-clone.fish" "$BUILD_DIR/deb/usr/share/fish/vendor_completions.d/"
+    cp "$SCRIPT_DIR/completions/open-mainframe.bash" "$BUILD_DIR/deb/usr/share/bash-completion/completions/open-mainframe"
+    cp "$SCRIPT_DIR/completions/open-mainframe.zsh" "$BUILD_DIR/deb/usr/share/zsh/vendor-completions/_open-mainframe"
+    cp "$SCRIPT_DIR/completions/open-mainframe.fish" "$BUILD_DIR/deb/usr/share/fish/vendor_completions.d/"
 
     # Documentation
-    [ -f "$ROOT_DIR/README.md" ] && cp "$ROOT_DIR/README.md" "$BUILD_DIR/deb/usr/share/doc/zos-clone/"
-    [ -f "$ROOT_DIR/LICENSE" ] && cp "$ROOT_DIR/LICENSE" "$BUILD_DIR/deb/usr/share/doc/zos-clone/copyright"
+    [ -f "$ROOT_DIR/README.md" ] && cp "$ROOT_DIR/README.md" "$BUILD_DIR/deb/usr/share/doc/open-mainframe/"
+    [ -f "$ROOT_DIR/LICENSE" ] && cp "$ROOT_DIR/LICENSE" "$BUILD_DIR/deb/usr/share/doc/open-mainframe/copyright"
 
     # Control file
     cat > "$BUILD_DIR/deb/DEBIAN/control" << EOF
-Package: zos-clone
+Package: open-mainframe
 Version: $VERSION
 Section: devel
 Priority: optional
 Architecture: $(dpkg --print-architecture)
 Depends: libc6 (>= 2.17)
-Maintainer: zOS-clone Maintainers <maintainers@zos-clone.dev>
+Maintainer: OpenMainframe Maintainers <maintainers@openmainframe.dev>
 Description: Mainframe COBOL compiler and JCL interpreter
- zOS-clone is a mainframe emulator that provides COBOL compilation,
+ OpenMainframe is a mainframe emulator that provides COBOL compilation,
  JCL interpretation, and dataset management for running legacy
  mainframe workloads on modern Linux systems.
-Homepage: https://github.com/zos-clone/zos-clone
+Homepage: https://github.com/toreleon/OpenMainframe
 EOF
 
     # Build package
-    fakeroot dpkg-deb --build "$BUILD_DIR/deb" "$BUILD_DIR/zos-clone_${VERSION}_$(dpkg --print-architecture).deb"
+    fakeroot dpkg-deb --build "$BUILD_DIR/deb" "$BUILD_DIR/open-mainframe_${VERSION}_$(dpkg --print-architecture).deb"
 
-    echo "Debian package built: $BUILD_DIR/zos-clone_${VERSION}_$(dpkg --print-architecture).deb"
+    echo "Debian package built: $BUILD_DIR/open-mainframe_${VERSION}_$(dpkg --print-architecture).deb"
 }
 
 build_rpm() {
@@ -104,17 +104,17 @@ build_rpm() {
     mkdir -p "$BUILD_DIR/rpm"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
     # Create tarball
-    TARBALL_DIR="zos-clone-$VERSION"
+    TARBALL_DIR="open-mainframe-$VERSION"
     mkdir -p "$BUILD_DIR/rpm/$TARBALL_DIR"
     cp -r "$ROOT_DIR"/* "$BUILD_DIR/rpm/$TARBALL_DIR/" 2>/dev/null || true
     (cd "$BUILD_DIR/rpm" && tar czvf "SOURCES/$TARBALL_DIR.tar.gz" "$TARBALL_DIR")
     rm -rf "$BUILD_DIR/rpm/$TARBALL_DIR"
 
     # Update spec file version
-    sed "s/^Version:.*/Version:        $VERSION/" "$SCRIPT_DIR/rpm/zos-clone.spec" > "$BUILD_DIR/rpm/SPECS/zos-clone.spec"
+    sed "s/^Version:.*/Version:        $VERSION/" "$SCRIPT_DIR/rpm/open-mainframe.spec" > "$BUILD_DIR/rpm/SPECS/open-mainframe.spec"
 
     # Build RPM
-    rpmbuild -bb "$BUILD_DIR/rpm/SPECS/zos-clone.spec" \
+    rpmbuild -bb "$BUILD_DIR/rpm/SPECS/open-mainframe.spec" \
         --define "_topdir $BUILD_DIR/rpm" \
         --define "debug_package %{nil}"
 

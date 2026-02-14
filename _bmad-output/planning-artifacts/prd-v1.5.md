@@ -5,7 +5,7 @@ date: '2026-02-13'
 status: 'draft'
 ---
 
-# Product Requirements Document - zOS-clone v1.5: Interactive CICS Terminal
+# Product Requirements Document - OpenMainframe v1.5: Interactive CICS Terminal
 
 ## Overview
 
@@ -35,7 +35,7 @@ v1.5 builds directly on v1.4's CardDemo compatibility by connecting the existing
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  CardDemo Sign-on                                              zOS-clone    │
+│  CardDemo Sign-on                                              OpenMainframe    │
 │                                                                             │
 │                    AWS Mainframe Modernization                               │
 │                        CardDemo Application                                 │
@@ -64,7 +64,7 @@ v1.5 builds directly on v1.4's CardDemo compatibility by connecting the existing
 
 ### Interaction Flow
 
-1. User starts: `zos-clone cics COSGN00C.cbl -I ./copybooks --data USRSEC=usrsec.dat:10:100`
+1. User starts: `open-mainframe cics COSGN00C.cbl -I ./copybooks --data USRSEC=usrsec.dat:10:100`
 2. COSGN00C executes, issues SEND MAP → TUI renders sign-on screen
 3. User types credentials in input fields, presses ENTER
 4. RECEIVE MAP captures input → COSGN00C validates → XCTL to COMEN01C
@@ -147,7 +147,7 @@ New CLI subcommand for interactive CICS execution.
 
 **Acceptance Criteria:**
 
-- `zos-clone cics <program> [options]` launches interactive session
+- `open-mainframe cics <program> [options]` launches interactive session
 - `-I <path>` for copybook include paths
 - `--data <DDNAME=file:key_len:rec_len>` for VSAM data files
 - `--program-dir <path>` for locating XCTL target programs
@@ -321,21 +321,21 @@ ratatui = "0.29"
 crossterm = "0.28"
 ```
 
-### Architecture: New `zos-tui` Crate
+### Architecture: New `open-mainframe-tui` Crate
 
-A new crate `zos-tui` bridges the existing `zos-cics` infrastructure to the terminal:
+A new crate `open-mainframe-tui` bridges the existing `open-mainframe-cics` infrastructure to the terminal:
 
 ```
 User Terminal (keyboard/screen)
         │
         ▼
-    zos-tui          ← New crate: TUI rendering + input
+    open-mainframe-tui          ← New crate: TUI rendering + input
         │
         ▼
-    zos-cics          ← Existing: TerminalManager, ScreenBuffer, EIB
+    open-mainframe-cics          ← Existing: TerminalManager, ScreenBuffer, EIB
         │
         ▼
-    zos-cobol         ← Existing: COBOL interpreter
+    open-mainframe-cobol         ← Existing: COBOL interpreter
 ```
 
 ### Session Lifecycle
@@ -343,9 +343,9 @@ User Terminal (keyboard/screen)
 ```
 1. CLI parse → load initial program
 2. Interpret program → hits SEND MAP
-3. ScreenBuffer updated → zos-tui renders to terminal
+3. ScreenBuffer updated → open-mainframe-tui renders to terminal
 4. Wait for input → user types, tabs, presses AID key
-5. Input captured → zos-tui populates ScreenBuffer modified fields
+5. Input captured → open-mainframe-tui populates ScreenBuffer modified fields
 6. RECEIVE MAP returns → program processes input
 7. Program may XCTL → load next program → goto 2
 8. Program may RETURN TRANSID → wait for input → goto 4 with new program
@@ -383,10 +383,10 @@ User Terminal (keyboard/screen)
 
 ### Internal
 
-- `zos-cics`: TerminalManager, ScreenBuffer, MapRenderer, EIB, CicsBridge
-- `zos-cobol`: COBOL interpreter for program execution
-- `zos-db2`: SQL execution during CICS transactions (optional)
-- `zos-dataset`: VSAM file access for data files
+- `open-mainframe-cics`: TerminalManager, ScreenBuffer, MapRenderer, EIB, CicsBridge
+- `open-mainframe-cobol`: COBOL interpreter for program execution
+- `open-mainframe-db2`: SQL execution during CICS transactions (optional)
+- `open-mainframe-dataset`: VSAM file access for data files
 
 ### External (New)
 

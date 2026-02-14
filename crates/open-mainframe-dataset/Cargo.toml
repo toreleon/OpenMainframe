@@ -1,0 +1,15 @@
+[package]
+name = "open-mainframe-dataset"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Dataset and file I/O for OpenMainframe"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+open-mainframe-encoding.workspace = true
+
+[dev-dependencies]

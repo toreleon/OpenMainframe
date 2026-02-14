@@ -6,7 +6,7 @@ status: 'draft'
 inputDocuments: [prd-v1.1.md, architecture.md]
 ---
 
-# Architecture Extension - zOS-clone v1.1: Batch Workload Ready
+# Architecture Extension - OpenMainframe v1.1: Batch Workload Ready
 
 _This document extends the v1.0 MVP architecture with components required for v1.1 features._
 
@@ -16,19 +16,19 @@ _This document extends the v1.0 MVP architecture with components required for v1
 
 | Component | Location | New/Extended | Purpose |
 |-----------|----------|--------------|---------|
-| VSAM Engine | zos-dataset/vsam/ | **NEW** | B+ tree indexed file support |
-| SORT Utility | zos-sort (new crate) | **NEW** | DFSORT-compatible sorting |
-| GDG Manager | zos-dataset/gdg/ | **NEW** | Generation data group handling |
-| IDCAMS | zos-dataset/idcams/ | **NEW** | Dataset management utility |
-| Catalog Extension | zos-dataset/catalog | Extended | VSAM/GDG catalog entries |
-| JCL Extension | zos-jcl | Extended | VSAM DD, GDG references |
+| VSAM Engine | open-mainframe-dataset/vsam/ | **NEW** | B+ tree indexed file support |
+| SORT Utility | open-mainframe-sort (new crate) | **NEW** | DFSORT-compatible sorting |
+| GDG Manager | open-mainframe-dataset/gdg/ | **NEW** | Generation data group handling |
+| IDCAMS | open-mainframe-dataset/idcams/ | **NEW** | Dataset management utility |
+| Catalog Extension | open-mainframe-dataset/catalog | Extended | VSAM/GDG catalog entries |
+| JCL Extension | open-mainframe-jcl | Extended | VSAM DD, GDG references |
 | Package Build | CI/CD | **NEW** | apt/yum packaging |
 
 ### Dependency Graph Update
 
 ```
                     ┌─────────────────┐
-                    │   zos-clone     │ (CLI binary)
+                    │   open-mainframe     │ (CLI binary)
                     │                 │
                     └───────┬─────────┘
                             │
@@ -36,7 +36,7 @@ _This document extends the v1.0 MVP architecture with components required for v1
         │                   │                   │
         ▼                   ▼                   ▼
 ┌───────────────┐   ┌───────────────┐   ┌───────────────┐
-│   zos-cobol   │   │    zos-jcl    │   │   zos-sort    │ ◄── NEW
+│   open-mainframe-cobol   │   │    open-mainframe-jcl    │   │   open-mainframe-sort    │ ◄── NEW
 │               │   │               │   │               │
 └───────┬───────┘   └───────┬───────┘   └───────┬───────┘
         │                   │                   │
@@ -44,7 +44,7 @@ _This document extends the v1.0 MVP architecture with components required for v1
                             │
                             ▼
                     ┌───────────────┐
-                    │  zos-dataset  │ (extended)
+                    │  open-mainframe-dataset  │ (extended)
                     │   ├── vsam/   │ ◄── NEW
                     │   ├── gdg/    │ ◄── NEW
                     │   └── idcams/ │ ◄── NEW
@@ -53,7 +53,7 @@ _This document extends the v1.0 MVP architecture with components required for v1
                 ┌───────────┴───────────┐
                 ▼                       ▼
         ┌───────────────┐       ┌───────────────┐
-        │  zos-runtime  │       │ zos-encoding  │
+        │  open-mainframe-runtime  │       │ open-mainframe-encoding  │
         └───────────────┘       └───────────────┘
 ```
 
@@ -64,7 +64,7 @@ _This document extends the v1.0 MVP architecture with components required for v1
 ### Module Structure
 
 ```
-crates/zos-dataset/src/
+crates/open-mainframe-dataset/src/
 ├── vsam/
 │   ├── mod.rs              # VSAM module exports
 │   ├── cluster.rs          # Cluster definition and metadata
@@ -226,7 +226,7 @@ COBOL VSAM verbs map to VSAM API:
 
 ### Module Structure
 
-**Decision:** Create new crate `zos-sort` for SORT utility.
+**Decision:** Create new crate `open-mainframe-sort` for SORT utility.
 
 **Rationale:**
 - SORT is a standalone utility, not just a library
@@ -235,7 +235,7 @@ COBOL VSAM verbs map to VSAM API:
 - Clear API boundary
 
 ```
-crates/zos-sort/
+crates/open-mainframe-sort/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs              # Library interface
@@ -347,7 +347,7 @@ sort_engine.execute(sort_job)?;
 ### Module Structure
 
 ```
-crates/zos-dataset/src/
+crates/open-mainframe-dataset/src/
 ├── gdg/
 │   ├── mod.rs              # GDG module exports
 │   ├── base.rs             # GDG base entry
@@ -428,7 +428,7 @@ impl GdgResolver {
 ### Module Structure
 
 ```
-crates/zos-dataset/src/
+crates/open-mainframe-dataset/src/
 ├── idcams/
 │   ├── mod.rs              # IDCAMS module exports
 │   ├── parser.rs           # Command parser
@@ -480,7 +480,7 @@ impl IdcamsExecutor {
 
 **CLI Integration:**
 ```bash
-zos-clone idcams <<EOF
+open-mainframe idcams <<EOF
   DEFINE CLUSTER (NAME(MY.KSDS) -
     KEYS(10 0) -
     RECORDSIZE(100 200))
@@ -542,7 +542,7 @@ scripts/
 │   │   ├── postinst        # Post-install script
 │   │   └── build.sh        # Build script
 │   └── rpm/
-│       ├── zos-clone.spec  # RPM spec file
+│       ├── open-mainframe.spec  # RPM spec file
 │       └── build.sh        # Build script
 ```
 
@@ -550,20 +550,20 @@ scripts/
 
 ```
 /usr/bin/
-    zos-clone               # Main binary
-    zos-sort                # SORT utility (optional)
+    open-mainframe               # Main binary
+    open-mainframe-sort                # SORT utility (optional)
 /usr/share/man/man1/
-    zos-clone.1             # Man page
-    zos-clone-compile.1
-    zos-clone-run.1
-    zos-clone-idcams.1
-    zos-clone-sort.1
+    open-mainframe.1             # Man page
+    open-mainframe-compile.1
+    open-mainframe-run.1
+    open-mainframe-idcams.1
+    open-mainframe-sort.1
 /usr/share/bash-completion/completions/
-    zos-clone               # Bash completions
+    open-mainframe               # Bash completions
 /usr/share/zsh/vendor-completions/
-    _zos-clone              # Zsh completions
-/etc/zos-clone/
-    zos-clone.toml.example  # Example config
+    _open-mainframe              # Zsh completions
+/etc/open-mainframe/
+    open-mainframe.toml.example  # Example config
 ```
 
 ---
@@ -613,10 +613,10 @@ v1.1 is backward compatible with v1.0:
 
 | Crate | Dependency | Reason |
 |-------|------------|--------|
-| zos-dataset | (internal) | VSAM/GDG modules |
-| zos-sort | zos-dataset, zos-encoding | New crate |
-| zos-jcl | zos-sort | SORT job execution |
-| zos-clone | zos-sort | CLI integration |
+| open-mainframe-dataset | (internal) | VSAM/GDG modules |
+| open-mainframe-sort | open-mainframe-dataset, open-mainframe-encoding | New crate |
+| open-mainframe-jcl | open-mainframe-sort | SORT job execution |
+| open-mainframe | open-mainframe-sort | CLI integration |
 
 ---
 

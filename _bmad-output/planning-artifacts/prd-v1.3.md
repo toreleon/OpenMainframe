@@ -5,7 +5,7 @@ date: '2026-02-13'
 status: 'draft'
 ---
 
-# Product Requirements Document - zOS-clone v1.3: Production Ready
+# Product Requirements Document - OpenMainframe v1.3: Production Ready
 
 ## Overview
 
@@ -93,7 +93,7 @@ v1.3 focuses on production readiness, extending the enterprise features from v1.
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR-v1.3-046 | Kubernetes Deployment manifests | Must |
-| FR-v1.3-047 | Helm chart for zOS-clone | Must |
+| FR-v1.3-047 | Helm chart for OpenMainframe | Must |
 | FR-v1.3-048 | Docker multi-stage build optimization | Must |
 | FR-v1.3-049 | Health check endpoints (/health, /ready) | Must |
 | FR-v1.3-050 | Prometheus metrics endpoint | Must |
@@ -156,9 +156,9 @@ v1.3 focuses on production readiness, extending the enterprise features from v1.
 
 ### Internal
 
-- `zos-cics`: Base for advanced CICS commands
-- `zos-cobol`: Base for COBOL-2014 extensions
-- `zos-runtime`: Base for new data types
+- `open-mainframe-cics`: Base for advanced CICS commands
+- `open-mainframe-cobol`: Base for COBOL-2014 extensions
+- `open-mainframe-runtime`: Base for new data types
 
 ### External
 

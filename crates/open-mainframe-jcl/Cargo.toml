@@ -1,0 +1,16 @@
+[package]
+name = "open-mainframe-jcl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "JCL interpreter for OpenMainframe"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+open-mainframe-dataset.workspace = true
+open-mainframe-sort.workspace = true
+
+[dev-dependencies]

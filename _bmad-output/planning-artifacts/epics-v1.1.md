@@ -9,11 +9,11 @@ totalStories: 42
 frCoverage: '53/53'
 ---
 
-# zOS-clone v1.1 - Epic Breakdown
+# OpenMainframe v1.1 - Epic Breakdown
 
 ## Overview
 
-This document provides the epic and story breakdown for zOS-clone v1.1 (Batch Workload Ready), building on the MVP foundation.
+This document provides the epic and story breakdown for OpenMainframe v1.1 (Batch Workload Ready), building on the MVP foundation.
 
 ## Requirements Inventory
 
@@ -86,11 +86,11 @@ This document provides the epic and story breakdown for zOS-clone v1.1 (Batch Wo
 
 | Epic | Title | Stories | Key FRs | Crate(s) |
 |------|-------|---------|---------|----------|
-| 15 | VSAM Core Infrastructure | 8 | FR-v1.1-001 to FR-v1.1-005, FR-v1.1-011-012 | zos-dataset |
-| 16 | VSAM ESDS & RRDS | 5 | FR-v1.1-006 to FR-v1.1-010 | zos-dataset |
-| 17 | SORT Utility | 9 | FR-v1.1-015 to FR-v1.1-025 | zos-sort |
-| 18 | GDG Support | 7 | FR-v1.1-026 to FR-v1.1-034 | zos-dataset |
-| 19 | IDCAMS Utility | 8 | FR-v1.1-035 to FR-v1.1-044 | zos-dataset |
+| 15 | VSAM Core Infrastructure | 8 | FR-v1.1-001 to FR-v1.1-005, FR-v1.1-011-012 | open-mainframe-dataset |
+| 16 | VSAM ESDS & RRDS | 5 | FR-v1.1-006 to FR-v1.1-010 | open-mainframe-dataset |
+| 17 | SORT Utility | 9 | FR-v1.1-015 to FR-v1.1-025 | open-mainframe-sort |
+| 18 | GDG Support | 7 | FR-v1.1-026 to FR-v1.1-034 | open-mainframe-dataset |
+| 19 | IDCAMS Utility | 8 | FR-v1.1-035 to FR-v1.1-044 | open-mainframe-dataset |
 | 20 | Package Distribution | 5 | FR-v1.1-045 to FR-v1.1-053 | CI/CD |
 
 **Total: 6 Epics, 42 Stories**
@@ -101,7 +101,7 @@ This document provides the epic and story breakdown for zOS-clone v1.1 (Batch Wo
 
 **Goal:** Implement KSDS (Key-Sequenced Data Set) support with B+ tree indexing as the foundation for all VSAM operations.
 
-**Crate:** `zos-dataset/vsam`
+**Crate:** `open-mainframe-dataset/vsam`
 **FRs:** FR-v1.1-001 to FR-v1.1-005, FR-v1.1-011 to FR-v1.1-014
 **Depends on:** MVP Epic 8 (Dataset & File Operations)
 
@@ -326,7 +326,7 @@ So that **batch jobs can use VSAM datasets**.
 
 **Goal:** Extend VSAM support to Entry-Sequenced and Relative Record datasets.
 
-**Crate:** `zos-dataset/vsam`
+**Crate:** `open-mainframe-dataset/vsam`
 **FRs:** FR-v1.1-006 to FR-v1.1-010
 
 ### Story 16.1: Implement ESDS Cluster
@@ -447,14 +447,14 @@ So that **I can directly access specific slots**.
 
 **Goal:** Implement a DFSORT-compatible sort utility for batch processing.
 
-**Crate:** `zos-sort` (new crate)
+**Crate:** `open-mainframe-sort` (new crate)
 **FRs:** FR-v1.1-015 to FR-v1.1-025
 
 ### Story 17.1: Create SORT Crate and Control Statement Parser
 
 As a **developer**,
 I want **a parser for DFSORT control statements**,
-So that **existing SORT control cards work with zOS-clone**.
+So that **existing SORT control cards work with OpenMainframe**.
 
 **Acceptance Criteria:**
 
@@ -653,7 +653,7 @@ So that **SORT works in batch jobs and interactively**.
 **When** the job executes
 **Then** the sort is performed and output written
 
-**Given** CLI: `zos-clone sort --input file.dat --output sorted.dat --fields "1,10,CH,A"`
+**Given** CLI: `open-mainframe sort --input file.dat --output sorted.dat --fields "1,10,CH,A"`
 **When** executed
 **Then** file is sorted and written to output
 
@@ -666,7 +666,7 @@ So that **SORT works in batch jobs and interactively**.
 
 **Goal:** Implement Generation Data Group support for dataset versioning.
 
-**Crate:** `zos-dataset/gdg`
+**Crate:** `open-mainframe-dataset/gdg`
 **FRs:** FR-v1.1-026 to FR-v1.1-034
 
 ### Story 18.1: Implement GDG Base Definition
@@ -810,11 +810,11 @@ So that **I can manage GDGs without JCL**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone gdg create MY.GDG.BASE --limit 10`
+**Given** `open-mainframe gdg create MY.GDG.BASE --limit 10`
 **When** executed
 **Then** GDG base is created
 
-**Given** `zos-clone gdg list MY.GDG.BASE`
+**Given** `open-mainframe gdg list MY.GDG.BASE`
 **When** executed
 **Then** generations are listed with timestamps
 
@@ -827,7 +827,7 @@ So that **I can manage GDGs without JCL**.
 
 **Goal:** Implement IDCAMS for dataset and catalog management.
 
-**Crate:** `zos-dataset/idcams`
+**Crate:** `open-mainframe-dataset/idcams`
 **FRs:** FR-v1.1-035 to FR-v1.1-044
 
 ### Story 19.1: Implement IDCAMS Command Parser
@@ -1016,11 +1016,11 @@ So that **I can verify VSAM integrity and use IDCAMS interactively**.
 **When** executed
 **Then** VSAM end-of-file markers are verified/corrected
 
-**Given** `zos-clone idcams` with stdin commands
+**Given** `open-mainframe idcams` with stdin commands
 **When** executed
 **Then** IDCAMS commands are processed
 
-**Given** `zos-clone idcams --command "LISTCAT ENT(*)"`
+**Given** `open-mainframe idcams --command "LISTCAT ENT(*)"`
 **When** executed
 **Then** single command is executed
 
@@ -1040,7 +1040,7 @@ So that **I can verify VSAM integrity and use IDCAMS interactively**.
 
 As a **system administrator**,
 I want **apt/deb packages**,
-So that **I can install zOS-clone on Debian/Ubuntu systems**.
+So that **I can install OpenMainframe on Debian/Ubuntu systems**.
 
 **Acceptance Criteria:**
 
@@ -1050,8 +1050,8 @@ So that **I can install zOS-clone on Debian/Ubuntu systems**.
 **And** it includes binary, man pages, and completions
 
 **Given** the .deb package
-**When** installed via `apt install ./zos-clone.deb`
-**Then** zos-clone is available system-wide
+**When** installed via `apt install ./open-mainframe.deb`
+**Then** open-mainframe is available system-wide
 
 **Complexity:** M
 **Supports:** FR-v1.1-045
@@ -1062,7 +1062,7 @@ So that **I can install zOS-clone on Debian/Ubuntu systems**.
 
 As a **system administrator**,
 I want **yum/rpm packages**,
-So that **I can install zOS-clone on RHEL/Fedora systems**.
+So that **I can install OpenMainframe on RHEL/Fedora systems**.
 
 **Acceptance Criteria:**
 
@@ -1072,8 +1072,8 @@ So that **I can install zOS-clone on RHEL/Fedora systems**.
 **And** it includes binary, man pages, and completions
 
 **Given** the .rpm package
-**When** installed via `yum install ./zos-clone.rpm`
-**Then** zos-clone is available system-wide
+**When** installed via `yum install ./open-mainframe.rpm`
+**Then** open-mainframe is available system-wide
 
 **Complexity:** M
 **Supports:** FR-v1.1-046
@@ -1088,11 +1088,11 @@ So that **users can access help via standard Unix interface**.
 
 **Acceptance Criteria:**
 
-**Given** `man zos-clone`
+**Given** `man open-mainframe`
 **When** accessed
 **Then** main command documentation is shown
 
-**Given** `man zos-clone-compile`
+**Given** `man open-mainframe-compile`
 **When** accessed
 **Then** compile subcommand documentation is shown
 
@@ -1111,12 +1111,12 @@ So that **tab completion works after install**.
 
 **Acceptance Criteria:**
 
-**Given** zOS-clone installed via package
-**When** user types `zos-clone <TAB>` in bash
+**Given** OpenMainframe installed via package
+**When** user types `open-mainframe <TAB>` in bash
 **Then** subcommands are suggested
 
-**Given** zOS-clone installed via package
-**When** user types `zos-clone compile --<TAB>` in bash
+**Given** OpenMainframe installed via package
+**When** user types `open-mainframe compile --<TAB>` in bash
 **Then** options are suggested
 
 **Also works for:** zsh, fish
@@ -1135,12 +1135,12 @@ So that **I can install/upgrade via standard package manager**.
 **Acceptance Criteria:**
 
 **Given** repository URL added to apt sources
-**When** running `apt update && apt install zos-clone`
+**When** running `apt update && apt install open-mainframe`
 **Then** latest version is installed from repository
 
 **Given** new version released
 **When** running `apt upgrade`
-**Then** zos-clone is upgraded to new version
+**Then** open-mainframe is upgraded to new version
 
 **Similar for:** yum/dnf repository
 

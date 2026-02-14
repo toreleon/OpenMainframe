@@ -1,10 +1,10 @@
-# zOS-clone ConfigMap
+# OpenMainframe ConfigMap
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: zos-clone-config
+  name: open-mainframe-config
   labels:
-    app: zos-clone
+    app: open-mainframe
 data:
   # Logging configuration
   log_level: "info"
@@ -40,7 +40,7 @@ data:
     observability:
       metrics:
         enabled: true
-        prefix: zos_clone
+        prefix: open_mainframe
       tracing:
         enabled: true
         sample_rate: 0.1
@@ -48,10 +48,10 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: zos-clone-secrets
+  name: open-mainframe-secrets
   labels:
-    app: zos-clone
+    app: open-mainframe
 type: Opaque
 stringData:
   # These should be managed by external secrets manager in production
-  database_url: "postgresql://user:password@postgres:5432/zos"
+  database_url: "postgresql://user:password@postgres:5432/openmainframe"

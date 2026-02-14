@@ -1,4 +1,4 @@
-zos-clone (0.1.0-1) unstable; urgency=medium
+open-mainframe (0.1.0-1) unstable; urgency=medium
 
   * Initial release.
   * COBOL compiler with lexer, parser, semantic analysis
@@ -9,4 +9,4 @@ zos-clone (0.1.0-1) unstable; urgency=medium
   * IDCAMS utility for catalog operations
   * SORT/DFSORT utility
 
- -- zOS-clone Maintainers <maintainers@zos-clone.dev>  Thu, 13 Feb 2026 00:00:00 +0000
+ -- OpenMainframe Maintainers <maintainers@openmainframe.dev>  Thu, 13 Feb 2026 00:00:00 +0000

@@ -10,18 +10,18 @@ override_dh_auto_build:
 	cargo build --release
 
 override_dh_auto_install:
-	install -Dm755 target/release/zos-clone debian/zos-clone/usr/bin/zos-clone
+	install -Dm755 target/release/open-mainframe debian/open-mainframe/usr/bin/open-mainframe
 	# Install man pages
-	install -Dm644 packaging/man/zos-clone.1 debian/zos-clone/usr/share/man/man1/zos-clone.1
-	install -Dm644 packaging/man/zos-clone-compile.1 debian/zos-clone/usr/share/man/man1/zos-clone-compile.1
-	install -Dm644 packaging/man/zos-clone-run.1 debian/zos-clone/usr/share/man/man1/zos-clone-run.1
-	install -Dm644 packaging/man/zos-clone-check.1 debian/zos-clone/usr/share/man/man1/zos-clone-check.1
-	install -Dm644 packaging/man/zos-clone-gdg.1 debian/zos-clone/usr/share/man/man1/zos-clone-gdg.1
-	install -Dm644 packaging/man/zos-clone-idcams.1 debian/zos-clone/usr/share/man/man1/zos-clone-idcams.1
+	install -Dm644 packaging/man/open-mainframe.1 debian/open-mainframe/usr/share/man/man1/open-mainframe.1
+	install -Dm644 packaging/man/open-mainframe-compile.1 debian/open-mainframe/usr/share/man/man1/open-mainframe-compile.1
+	install -Dm644 packaging/man/open-mainframe-run.1 debian/open-mainframe/usr/share/man/man1/open-mainframe-run.1
+	install -Dm644 packaging/man/open-mainframe-check.1 debian/open-mainframe/usr/share/man/man1/open-mainframe-check.1
+	install -Dm644 packaging/man/open-mainframe-gdg.1 debian/open-mainframe/usr/share/man/man1/open-mainframe-gdg.1
+	install -Dm644 packaging/man/open-mainframe-idcams.1 debian/open-mainframe/usr/share/man/man1/open-mainframe-idcams.1
 	# Install shell completions
-	install -Dm644 packaging/completions/zos-clone.bash debian/zos-clone/usr/share/bash-completion/completions/zos-clone
-	install -Dm644 packaging/completions/zos-clone.zsh debian/zos-clone/usr/share/zsh/vendor-completions/_zos-clone
-	install -Dm644 packaging/completions/zos-clone.fish debian/zos-clone/usr/share/fish/vendor_completions.d/zos-clone.fish
+	install -Dm644 packaging/completions/open-mainframe.bash debian/open-mainframe/usr/share/bash-completion/completions/open-mainframe
+	install -Dm644 packaging/completions/open-mainframe.zsh debian/open-mainframe/usr/share/zsh/vendor-completions/_open-mainframe
+	install -Dm644 packaging/completions/open-mainframe.fish debian/open-mainframe/usr/share/fish/vendor_completions.d/open-mainframe.fish
 
 override_dh_auto_test:
 	cargo test

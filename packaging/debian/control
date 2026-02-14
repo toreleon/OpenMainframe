@@ -1,19 +1,19 @@
-Source: zos-clone
+Source: open-mainframe
 Section: devel
 Priority: optional
-Maintainer: zOS-clone Maintainers <maintainers@zos-clone.dev>
+Maintainer: OpenMainframe Maintainers <maintainers@openmainframe.dev>
 Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.82)
 Standards-Version: 4.6.2
-Homepage: https://github.com/zos-clone/zos-clone
-Vcs-Browser: https://github.com/zos-clone/zos-clone
-Vcs-Git: https://github.com/zos-clone/zos-clone.git
+Homepage: https://github.com/toreleon/OpenMainframe
+Vcs-Browser: https://github.com/toreleon/OpenMainframe
+Vcs-Git: https://github.com/toreleon/OpenMainframe.git
 Rules-Requires-Root: no
 
-Package: zos-clone
+Package: open-mainframe
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: Mainframe COBOL compiler and JCL interpreter
- zOS-clone is a mainframe emulator that provides:
+ OpenMainframe is a mainframe emulator that provides:
   - COBOL compiler with LLVM backend
   - JCL (Job Control Language) interpreter
   - VSAM dataset support (KSDS, ESDS, RRDS)

@@ -46,21 +46,21 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czvf ../../../zos-clone-${{ matrix.target }}.${{ matrix.archive }} zos-clone
+          tar czvf ../../../open-mainframe-${{ matrix.target }}.${{ matrix.archive }} open-mainframe
           cd ../../..
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../zos-clone-${{ matrix.target }}.${{ matrix.archive }} zos-clone.exe
+          7z a ../../../open-mainframe-${{ matrix.target }}.${{ matrix.archive }} open-mainframe.exe
           cd ../../..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zos-clone-${{ matrix.target }}
-          path: zos-clone-${{ matrix.target }}.${{ matrix.archive }}
+          name: open-mainframe-${{ matrix.target }}
+          path: open-mainframe-${{ matrix.target }}.${{ matrix.archive }}
 
   build-deb:
     name: Build Debian Package
@@ -90,50 +90,50 @@ jobs:
           mkdir -p pkg/usr/share/bash-completion/completions
           mkdir -p pkg/usr/share/zsh/vendor-completions
           mkdir -p pkg/usr/share/fish/vendor_completions.d
-          mkdir -p pkg/usr/share/doc/zos-clone
+          mkdir -p pkg/usr/share/doc/open-mainframe
 
           # Binary
-          cp target/release/zos-clone pkg/usr/bin/
+          cp target/release/open-mainframe pkg/usr/bin/
 
           # Man pages
           cp packaging/man/*.1 pkg/usr/share/man/man1/
           gzip -9 pkg/usr/share/man/man1/*.1
 
           # Completions
-          cp packaging/completions/zos-clone.bash pkg/usr/share/bash-completion/completions/zos-clone
-          cp packaging/completions/zos-clone.zsh pkg/usr/share/zsh/vendor-completions/_zos-clone
-          cp packaging/completions/zos-clone.fish pkg/usr/share/fish/vendor_completions.d/
+          cp packaging/completions/open-mainframe.bash pkg/usr/share/bash-completion/completions/open-mainframe
+          cp packaging/completions/open-mainframe.zsh pkg/usr/share/zsh/vendor-completions/_open-mainframe
+          cp packaging/completions/open-mainframe.fish pkg/usr/share/fish/vendor_completions.d/
 
           # Documentation
-          cp README.md pkg/usr/share/doc/zos-clone/
-          cp LICENSE pkg/usr/share/doc/zos-clone/copyright
+          cp README.md pkg/usr/share/doc/open-mainframe/
+          cp LICENSE pkg/usr/share/doc/open-mainframe/copyright
 
           # Control file
           cat > pkg/DEBIAN/control << EOF
-          Package: zos-clone
+          Package: open-mainframe
           Version: ${{ steps.version.outputs.version }}
           Section: devel
           Priority: optional
           Architecture: amd64
           Depends: libc6 (>= 2.17)
-          Maintainer: zOS-clone Maintainers <maintainers@zos-clone.dev>
+          Maintainer: OpenMainframe Maintainers <maintainers@openmainframe.dev>
           Description: Mainframe COBOL compiler and JCL interpreter
-           zOS-clone is a mainframe emulator that provides COBOL compilation,
+           OpenMainframe is a mainframe emulator that provides COBOL compilation,
            JCL interpretation, and dataset management for running legacy
            mainframe workloads on modern Linux systems.
-          Homepage: https://github.com/zos-clone/zos-clone
+          Homepage: https://github.com/toreleon/OpenMainframe
           EOF
 
       - name: Build .deb package
         run: |
           fakeroot dpkg-deb --build pkg
-          mv pkg.deb zos-clone_${{ steps.version.outputs.version }}_amd64.deb
+          mv pkg.deb open-mainframe_${{ steps.version.outputs.version }}_amd64.deb
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zos-clone-deb
-          path: zos-clone_*.deb
+          name: open-mainframe-deb
+          path: open-mainframe_*.deb
 
   build-rpm:
     name: Build RPM Package
@@ -158,33 +158,33 @@ jobs:
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
           # Create tarball
-          mkdir zos-clone-${{ steps.version.outputs.version }}
-          cp -r * zos-clone-${{ steps.version.outputs.version }}/ 2>/dev/null || true
-          tar czvf ~/rpmbuild/SOURCES/zos-clone-${{ steps.version.outputs.version }}.tar.gz \
-            zos-clone-${{ steps.version.outputs.version }}
+          mkdir open-mainframe-${{ steps.version.outputs.version }}
+          cp -r * open-mainframe-${{ steps.version.outputs.version }}/ 2>/dev/null || true
+          tar czvf ~/rpmbuild/SOURCES/open-mainframe-${{ steps.version.outputs.version }}.tar.gz \
+            open-mainframe-${{ steps.version.outputs.version }}
 
           # Copy spec file
-          cp packaging/rpm/zos-clone.spec ~/rpmbuild/SPECS/
+          cp packaging/rpm/open-mainframe.spec ~/rpmbuild/SPECS/
 
           # Update version in spec
-          sed -i "s/^Version:.*/Version:        ${{ steps.version.outputs.version }}/" ~/rpmbuild/SPECS/zos-clone.spec
+          sed -i "s/^Version:.*/Version:        ${{ steps.version.outputs.version }}/" ~/rpmbuild/SPECS/open-mainframe.spec
 
       - name: Build RPM
         run: |
           cd ~/rpmbuild
-          rpmbuild -bb SPECS/zos-clone.spec --define "_topdir $(pwd)" \
+          rpmbuild -bb SPECS/open-mainframe.spec --define "_topdir $(pwd)" \
             --define "_binary_payload w2.xzdio" \
             --define "debug_package %{nil}"
 
       - name: Copy RPM
         run: |
-          cp ~/rpmbuild/RPMS/*/*.rpm ./zos-clone-${{ steps.version.outputs.version }}.x86_64.rpm
+          cp ~/rpmbuild/RPMS/*/*.rpm ./open-mainframe-${{ steps.version.outputs.version }}.x86_64.rpm
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zos-clone-rpm
-          path: zos-clone-*.rpm
+          name: open-mainframe-rpm
+          path: open-mainframe-*.rpm
 
   release:
     name: Create Release
@@ -216,12 +216,12 @@ jobs:
     name: Publish to APT Repository
     needs: release
     runs-on: ubuntu-latest
-    if: github.repository == 'zos-clone/zos-clone'
+    if: github.repository == 'toreleon/OpenMainframe'
     steps:
       - name: Download deb package
         uses: actions/download-artifact@v4
         with:
-          name: zos-clone-deb
+          name: open-mainframe-deb
           path: packages
 
       - name: Setup GPG
@@ -249,12 +249,12 @@ jobs:
     name: Publish to YUM Repository
     needs: release
     runs-on: ubuntu-latest
-    if: github.repository == 'zos-clone/zos-clone'
+    if: github.repository == 'toreleon/OpenMainframe'
     steps:
       - name: Download rpm package
         uses: actions/download-artifact@v4
         with:
-          name: zos-clone-rpm
+          name: open-mainframe-rpm
           path: packages
 
       - name: Setup GPG

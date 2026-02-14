@@ -2,7 +2,7 @@
 stepsCompleted: [1, 2, 3]
 inputDocuments: [prd.md, architecture.md]
 workflowType: 'epics'
-project_name: 'zOS-clone'
+project_name: 'OpenMainframe'
 user_name: 'Tore'
 date: '2026-02-12'
 status: 'complete'
@@ -13,11 +13,11 @@ frCoverage: '96/96'
 nfrCoverage: '27/27'
 ---
 
-# zOS-clone - Epic Breakdown
+# OpenMainframe - Epic Breakdown
 
 ## Overview
 
-This document provides the complete epic and story breakdown for zOS-clone, decomposing the requirements from the PRD, and Architecture requirements into implementable stories.
+This document provides the complete epic and story breakdown for OpenMainframe, decomposing the requirements from the PRD, and Architecture requirements into implementable stories.
 
 ## Requirements Inventory
 
@@ -87,12 +87,12 @@ This document provides the complete epic and story breakdown for zOS-clone, deco
 - FR53: Developer can set maximum condition code threshold for job execution
 
 **Developer CLI (FR54-FR62)**
-- FR54: Developer can invoke compilation via `zos-clone compile` command
-- FR55: Developer can invoke JCL execution via `zos-clone run` command
-- FR56: Developer can validate source without compilation via `zos-clone check` command
-- FR57: Developer can convert datasets via `zos-clone convert` command
-- FR58: Developer can view version information via `zos-clone version` command
-- FR59: Developer can access help for any command via `zos-clone help` command
+- FR54: Developer can invoke compilation via `open-mainframe compile` command
+- FR55: Developer can invoke JCL execution via `open-mainframe run` command
+- FR56: Developer can validate source without compilation via `open-mainframe check` command
+- FR57: Developer can convert datasets via `open-mainframe convert` command
+- FR58: Developer can view version information via `open-mainframe version` command
+- FR59: Developer can access help for any command via `open-mainframe help` command
 - FR60: Developer can specify output file name for compiled executables
 - FR61: Developer can receive exit codes indicating success, warning, error, or fatal conditions
 - FR62: Developer can receive output in multiple formats (text, JSON, SARIF) for tooling integration
@@ -116,12 +116,12 @@ This document provides the complete epic and story breakdown for zOS-clone, deco
 - FR76: Operations engineer can configure SYSOUT directory location
 
 **Distribution & Installation (FR77-FR82)**
-- FR77: Developer can install zOS-clone via Docker container
-- FR78: Developer can install zOS-clone via pre-built binary releases
-- FR79: Developer can install zOS-clone via Cargo (Rust package manager)
-- FR80: Developer can build zOS-clone from source
-- FR81: Developer can run zOS-clone on Linux x86_64 systems
-- FR82: Developer can run zOS-clone on Linux ARM64 systems
+- FR77: Developer can install OpenMainframe via Docker container
+- FR78: Developer can install OpenMainframe via pre-built binary releases
+- FR79: Developer can install OpenMainframe via Cargo (Rust package manager)
+- FR80: Developer can build OpenMainframe from source
+- FR81: Developer can run OpenMainframe on Linux x86_64 systems
+- FR82: Developer can run OpenMainframe on Linux ARM64 systems
 
 **IDE & Tooling Integration (FR83-FR86)**
 - FR83: Developer can use Language Server Protocol for IDE integration
@@ -132,15 +132,15 @@ This document provides the complete epic and story breakdown for zOS-clone, deco
 **Documentation & Help (FR87-FR92)**
 - FR87: Developer can access quick start guide for initial setup
 - FR88: Developer can access CLI reference documentation
-- FR89: Developer can access migration guide for mainframe-to-zOS-clone transition
+- FR89: Developer can access migration guide for mainframe-to-OpenMainframe transition
 - FR90: Developer can access compatibility matrix showing supported features
 - FR91: Contributor can access contributing guide for open source participation
 - FR92: Developer can access API reference for programmatic usage
 
 **Compatibility Validation (FR93-FR96)**
-- FR93: Developer can run NIST COBOL-85 test suite against zOS-clone
+- FR93: Developer can run NIST COBOL-85 test suite against OpenMainframe
 - FR94: Developer can compare output against IBM compiler for parity validation
-- FR95: Operations engineer can run parallel workloads on z/OS and zOS-clone for comparison
+- FR95: Operations engineer can run parallel workloads on z/OS and OpenMainframe for comparison
 - FR96: Developer can report compatibility issues via GitHub issues
 
 ### NonFunctional Requirements
@@ -191,24 +191,24 @@ This document provides the complete epic and story breakdown for zOS-clone, deco
 ### Additional Requirements
 
 **From Architecture - Starter Template:**
-- 6-crate Cargo workspace structure exists (zos-clone, zos-cobol, zos-jcl, zos-runtime, zos-dataset, zos-encoding)
+- 6-crate Cargo workspace structure exists (open-mainframe, open-mainframe-cobol, open-mainframe-jcl, open-mainframe-runtime, open-mainframe-dataset, open-mainframe-encoding)
 - Workspace Cargo.toml with shared dependencies defined
 - Project initialization is the first implementation task
 
 **From Architecture - Implementation Sequence:**
-1. `zos-encoding` - Foundation for all data handling (leaf crate, no dependencies)
-2. `zos-cobol` lexer/parser - Core language processing
-3. `zos-cobol` AST + semantic analysis - Program validation
-4. `zos-runtime` - Runtime library functions
-5. `zos-cobol` codegen - LLVM IR generation
-6. `zos-dataset` - File I/O integration
-7. `zos-jcl` - Job control interpreter
-8. `zos-clone` CLI - User interface
+1. `open-mainframe-encoding` - Foundation for all data handling (leaf crate, no dependencies)
+2. `open-mainframe-cobol` lexer/parser - Core language processing
+3. `open-mainframe-cobol` AST + semantic analysis - Program validation
+4. `open-mainframe-runtime` - Runtime library functions
+5. `open-mainframe-cobol` codegen - LLVM IR generation
+6. `open-mainframe-dataset` - File I/O integration
+7. `open-mainframe-jcl` - Job control interpreter
+8. `open-mainframe` CLI - User interface
 
 **From Architecture - Cross-Cutting Concerns:**
 - Error Handling & Diagnostics: thiserror + miette across all crates
 - Configuration Management: YAML/TOML + CLI flags + env vars
-- Data Encoding (EBCDIC/ASCII): zos-encoding shared library
+- Data Encoding (EBCDIC/ASCII): open-mainframe-encoding shared library
 - Logging & Observability: tracing crate throughout
 - Testing Infrastructure: NIST compliance, regression, fuzzing
 
@@ -223,16 +223,16 @@ This document provides the complete epic and story breakdown for zOS-clone, deco
 
 | Category | FRs | Primary Crate | Architecture Support |
 |----------|-----|---------------|----------------------|
-| COBOL Compilation | FR1-FR15 | zos-cobol | Lexer, parser, AST, codegen modules |
-| JCL Processing | FR16-FR27 | zos-jcl | Executor module with job/step/proc handling |
-| File & Dataset Operations | FR28-FR36 | zos-dataset | Sequential, record, catalog modules |
-| Data Conversion | FR37-FR43 | zos-encoding | EBCDIC tables, decimal conversion |
-| Runtime Execution | FR44-FR53 | zos-runtime | Intrinsics, I/O, decimal, memory modules |
-| Developer CLI | FR54-FR62 | zos-clone | Commands module (compile, run, check, convert) |
-| Validation & Diagnostics | FR63-FR70 | zos-cobol, zos-jcl | Error types with miette diagnostics |
-| Configuration Management | FR71-FR76 | zos-clone | Config module with YAML/env support |
+| COBOL Compilation | FR1-FR15 | open-mainframe-cobol | Lexer, parser, AST, codegen modules |
+| JCL Processing | FR16-FR27 | open-mainframe-jcl | Executor module with job/step/proc handling |
+| File & Dataset Operations | FR28-FR36 | open-mainframe-dataset | Sequential, record, catalog modules |
+| Data Conversion | FR37-FR43 | open-mainframe-encoding | EBCDIC tables, decimal conversion |
+| Runtime Execution | FR44-FR53 | open-mainframe-runtime | Intrinsics, I/O, decimal, memory modules |
+| Developer CLI | FR54-FR62 | open-mainframe | Commands module (compile, run, check, convert) |
+| Validation & Diagnostics | FR63-FR70 | open-mainframe-cobol, open-mainframe-jcl | Error types with miette diagnostics |
+| Configuration Management | FR71-FR76 | open-mainframe | Config module with YAML/env support |
 | Distribution & Installation | FR77-FR82 | Build infrastructure | Docker, Cargo, GitHub releases |
-| IDE & Tooling Integration | FR83-FR86 | zos-cobol (post-MVP) | LSP server capability |
+| IDE & Tooling Integration | FR83-FR86 | open-mainframe-cobol (post-MVP) | LSP server capability |
 | Documentation & Help | FR87-FR92 | docs/ directory | User guide, contributing, architecture |
 | Compatibility Validation | FR93-FR96 | tests/nist/ | NIST test harness integration |
 
@@ -241,16 +241,16 @@ This document provides the complete epic and story breakdown for zOS-clone, deco
 | Epic | Title | Stories | Key FRs | Crate(s) | Dependencies |
 |------|-------|---------|---------|----------|--------------|
 | 1 | Project Foundation & Workspace Setup | 5 | FR79-FR80, NFR-M1/M2 | All | None |
-| 2 | Data Encoding Layer | 6 | FR37-FR43, NFR-I4 | zos-encoding | Epic 1 |
-| 3 | COBOL Lexer & Source Handling | 6 | FR3-FR7, FR10 | zos-cobol | Epic 1 |
-| 4 | COBOL Parser & AST | 7 | FR10-FR15 | zos-cobol | Epic 3 |
-| 5 | Semantic Analysis & Validation | 5 | FR5-FR6, FR63, FR65-FR68 | zos-cobol | Epic 4 |
-| 6 | COBOL Runtime Library | 8 | FR44-FR52, NFR-R1 | zos-runtime | Epics 1, 2 |
-| 7 | LLVM Code Generation | 6 | FR1-FR2, FR8-FR9, FR44 | zos-cobol | Epics 4, 5, 6 |
-| 8 | Dataset & File Operations | 7 | FR28-FR36, NFR-R3 | zos-dataset | Epics 1, 2 |
-| 9 | JCL Interpreter | 8 | FR16-FR27, FR64 | zos-jcl | Epic 8 |
-| 10 | CLI & Developer Tools | 7 | FR54-FR62, FR67-FR70, NFR-U1 | zos-clone | Epics 7, 8, 9 |
-| 11 | Configuration System | 4 | FR71-FR76, NFR-PO3 | zos-clone | Epic 10 |
+| 2 | Data Encoding Layer | 6 | FR37-FR43, NFR-I4 | open-mainframe-encoding | Epic 1 |
+| 3 | COBOL Lexer & Source Handling | 6 | FR3-FR7, FR10 | open-mainframe-cobol | Epic 1 |
+| 4 | COBOL Parser & AST | 7 | FR10-FR15 | open-mainframe-cobol | Epic 3 |
+| 5 | Semantic Analysis & Validation | 5 | FR5-FR6, FR63, FR65-FR68 | open-mainframe-cobol | Epic 4 |
+| 6 | COBOL Runtime Library | 8 | FR44-FR52, NFR-R1 | open-mainframe-runtime | Epics 1, 2 |
+| 7 | LLVM Code Generation | 6 | FR1-FR2, FR8-FR9, FR44 | open-mainframe-cobol | Epics 4, 5, 6 |
+| 8 | Dataset & File Operations | 7 | FR28-FR36, NFR-R3 | open-mainframe-dataset | Epics 1, 2 |
+| 9 | JCL Interpreter | 8 | FR16-FR27, FR64 | open-mainframe-jcl | Epic 8 |
+| 10 | CLI & Developer Tools | 7 | FR54-FR62, FR67-FR70, NFR-U1 | open-mainframe | Epics 7, 8, 9 |
+| 11 | Configuration System | 4 | FR71-FR76, NFR-PO3 | open-mainframe | Epic 10 |
 | 12 | Testing & NIST Compliance | 5 | FR93-FR96, NFR-R1 | tests/ | Epics 7, 9 |
 | 13 | Distribution & Packaging | 5 | FR77-FR82, NFR-S1, NFR-I3 | CI/CD | Epic 10 |
 | 14 | Documentation | 5 | FR87-FR92, NFR-U2 | docs/ | Epic 10 |
@@ -284,7 +284,7 @@ So that **I can build and test all components with a single command**.
 **And** resolver = "2" is specified
 
 **Technical Notes:**
-- Create: `Cargo.toml` (workspace root), `crates/{zos-clone,zos-cobol,zos-jcl,zos-runtime,zos-dataset,zos-encoding}/Cargo.toml`
+- Create: `Cargo.toml` (workspace root), `crates/{open-mainframe,open-mainframe-cobol,open-mainframe-jcl,open-mainframe-runtime,open-mainframe-dataset,open-mainframe-encoding}/Cargo.toml`
 - Each crate starts with minimal `lib.rs` or `main.rs`
 
 ---
@@ -345,12 +345,12 @@ So that **the build order reflects the architecture's dependency graph**.
 
 **Given** the crate dependency configuration
 **When** I examine Cargo.toml files
-**Then** `zos-encoding` has no internal dependencies (leaf crate)
-**And** `zos-runtime` depends on `zos-encoding`
-**And** `zos-dataset` depends on `zos-encoding`
-**And** `zos-cobol` depends on `zos-runtime` and `zos-encoding`
-**And** `zos-jcl` depends on `zos-dataset`
-**And** `zos-clone` depends on all other crates
+**Then** `open-mainframe-encoding` has no internal dependencies (leaf crate)
+**And** `open-mainframe-runtime` depends on `open-mainframe-encoding`
+**And** `open-mainframe-dataset` depends on `open-mainframe-encoding`
+**And** `open-mainframe-cobol` depends on `open-mainframe-runtime` and `open-mainframe-encoding`
+**And** `open-mainframe-jcl` depends on `open-mainframe-dataset`
+**And** `open-mainframe` depends on all other crates
 
 ---
 
@@ -382,7 +382,7 @@ So that **errors are consistent and user-friendly**.
 
 **Goal:** Implement EBCDIC/ASCII conversion and decimal data type handling as the foundation for all data processing.
 
-**Crate:** `zos-encoding`
+**Crate:** `open-mainframe-encoding`
 **FRs:** FR37-FR43
 **NFRs:** NFR-I4, NFR-R1
 
@@ -531,7 +531,7 @@ So that **other crates can easily convert data without knowing internal details*
 
 **Goal:** Implement the lexical analysis phase of the COBOL compiler, handling source format, tokenization, and copybook inclusion.
 
-**Crate:** `zos-cobol` (lexer module)
+**Crate:** `open-mainframe-cobol` (lexer module)
 **FRs:** FR3-FR7, FR10
 
 ### Story 3.1: Implement Source File Reader
@@ -696,7 +696,7 @@ So that **I can fix syntax issues quickly**.
 
 **Goal:** Implement the recursive descent parser that builds a complete Abstract Syntax Tree for COBOL programs.
 
-**Crate:** `zos-cobol` (parser, ast modules)
+**Crate:** `open-mainframe-cobol` (parser, ast modules)
 **FRs:** FR10-FR15
 
 ### Story 4.1: Define AST Node Types
@@ -882,7 +882,7 @@ So that **multiple errors can be reported in one compilation**.
 
 **Goal:** Implement symbol resolution, type checking, and diagnostic generation for parsed COBOL programs.
 
-**Crate:** `zos-cobol` (semantic module)
+**Crate:** `open-mainframe-cobol` (semantic module)
 **FRs:** FR5-FR6, FR63, FR65-FR68
 
 ### Story 5.1: Build Symbol Table
@@ -979,7 +979,7 @@ So that **quick feedback is available during editing**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone check --syntax-only source.cbl`
+**Given** `open-mainframe check --syntax-only source.cbl`
 **When** executed
 **Then** only lexer and parser errors are reported (no semantic analysis)
 **And** execution is faster than full compilation
@@ -996,7 +996,7 @@ So that **quick feedback is available during editing**.
 
 **Goal:** Implement the runtime library that compiled COBOL programs link against for intrinsic functions, I/O, and system services.
 
-**Crate:** `zos-runtime`
+**Crate:** `open-mainframe-runtime`
 **FRs:** FR44-FR52
 **NFRs:** NFR-R1, NFR-P2
 
@@ -1190,7 +1190,7 @@ So that **JCL step coordination works properly**.
 
 **Goal:** Implement the code generation phase that transforms the AST into LLVM IR and produces native executables.
 
-**Crate:** `zos-cobol` (codegen module)
+**Crate:** `open-mainframe-cobol` (codegen module)
 **FRs:** FR1-FR2, FR8-FR9, FR44
 
 ### Story 7.1: Setup LLVM Module Infrastructure
@@ -1339,7 +1339,7 @@ So that **I can use standard debuggers on compiled programs**.
 
 **Goal:** Implement the file I/O layer that maps COBOL file operations to Linux filesystem operations.
 
-**Crate:** `zos-dataset`
+**Crate:** `open-mainframe-dataset`
 **FRs:** FR28-FR36
 **NFRs:** NFR-R3
 
@@ -1519,7 +1519,7 @@ So that **programs can handle I/O failures**.
 
 **Goal:** Implement the JCL parser and job executor that orchestrates batch job execution.
 
-**Crate:** `zos-jcl`
+**Crate:** `open-mainframe-jcl`
 **FRs:** FR16-FR27, FR64
 
 ### Story 9.1: Implement JCL Lexer & Parser
@@ -1698,7 +1698,7 @@ So that **I can check for errors before running**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone run --dry-run job.jcl`
+**Given** `open-mainframe run --dry-run job.jcl`
 **When** executed
 **Then** JCL is parsed and validated
 **And** datasets are checked for existence
@@ -1714,9 +1714,9 @@ So that **I can check for errors before running**.
 
 ## Epic 10: CLI & Developer Tools
 
-**Goal:** Implement the command-line interface that provides the primary user interaction with zOS-clone.
+**Goal:** Implement the command-line interface that provides the primary user interaction with OpenMainframe.
 
-**Crate:** `zos-clone`
+**Crate:** `open-mainframe`
 **FRs:** FR54-FR62, FR67-FR70
 **NFRs:** NFR-U1
 
@@ -1728,11 +1728,11 @@ So that **I can easily invoke different functions**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone --help`
+**Given** `open-mainframe --help`
 **When** executed
 **Then** all subcommands are listed with descriptions
 
-**Given** `zos-clone compile --help`
+**Given** `open-mainframe compile --help`
 **When** executed
 **Then** all compile options are listed with descriptions
 
@@ -1750,20 +1750,20 @@ So that **I can easily invoke different functions**.
 ### Story 10.2: Implement Compile Command
 
 As a **developer**,
-I want **`zos-clone compile` to build executables**,
+I want **`open-mainframe compile` to build executables**,
 So that **I can compile COBOL programs**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone compile source.cbl`
+**Given** `open-mainframe compile source.cbl`
 **When** executed
 **Then** native executable is produced (default: `source`)
 
-**Given** `zos-clone compile source.cbl -o output`
+**Given** `open-mainframe compile source.cbl -o output`
 **When** executed
 **Then** executable is named `output`
 
-**Given** `zos-clone compile -c /copybooks source.cbl`
+**Given** `open-mainframe compile -c /copybooks source.cbl`
 **When** executed
 **Then** copybooks are searched in `/copybooks`
 
@@ -1778,20 +1778,20 @@ So that **I can compile COBOL programs**.
 ### Story 10.3: Implement Run Command
 
 As a **developer**,
-I want **`zos-clone run` to execute JCL**,
+I want **`open-mainframe run` to execute JCL**,
 So that **I can run batch jobs**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone run job.jcl`
+**Given** `open-mainframe run job.jcl`
 **When** executed
 **Then** JCL job runs and output is displayed
 
-**Given** `zos-clone run job.jcl -D DATE=20260212`
+**Given** `open-mainframe run job.jcl -D DATE=20260212`
 **When** executed
 **Then** symbolic DATE is set before execution
 
-**Given** `zos-clone run job.jcl --maxcc 4`
+**Given** `open-mainframe run job.jcl --maxcc 4`
 **When** any step exceeds CC 4
 **Then** job terminates and reports failure
 
@@ -1802,20 +1802,20 @@ So that **I can run batch jobs**.
 ### Story 10.4: Implement Check Command
 
 As a **developer**,
-I want **`zos-clone check` to validate source**,
+I want **`open-mainframe check` to validate source**,
 So that **I can find errors without compiling**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone check source.cbl`
+**Given** `open-mainframe check source.cbl`
 **When** executed
 **Then** syntax and semantic errors are reported
 
-**Given** `zos-clone check job.jcl`
+**Given** `open-mainframe check job.jcl`
 **When** executed
 **Then** JCL syntax errors are reported
 
-**Given** `zos-clone check source.cbl --format json`
+**Given** `open-mainframe check source.cbl --format json`
 **When** executed
 **Then** errors are output as JSON array
 
@@ -1826,16 +1826,16 @@ So that **I can find errors without compiling**.
 ### Story 10.5: Implement Convert Command
 
 As a **developer**,
-I want **`zos-clone convert` to transform data files**,
+I want **`open-mainframe convert` to transform data files**,
 So that **I can prepare data for processing**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone convert input.dat output.dat --from ebcdic --to ascii`
+**Given** `open-mainframe convert input.dat output.dat --from ebcdic --to ascii`
 **When** executed
 **Then** file is converted from EBCDIC to ASCII
 
-**Given** `zos-clone convert input.dat output.dat --recfm FB --lrecl 80`
+**Given** `open-mainframe convert input.dat output.dat --recfm FB --lrecl 80`
 **When** executed
 **Then** record structure is preserved during conversion
 
@@ -1897,9 +1897,9 @@ So that **CI/CD pipelines can detect success/failure**.
 
 ## Epic 11: Configuration System
 
-**Goal:** Implement the configuration management system for customizing zOS-clone behavior.
+**Goal:** Implement the configuration management system for customizing OpenMainframe behavior.
 
-**Crate:** `zos-clone` (config module)
+**Crate:** `open-mainframe` (config module)
 **FRs:** FR71-FR76
 **NFRs:** NFR-PO3
 
@@ -1911,11 +1911,11 @@ So that **settings persist across invocations**.
 
 **Acceptance Criteria:**
 
-**Given** `~/.zos-clone/config.yaml` exists
+**Given** `~/.open-mainframe/config.yaml` exists
 **When** any command runs
 **Then** configuration is loaded from that file
 
-**Given** `./zos-clone.yaml` in current directory
+**Given** `./open-mainframe.yaml` in current directory
 **When** any command runs
 **Then** local config overrides global config
 
@@ -1935,11 +1935,11 @@ So that **I can configure in CI/CD environments**.
 
 **Acceptance Criteria:**
 
-**Given** `ZOS_CLONE_COPYBOOK_PATH=/path/to/copybooks`
+**Given** `OPEN_MAINFRAME_COPYBOOK_PATH=/path/to/copybooks`
 **When** compile runs
 **Then** copybook path is used
 
-**Given** `ZOS_CLONE_DIALECT=ibm`
+**Given** `OPEN_MAINFRAME_DIALECT=ibm`
 **When** compile runs
 **Then** IBM dialect is used by default
 
@@ -1983,7 +1983,7 @@ So that **jobs find their data files**.
 **When** job references DSN
 **Then** path resolution uses /data as base
 
-**Given** config with `sysout_path: /var/log/zos-clone`
+**Given** config with `sysout_path: /var/log/open-mainframe`
 **When** job produces SYSOUT
 **Then** output files are written to that directory
 
@@ -2036,7 +2036,7 @@ So that **bit-identical output can be verified**.
 **Acceptance Criteria:**
 
 **Given** reference output from IBM compiler
-**When** zOS-clone produces output
+**When** OpenMainframe produces output
 **Then** byte-by-byte comparison is performed
 
 **Given** known acceptable differences (timestamps, paths)
@@ -2126,15 +2126,15 @@ So that **crashes and security issues are found**.
 
 As a **developer**,
 I want **Docker images available**,
-So that **I can use zOS-clone without installing dependencies**.
+So that **I can use OpenMainframe without installing dependencies**.
 
 **Acceptance Criteria:**
 
-**Given** `docker pull zos-clone/zos-clone:latest`
+**Given** `docker pull toreleon/OpenMainframe:latest`
 **When** image is pulled
-**Then** image contains working zOS-clone binary
+**Then** image contains working OpenMainframe binary
 
-**Given** `docker run -v $(pwd):/workspace zos-clone compile test.cbl`
+**Given** `docker run -v $(pwd):/workspace open-mainframe compile test.cbl`
 **When** executed
 **Then** compilation succeeds with output in current directory
 
@@ -2155,7 +2155,7 @@ So that **I can install without building from source**.
 **Acceptance Criteria:**
 
 **Given** GitHub release
-**When** I download `zos-clone-linux-x64.tar.gz`
+**When** I download `open-mainframe-linux-x64.tar.gz`
 **Then** I get a working static binary
 
 **Given** release artifacts
@@ -2173,12 +2173,12 @@ So that **I can install without building from source**.
 ### Story 13.3: Configure Cargo Publishing
 
 As a **developer**,
-I want **zOS-clone installable via cargo**,
+I want **OpenMainframe installable via cargo**,
 So that **Rust developers can install easily**.
 
 **Acceptance Criteria:**
 
-**Given** `cargo install zos-clone`
+**Given** `cargo install open-mainframe`
 **When** executed
 **Then** latest version is built and installed
 
@@ -2199,7 +2199,7 @@ So that **I can run on ARM-based servers (Graviton, M1)**.
 **Acceptance Criteria:**
 
 **Given** GitHub release
-**When** I download `zos-clone-linux-arm64.tar.gz`
+**When** I download `open-mainframe-linux-arm64.tar.gz`
 **Then** I get a working ARM64 binary
 
 **Given** Docker image
@@ -2252,7 +2252,7 @@ So that **I can compile my first program in under 5 minutes**.
 
 **Given** the quick start guide
 **When** I follow it
-**Then** I can: install zOS-clone, compile hello-world.cbl, run the result
+**Then** I can: install OpenMainframe, compile hello-world.cbl, run the result
 
 **Given** example code in the guide
 **When** copied
@@ -2286,7 +2286,7 @@ So that **I can find any option I need**.
 
 As an **operations engineer**,
 I want **a migration guide**,
-So that **I can move workloads from mainframe to zOS-clone**.
+So that **I can move workloads from mainframe to OpenMainframe**.
 
 **Acceptance Criteria:**
 
@@ -2306,7 +2306,7 @@ So that **I can move workloads from mainframe to zOS-clone**.
 
 As an **evaluator**,
 I want **a compatibility matrix**,
-So that **I can assess zOS-clone against my requirements**.
+So that **I can assess OpenMainframe against my requirements**.
 
 **Acceptance Criteria:**
 

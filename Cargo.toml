@@ -1,19 +1,19 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/zos-clone",
-    "crates/zos-cobol",
-    "crates/zos-jcl",
-    "crates/zos-runtime",
-    "crates/zos-dataset",
-    "crates/zos-encoding",
-    "crates/zos-sort",
-    "crates/zos-db2",
-    "crates/zos-cics",
-    "crates/zos-assess",
-    "crates/zos-ims",
-    "crates/zos-deploy",
-    "crates/zos-tui",
+    "crates/open-mainframe",
+    "crates/open-mainframe-cobol",
+    "crates/open-mainframe-jcl",
+    "crates/open-mainframe-runtime",
+    "crates/open-mainframe-dataset",
+    "crates/open-mainframe-encoding",
+    "crates/open-mainframe-sort",
+    "crates/open-mainframe-db2",
+    "crates/open-mainframe-cics",
+    "crates/open-mainframe-assess",
+    "crates/open-mainframe-ims",
+    "crates/open-mainframe-deploy",
+    "crates/open-mainframe-tui",
 ]
 
 [workspace.package]
@@ -21,7 +21,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 license = "Apache-2.0"
-repository = "https://github.com/zos-clone/zos-clone"
+repository = "https://github.com/toreleon/OpenMainframe"
 
 [workspace.dependencies]
 # CLI
@@ -57,15 +57,15 @@ ratatui = "0.29"
 crossterm = "0.28"
 
 # Internal crates
-zos-encoding = { path = "crates/zos-encoding" }
-zos-runtime = { path = "crates/zos-runtime" }
-zos-dataset = { path = "crates/zos-dataset" }
-zos-cobol = { path = "crates/zos-cobol" }
-zos-jcl = { path = "crates/zos-jcl" }
-zos-sort = { path = "crates/zos-sort" }
-zos-db2 = { path = "crates/zos-db2" }
-zos-cics = { path = "crates/zos-cics" }
-zos-assess = { path = "crates/zos-assess" }
-zos-ims = { path = "crates/zos-ims" }
-zos-deploy = { path = "crates/zos-deploy" }
-zos-tui = { path = "crates/zos-tui" }
+open-mainframe-encoding = { path = "crates/open-mainframe-encoding" }
+open-mainframe-runtime = { path = "crates/open-mainframe-runtime" }
+open-mainframe-dataset = { path = "crates/open-mainframe-dataset" }
+open-mainframe-cobol = { path = "crates/open-mainframe-cobol" }
+open-mainframe-jcl = { path = "crates/open-mainframe-jcl" }
+open-mainframe-sort = { path = "crates/open-mainframe-sort" }
+open-mainframe-db2 = { path = "crates/open-mainframe-db2" }
+open-mainframe-cics = { path = "crates/open-mainframe-cics" }
+open-mainframe-assess = { path = "crates/open-mainframe-assess" }
+open-mainframe-ims = { path = "crates/open-mainframe-ims" }
+open-mainframe-deploy = { path = "crates/open-mainframe-deploy" }
+open-mainframe-tui = { path = "crates/open-mainframe-tui" }

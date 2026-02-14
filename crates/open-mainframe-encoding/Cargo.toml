@@ -1,0 +1,15 @@
+[package]
+name = "open-mainframe-encoding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "EBCDIC encoding and decimal arithmetic for OpenMainframe"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+rust_decimal.workspace = true
+
+[dev-dependencies]

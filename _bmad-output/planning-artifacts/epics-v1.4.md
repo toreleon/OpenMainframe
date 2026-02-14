@@ -5,7 +5,7 @@ date: '2026-02-13'
 status: 'draft'
 ---
 
-# Epics - zOS-clone v1.4: CardDemo Compatibility
+# Epics - OpenMainframe v1.4: CardDemo Compatibility
 
 ## Epic Overview
 
@@ -27,7 +27,7 @@ status: 'draft'
 
 **Goal:** Implement COPY statement for copybook inclusion.
 
-**Crate:** `zos-cobol`
+**Crate:** `open-mainframe-cobol`
 **FRs:** FR-v1.4-009
 
 ### Story 37.1: COPY Statement Parser
@@ -63,7 +63,7 @@ So that **they can be included**.
 **When** resolved
 **Then** file found in search paths
 
-**Given** ZOS_COPYBOOK_PATH environment
+**Given** OPEN_MAINFRAME_COPYBOOK_PATH environment
 **When** set
 **Then** paths searched in order
 
@@ -118,7 +118,7 @@ So that **complex structures work**.
 
 **Goal:** Provide CICS standard data structures.
 
-**Crate:** `zos-cics`
+**Crate:** `open-mainframe-cics`
 **FRs:** FR-v1.4-006, FR-v1.4-007, FR-v1.4-008
 
 ### Story 38.1: Execute Interface Block
@@ -180,7 +180,7 @@ So that **I can use BMS attributes**.
 
 **Goal:** Parse and use BMS map definitions.
 
-**Crate:** `zos-cics`
+**Crate:** `open-mainframe-cics`
 **FRs:** FR-v1.4-001
 
 ### Story 39.1: BMS Source Parser
@@ -313,7 +313,7 @@ So that **user input works**.
 
 **Goal:** Implement SEND MAP and RECEIVE MAP.
 
-**Crate:** `zos-cics`
+**Crate:** `open-mainframe-cics`
 **FRs:** FR-v1.4-002, FR-v1.4-003
 
 ### Story 40.1: SEND MAP Implementation
@@ -425,7 +425,7 @@ So that **I/O is efficient**.
 
 **Goal:** Implement program transfer and system functions.
 
-**Crate:** `zos-cics`
+**Crate:** `open-mainframe-cics`
 **FRs:** FR-v1.4-004, FR-v1.4-005
 
 ### Story 41.1: XCTL Implementation
@@ -516,7 +516,7 @@ So that **conversation continues**.
 
 **Goal:** Implement CICS file READ with keys.
 
-**Crate:** `zos-cics`, `zos-dataset`
+**Crate:** `open-mainframe-cics`, `open-mainframe-dataset`
 **FRs:** FR-v1.4-010
 
 ### Story 42.1: READ with RIDFLD

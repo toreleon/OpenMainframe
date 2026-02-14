@@ -1,8 +1,8 @@
 ---
 stepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
-inputDocuments: [prd.md, product-brief-zOS-clone-2026-02-12.md]
+inputDocuments: [prd.md, product-brief-OpenMainframe-2026-02-12.md]
 workflowType: 'architecture'
-project_name: 'zOS-clone'
+project_name: 'OpenMainframe'
 user_name: 'Tore'
 date: '2026-02-12'
 lastStep: 8
@@ -188,15 +188,15 @@ thiserror = "1"
 
 **Workspace Structure:**
 ```
-zos-clone/
+open-mainframe/
 ├── Cargo.toml              # Workspace root
 ├── crates/
-│   ├── zos-clone/          # Main CLI binary
-│   ├── zos-cobol/          # COBOL compiler (lexer, parser, AST, codegen)
-│   ├── zos-jcl/            # JCL interpreter
-│   ├── zos-runtime/        # COBOL runtime library
-│   ├── zos-dataset/        # File I/O, dataset handling
-│   └── zos-encoding/       # EBCDIC/ASCII, code pages
+│   ├── open-mainframe/          # Main CLI binary
+│   ├── open-mainframe-cobol/          # COBOL compiler (lexer, parser, AST, codegen)
+│   ├── open-mainframe-jcl/            # JCL interpreter
+│   ├── open-mainframe-runtime/        # COBOL runtime library
+│   ├── open-mainframe-dataset/        # File I/O, dataset handling
+│   └── open-mainframe-encoding/       # EBCDIC/ASCII, code pages
 ├── tests/                  # Integration tests
 │   ├── nist/               # NIST COBOL-85 test suite
 │   └── regression/         # Output parity tests
@@ -208,12 +208,12 @@ zos-clone/
 [workspace]
 resolver = "2"
 members = [
-    "crates/zos-clone",
-    "crates/zos-cobol",
-    "crates/zos-jcl",
-    "crates/zos-runtime",
-    "crates/zos-dataset",
-    "crates/zos-encoding",
+    "crates/open-mainframe",
+    "crates/open-mainframe-cobol",
+    "crates/open-mainframe-jcl",
+    "crates/open-mainframe-runtime",
+    "crates/open-mainframe-dataset",
+    "crates/open-mainframe-encoding",
 ]
 
 [workspace.package]
@@ -221,7 +221,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
-repository = "https://github.com/zos-clone/zos-clone"
+repository = "https://github.com/toreleon/OpenMainframe"
 
 [workspace.dependencies]
 # Shared dependencies with pinned versions
@@ -238,12 +238,12 @@ toml = "0.8"
 
 | Crate | Responsibility |
 |-------|----------------|
-| `zos-clone` | CLI binary, orchestration |
-| `zos-cobol` | Lexer, parser, AST, semantic analysis, LLVM codegen |
-| `zos-jcl` | JCL parser, job orchestration, step execution |
-| `zos-runtime` | COBOL runtime library, intrinsic functions |
-| `zos-dataset` | File I/O, dataset abstraction, path mapping |
-| `zos-encoding` | EBCDIC/ASCII conversion, code page tables |
+| `open-mainframe` | CLI binary, orchestration |
+| `open-mainframe-cobol` | Lexer, parser, AST, semantic analysis, LLVM codegen |
+| `open-mainframe-jcl` | JCL parser, job orchestration, step execution |
+| `open-mainframe-runtime` | COBOL runtime library, intrinsic functions |
+| `open-mainframe-dataset` | File I/O, dataset abstraction, path mapping |
+| `open-mainframe-encoding` | EBCDIC/ASCII conversion, code page tables |
 
 ### Development Tooling
 
@@ -370,7 +370,7 @@ rust_decimal = { version = "1", features = ["maths"] }
 
 **Implementation:**
 ```rust
-// zos-encoding crate
+// open-mainframe-encoding crate
 pub struct CodePage {
     ebcdic_to_ascii: [u8; 256],
     ascii_to_ebcdic: [u8; 256],
@@ -387,7 +387,7 @@ impl CodePage {
 - Rust strings are UTF-8; internal ASCII simplifies processing
 - Conversion at boundaries is predictable and testable
 - Code page tables handle all IBM variations
-- Clear separation of concerns in `zos-encoding` crate
+- Clear separation of concerns in `open-mainframe-encoding` crate
 
 ### Runtime Architecture Decisions
 
@@ -397,14 +397,14 @@ impl CodePage {
 
 **Implementation:**
 ```rust
-// In zos-runtime/Cargo.toml
+// In open-mainframe-runtime/Cargo.toml
 [lib]
 crate-type = ["staticlib", "cdylib", "rlib"]
 ```
 
 **CLI Flag:**
 ```
-zos-clone compile --dynamic-runtime  # Use shared library
+open-mainframe compile --dynamic-runtime  # Use shared library
 ```
 
 **Rationale:**
@@ -422,7 +422,7 @@ zos-clone compile --dynamic-runtime  # Use shared library
 - UPPER-CASE / LOWER-CASE
 - Simple arithmetic (ADD, SUBTRACT)
 
-**Runtime Library (zos-runtime):**
+**Runtime Library (open-mainframe-runtime):**
 - Date/time functions (CURRENT-DATE, etc.)
 - Complex string functions (INSPECT, STRING, UNSTRING)
 - Mathematical functions (SIN, COS, SQRT)
@@ -472,7 +472,7 @@ impl JobRunner {
 
 **Configuration Format:**
 ```yaml
-# zos-clone.yaml
+# open-mainframe.yaml
 datasets:
   base_path: /data/datasets
   mappings:
@@ -480,7 +480,7 @@ datasets:
     "TEST.*.FILE": "test/{1}.dat"  # Wildcard support
 
 environment:
-  SYSOUT: /var/log/zos-clone/sysout
+  SYSOUT: /var/log/open-mainframe/sysout
   SYSIN: /dev/stdin
 ```
 
@@ -561,8 +561,8 @@ RUN cargo build --release
 # Runtime stage
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y libllvm17
-COPY --from=builder /app/target/release/zos-clone /usr/local/bin/
-ENTRYPOINT ["zos-clone"]
+COPY --from=builder /app/target/release/open-mainframe /usr/local/bin/
+ENTRYPOINT ["open-mainframe"]
 ```
 
 **Rationale:**
@@ -593,20 +593,20 @@ ENTRYPOINT ["zos-clone"]
 ### Decision Impact Analysis
 
 **Implementation Sequence:**
-1. `zos-encoding` - Foundation for all data handling
-2. `zos-cobol` lexer/parser - Core language processing
-3. `zos-cobol` AST + semantic analysis - Program validation
-4. `zos-runtime` - Runtime library functions
-5. `zos-cobol` codegen - LLVM IR generation
-6. `zos-dataset` - File I/O integration
-7. `zos-jcl` - Job control interpreter
-8. `zos-clone` CLI - User interface
+1. `open-mainframe-encoding` - Foundation for all data handling
+2. `open-mainframe-cobol` lexer/parser - Core language processing
+3. `open-mainframe-cobol` AST + semantic analysis - Program validation
+4. `open-mainframe-runtime` - Runtime library functions
+5. `open-mainframe-cobol` codegen - LLVM IR generation
+6. `open-mainframe-dataset` - File I/O integration
+7. `open-mainframe-jcl` - Job control interpreter
+8. `open-mainframe` CLI - User interface
 
 **Cross-Component Dependencies:**
-- All crates depend on `zos-encoding` for data conversion
-- `zos-cobol` codegen depends on `zos-runtime` for intrinsic signatures
-- `zos-jcl` depends on `zos-dataset` for file operations
-- `zos-clone` CLI orchestrates all other crates
+- All crates depend on `open-mainframe-encoding` for data conversion
+- `open-mainframe-cobol` codegen depends on `open-mainframe-runtime` for intrinsic signatures
+- `open-mainframe-jcl` depends on `open-mainframe-dataset` for file operations
+- `open-mainframe` CLI orchestrates all other crates
 
 ## Implementation Patterns & Consistency Rules
 
@@ -635,7 +635,7 @@ All code follows standard Rust conventions enforced by `rustfmt` and `clippy`:
 | Types/Structs | `PascalCase` | `MoveStatement`, `SourceLocation` |
 | Functions | `snake_case` | `parse_statement`, `emit_llvm_ir` |
 | Constants | `SCREAMING_SNAKE_CASE` | `MAX_IDENTIFIER_LENGTH` |
-| Crate names | `kebab-case` (Cargo.toml) | `zos-cobol`, `zos-runtime` |
+| Crate names | `kebab-case` (Cargo.toml) | `open-mainframe-cobol`, `open-mainframe-runtime` |
 
 #### Project-Specific Naming
 
@@ -663,12 +663,12 @@ pub enum Verb {
 
 **Error Types:** Pattern `{Crate}{Category}Error`:
 ```rust
-// zos-cobol
+// open-mainframe-cobol
 pub enum CobolParseError { ... }
 pub enum CobolSemanticError { ... }
 pub enum CobolCodegenError { ... }
 
-// zos-jcl
+// open-mainframe-jcl
 pub enum JclParseError { ... }
 pub enum JclExecutionError { ... }
 ```
@@ -694,7 +694,7 @@ pub struct DatasetConfigBuilder { ... }
 Each crate defines its own error enum using `thiserror` and `miette`:
 
 ```rust
-// zos-cobol/src/error.rs
+// open-mainframe-cobol/src/error.rs
 use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
@@ -728,7 +728,7 @@ pub enum CobolError {
 | Use `miette` | All user-facing errors implement `miette::Diagnostic` |
 | Wrap with context | Crate errors wrap lower-level errors with `#[from]` |
 | No `.unwrap()` | Never use `.unwrap()` in library code (tests only) |
-| `anyhow` in CLI only | Use `anyhow` only in `zos-clone` binary crate |
+| `anyhow` in CLI only | Use `anyhow` only in `open-mainframe` binary crate |
 | `Result` everywhere | All fallible operations return `Result<T, E>` |
 
 ### AST Node Patterns
@@ -914,7 +914,7 @@ pub fn ParseStatement() { ... }  // Should be parse_statement
 ### Complete Project Directory Structure
 
 ```
-zos-clone/
+open-mainframe/
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci.yml                    # Main CI pipeline
@@ -927,23 +927,23 @@ zos-clone/
 │   └── PULL_REQUEST_TEMPLATE.md
 │
 ├── crates/
-│   ├── zos-clone/                    # CLI binary crate
+│   ├── open-mainframe/                    # CLI binary crate
 │   │   ├── Cargo.toml
 │   │   ├── src/
 │   │   │   ├── main.rs               # Entry point
 │   │   │   ├── cli.rs                # Clap argument definitions
 │   │   │   ├── commands/
 │   │   │   │   ├── mod.rs
-│   │   │   │   ├── compile.rs        # zos-clone compile
-│   │   │   │   ├── run.rs            # zos-clone run
-│   │   │   │   ├── check.rs          # zos-clone check
-│   │   │   │   └── convert.rs        # zos-clone convert
+│   │   │   │   ├── compile.rs        # open-mainframe compile
+│   │   │   │   ├── run.rs            # open-mainframe run
+│   │   │   │   ├── check.rs          # open-mainframe check
+│   │   │   │   └── convert.rs        # open-mainframe convert
 │   │   │   ├── config.rs             # Configuration loading
 │   │   │   └── output.rs             # Output formatting
 │   │   └── tests/
 │   │       └── cli_integration.rs
 │   │
-│   ├── zos-cobol/                    # COBOL compiler crate
+│   ├── open-mainframe-cobol/                    # COBOL compiler crate
 │   │   ├── Cargo.toml
 │   │   ├── src/
 │   │   │   ├── lib.rs                # Public API
@@ -988,7 +988,7 @@ zos-clone/
 │   │       ├── semantic_tests.rs
 │   │       └── codegen_tests.rs
 │   │
-│   ├── zos-jcl/                      # JCL interpreter crate
+│   ├── open-mainframe-jcl/                      # JCL interpreter crate
 │   │   ├── Cargo.toml
 │   │   ├── src/
 │   │   │   ├── lib.rs
@@ -1006,7 +1006,7 @@ zos-clone/
 │   │   └── tests/
 │   │       └── jcl_tests.rs
 │   │
-│   ├── zos-runtime/                  # COBOL runtime library
+│   ├── open-mainframe-runtime/                  # COBOL runtime library
 │   │   ├── Cargo.toml
 │   │   ├── src/
 │   │   │   ├── lib.rs
@@ -1031,7 +1031,7 @@ zos-clone/
 │   │   └── tests/
 │   │       └── runtime_tests.rs
 │   │
-│   ├── zos-dataset/                  # Dataset/file handling crate
+│   ├── open-mainframe-dataset/                  # Dataset/file handling crate
 │   │   ├── Cargo.toml
 │   │   ├── src/
 │   │   │   ├── lib.rs
@@ -1047,7 +1047,7 @@ zos-clone/
 │   │   └── tests/
 │   │       └── dataset_tests.rs
 │   │
-│   └── zos-encoding/                 # Encoding/conversion crate
+│   └── open-mainframe-encoding/                 # Encoding/conversion crate
 │       ├── Cargo.toml
 │       ├── src/
 │       │   ├── lib.rs
@@ -1126,7 +1126,7 @@ zos-clone/
 
 ```
                     ┌─────────────┐
-                    │  zos-clone  │  (binary)
+                    │  open-mainframe  │  (binary)
                     │    (CLI)    │
                     └──────┬──────┘
                            │
@@ -1134,7 +1134,7 @@ zos-clone/
          │                 │                 │
          ▼                 ▼                 ▼
    ┌───────────┐    ┌───────────┐    ┌───────────┐
-   │ zos-cobol │    │  zos-jcl  │    │zos-dataset│
+   │ open-mainframe-cobol │    │  open-mainframe-jcl  │    │open-mainframe-dataset│
    │(compiler) │    │(interpret)│    │  (files)  │
    └─────┬─────┘    └─────┬─────┘    └─────┬─────┘
          │                │                 │
@@ -1142,7 +1142,7 @@ zos-clone/
          │                         │
          ▼                         ▼
    ┌───────────┐            ┌───────────┐
-   │zos-runtime│            │zos-encoding│
+   │open-mainframe-runtime│            │open-mainframe-encoding│
    │ (library) │            │  (codec)  │
    └─────┬─────┘            └───────────┘
          │                         ▲
@@ -1153,12 +1153,12 @@ zos-clone/
 
 | Crate | Responsibility | Public API | Dependencies |
 |-------|----------------|------------|--------------|
-| `zos-clone` | CLI binary, orchestration | `main()` only | All crates |
-| `zos-cobol` | COBOL compilation | `Compiler`, `CompileOptions`, `CobolError` | `zos-runtime`, `zos-encoding` |
-| `zos-jcl` | JCL interpretation | `Job`, `JobRunner`, `JclError` | `zos-dataset` |
-| `zos-runtime` | COBOL runtime | Intrinsic functions, I/O ops | `zos-encoding` |
-| `zos-dataset` | File operations | `Dataset`, `RecordFile` | `zos-encoding` |
-| `zos-encoding` | Data conversion | `CodePage`, `PackedDecimal` | None (leaf crate) |
+| `open-mainframe` | CLI binary, orchestration | `main()` only | All crates |
+| `open-mainframe-cobol` | COBOL compilation | `Compiler`, `CompileOptions`, `CobolError` | `open-mainframe-runtime`, `open-mainframe-encoding` |
+| `open-mainframe-jcl` | JCL interpretation | `Job`, `JobRunner`, `JclError` | `open-mainframe-dataset` |
+| `open-mainframe-runtime` | COBOL runtime | Intrinsic functions, I/O ops | `open-mainframe-encoding` |
+| `open-mainframe-dataset` | File operations | `Dataset`, `RecordFile` | `open-mainframe-encoding` |
+| `open-mainframe-encoding` | Data conversion | `CodePage`, `PackedDecimal` | None (leaf crate) |
 
 #### Communication Patterns
 
@@ -1174,14 +1174,14 @@ zos-clone/
 User Input (COBOL, JCL, data files)
          │
          ▼
-    zos-clone CLI
+    open-mainframe CLI
          │
     ┌────┼────┐
     ▼    ▼    ▼
 compile  run  check
     │    │    │
     ▼    ▼    ▼
-zos-cobol → zos-jcl → zos-cobol
+open-mainframe-cobol → open-mainframe-jcl → open-mainframe-cobol
     │         │         │
     ▼         ▼         ▼
 Executable  Jobs    Diagnostics
@@ -1251,16 +1251,16 @@ All 96 functional requirements have architectural support:
 
 | Category | FRs | Primary Crate |
 |----------|-----|---------------|
-| COBOL Compilation | FR1-15 | zos-cobol |
-| JCL Processing | FR16-27 | zos-jcl |
-| File Operations | FR28-36 | zos-dataset |
-| Data Conversion | FR37-43 | zos-encoding |
-| Runtime | FR44-53 | zos-runtime |
-| CLI | FR54-62 | zos-clone |
-| Validation | FR63-70 | zos-cobol, zos-jcl |
-| Configuration | FR71-76 | zos-clone |
+| COBOL Compilation | FR1-15 | open-mainframe-cobol |
+| JCL Processing | FR16-27 | open-mainframe-jcl |
+| File Operations | FR28-36 | open-mainframe-dataset |
+| Data Conversion | FR37-43 | open-mainframe-encoding |
+| Runtime | FR44-53 | open-mainframe-runtime |
+| CLI | FR54-62 | open-mainframe |
+| Validation | FR63-70 | open-mainframe-cobol, open-mainframe-jcl |
+| Configuration | FR71-76 | open-mainframe |
 | Distribution | FR77-82 | Docker, Cargo |
-| IDE Integration | FR83-86 | zos-cobol (post-MVP) |
+| IDE Integration | FR83-86 | open-mainframe-cobol (post-MVP) |
 | Documentation | FR87-92 | docs/ |
 | Compatibility | FR93-96 | tests/nist/ |
 
@@ -1357,15 +1357,15 @@ All 27 NFRs have architectural support through technology choices, patterns, and
 **First Implementation Priority:**
 ```bash
 # 1. Initialize workspace
-cargo new zos-clone --name workspace-root
-cd zos-clone
+cargo new open-mainframe --name workspace-root
+cd open-mainframe
 
 # 2. Create crate structure
-mkdir -p crates/{zos-clone,zos-cobol,zos-jcl,zos-runtime,zos-dataset,zos-encoding}/src
+mkdir -p crates/{open-mainframe,open-mainframe-cobol,open-mainframe-jcl,open-mainframe-runtime,open-mainframe-dataset,open-mainframe-encoding}/src
 
 # 3. Set up workspace Cargo.toml
-# 4. Implement zos-encoding first (leaf crate, no dependencies)
-# 5. Then zos-runtime, zos-dataset, zos-cobol, zos-jcl
-# 6. Finally zos-clone CLI
+# 4. Implement open-mainframe-encoding first (leaf crate, no dependencies)
+# 5. Then open-mainframe-runtime, open-mainframe-dataset, open-mainframe-cobol, open-mainframe-jcl
+# 6. Finally open-mainframe CLI
 ```
 

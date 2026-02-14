@@ -1,6 +1,6 @@
 ---
 stepsCompleted: [step-01-init, step-02-discovery, step-03-success, step-04-journeys, step-05-domain, step-06-innovation, step-07-project-type, step-08-scoping, step-09-functional, step-10-nonfunctional, step-11-polish]
-inputDocuments: [product-brief-zOS-clone-2026-02-12.md]
+inputDocuments: [product-brief-OpenMainframe-2026-02-12.md]
 workflowType: 'prd'
 documentCounts:
   briefs: 1
@@ -15,7 +15,7 @@ classification:
 date: 2026-02-12
 ---
 
-# Product Requirements Document - zOS-clone
+# Product Requirements Document - OpenMainframe
 
 **Author:** Tore
 **Date:** 2026-02-12
@@ -26,11 +26,11 @@ date: 2026-02-12
 
 ### Vision
 
-zOS-clone is an open-source mainframe compiler built in Rust that enables enterprises to execute existing mainframe source code on commodity Linux hardware. By compiling COBOL directly to native Linux executables (rather than emulating or interpreting), zOS-clone provides a faster, cheaper alternative to IBM mainframe licensing.
+OpenMainframe is an open-source mainframe compiler built in Rust that enables enterprises to execute existing mainframe source code on commodity Linux hardware. By compiling COBOL directly to native Linux executables (rather than emulating or interpreting), OpenMainframe provides a faster, cheaper alternative to IBM mainframe licensing.
 
 ### Product Differentiator
 
-| Aspect | Traditional Solutions | zOS-clone |
+| Aspect | Traditional Solutions | OpenMainframe |
 |--------|----------------------|-----------|
 | Approach | Emulation/Interpretation | Native compilation |
 | Licensing | Expensive proprietary | Open source (free) |
@@ -63,7 +63,7 @@ Developer-first batch processing: COBOL-85 compilation, JCL interpretation, sequ
 | Onboarding time | New developer productive in <1 week | Time to first successful compile |
 
 **Key Behavior Indicators:**
-- Developers choose zOS-clone for daily development over mainframe access
+- Developers choose OpenMainframe for daily development over mainframe access
 - Test suites running in CI pipelines instead of batch submission
 - Community contributions (bug reports, PRs, documentation)
 
@@ -76,7 +76,7 @@ Developer-first batch processing: COBOL-85 compilation, JCL interpretation, sequ
 | Uptime | 99.9% availability | Standard monitoring/alerting |
 
 **Key Behavior Indicators:**
-- Ops teams recommend zOS-clone for new workload deployments
+- Ops teams recommend OpenMainframe for new workload deployments
 - Production workloads running without rollback to mainframe
 - Integration with existing observability stack (Prometheus, Grafana)
 
@@ -113,7 +113,7 @@ Developer-first batch processing: COBOL-85 compilation, JCL interpretation, sequ
 ### Measurable Outcomes
 
 **North Star Metric:**
-> **Mainframe MIPS displaced** - Total estimated MIPS of workloads running on zOS-clone instead of IBM hardware. This single metric captures user adoption, technical success, and business value creation.
+> **Mainframe MIPS displaced** - Total estimated MIPS of workloads running on OpenMainframe instead of IBM hardware. This single metric captures user adoption, technical success, and business value creation.
 
 **Leading Indicators:**
 - GitHub engagement (stars, issues, discussions)
@@ -166,9 +166,9 @@ Developer-first batch processing: COBOL-85 compilation, JCL interpretation, sequ
    - ABEND handling with dump generation
 
 5. **Developer Tooling**
-   - CLI: `zos-clone compile <source>`
-   - CLI: `zos-clone run <jcl>`
-   - CLI: `zos-clone check <source>`
+   - CLI: `open-mainframe compile <source>`
+   - CLI: `open-mainframe run <jcl>`
+   - CLI: `open-mainframe check <source>`
    - Docker image for consistent environment
 
 **MVP Exit Criteria:**
@@ -224,7 +224,7 @@ Developer-first batch processing: COBOL-85 compilation, JCL interpretation, sequ
 
 ## User Journeys
 
-*These narrative journeys illustrate how target users will experience zOS-clone, revealing specific capabilities required for success.*
+*These narrative journeys illustrate how target users will experience OpenMainframe, revealing specific capabilities required for success.*
 
 ### Journey 1: Marcus Chen - First Local Compile (Primary User - Success Path)
 
@@ -232,17 +232,17 @@ Developer-first batch processing: COBOL-85 compilation, JCL interpretation, sequ
 Marcus has been a COBOL developer for 15 years at Regional Insurance Co. It's 2:47 PM on a Tuesday, and he's staring at his terminal, waiting. Again. He submitted a compile job 45 minutes ago for a 3-line bug fix, and it's still queued behind month-end batch processing. His team lead is asking for status. The mainframe LPAR is overloaded, and he won't see results until after his 4 PM meeting.
 
 **Rising Action:**
-Marcus hears about zOS-clone from a colleague at SHARE conference. Skeptical but desperate, he downloads it that evening. He clones his team's policy calculation module - 50,000 lines of COBOL-85 - to his MacBook. He runs `zos-clone compile POLCALC.cbl`.
+Marcus hears about OpenMainframe from a colleague at SHARE conference. Skeptical but desperate, he downloads it that evening. He clones his team's policy calculation module - 50,000 lines of COBOL-85 - to his MacBook. He runs `open-mainframe compile POLCALC.cbl`.
 
 His finger hovers over Enter. Fifteen years of mainframe muscle memory says this can't possibly work.
 
 **Climax:**
-23 seconds. The compile completes in 23 seconds. No errors. He runs the unit test JCL: `zos-clone run POLCALC-TEST.jcl`. The output matches the mainframe exactly - same condition codes, same report format, same penny-level calculations.
+23 seconds. The compile completes in 23 seconds. No errors. He runs the unit test JCL: `open-mainframe run POLCALC-TEST.jcl`. The output matches the mainframe exactly - same condition codes, same report format, same penny-level calculations.
 
 Marcus compiles again just to make sure. 24 seconds. He makes a change. Compiles. 22 seconds. He starts laughing.
 
 **Resolution:**
-Three months later, Marcus's team has zOS-clone integrated into their CI/CD pipeline. New developers onboard in days instead of weeks. The team ships twice as many fixes per sprint. Marcus presents at the company's tech all-hands about "modernizing mainframe development." For the first time in years, a junior developer asks to join the mainframe team.
+Three months later, Marcus's team has OpenMainframe integrated into their CI/CD pipeline. New developers onboard in days instead of weeks. The team ships twice as many fixes per sprint. Marcus presents at the company's tech all-hands about "modernizing mainframe development." For the first time in years, a junior developer asks to join the mainframe team.
 
 ---
 
@@ -252,7 +252,7 @@ Three months later, Marcus's team has zOS-clone integrated into their CI/CD pipe
 It's 11 PM. Marcus gets paged - the nightly batch run failed with an S0C7 (data exception) in the claims processing module. On-call protocol says: identify the issue, estimate fix time, escalate if needed. The mainframe team's test LPAR is down for maintenance until 6 AM.
 
 **Rising Action:**
-Marcus pulls the failing copybook and program to his laptop. He recreates the input file that caused the ABEND using `zos-clone`'s dataset utilities. He adds diagnostic DISPLAY statements, compiles locally in seconds, and runs the job.
+Marcus pulls the failing copybook and program to his laptop. He recreates the input file that caused the ABEND using `open-mainframe`'s dataset utilities. He adds diagnostic DISPLAY statements, compiles locally in seconds, and runs the job.
 
 The error reproduces. He traces it to an uninitialized WORKING-STORAGE field that contains garbage when a specific input condition occurs - a path that was never tested.
 
@@ -267,10 +267,10 @@ Marcus submits the fix for emergency deployment. The on-call manager is stunned 
 ### Journey 3: Diana Okonkwo - Production Migration Pilot (Primary User - Operations)
 
 **Opening Scene:**
-Diana's CIO has mandated 20% mainframe cost reduction this fiscal year. She's evaluated three options: Micro Focus (expensive licensing), AWS Mainframe Modernization (vendor lock-in concerns), and zOS-clone (unproven but promising). Her team needs to prove one can work before the budget review in 90 days.
+Diana's CIO has mandated 20% mainframe cost reduction this fiscal year. She's evaluated three options: Micro Focus (expensive licensing), AWS Mainframe Modernization (vendor lock-in concerns), and OpenMainframe (unproven but promising). Her team needs to prove one can work before the budget review in 90 days.
 
 **Rising Action:**
-Diana selects the nightly inventory reconciliation job as the pilot - it's important enough to matter, but not critical enough to cause disaster if it fails. She provisions a Linux VM, installs zOS-clone, and works with Marcus's team to migrate the COBOL programs and JCL.
+Diana selects the nightly inventory reconciliation job as the pilot - it's important enough to matter, but not critical enough to cause disaster if it fails. She provisions a Linux VM, installs OpenMainframe, and works with Marcus's team to migrate the COBOL programs and JCL.
 
 The first parallel run produces different output. Diana's heart sinks. But the difference is just timestamp formatting in the report header. She adjusts the JCL parameters. The second run matches byte-for-byte.
 
@@ -285,7 +285,7 @@ Diana presents to the CIO: "We ran our first production mainframe workload on co
 ### Journey 4: Alex Rivera - Open Source Contributor (Community User)
 
 **Opening Scene:**
-Alex is a systems programmer at a Brazilian bank, frustrated that zOS-clone doesn't yet support GDG (Generation Data Group) datasets that their batch jobs rely on. They've been watching the GitHub repo for months, hoping someone else would add it.
+Alex is a systems programmer at a Brazilian bank, frustrated that OpenMainframe doesn't yet support GDG (Generation Data Group) datasets that their batch jobs rely on. They've been watching the GitHub repo for months, hoping someone else would add it.
 
 **Rising Action:**
 Alex decides to contribute it themselves. They fork the repo, study the existing VSAM implementation for patterns, and start coding. The contribution guidelines are clear. They open a draft PR early to get feedback.
@@ -303,15 +303,15 @@ Alex's bank becomes an early adopter, confident they have a direct line to influ
 ### Journey 5: Jennifer Park - Enterprise Evaluator (Decision Maker)
 
 **Opening Scene:**
-Jennifer is a Principal Architect at a Fortune 500 retailer. The CFO wants to reduce the $8M annual mainframe bill. Jennifer has been burned before by migration tools that promised compatibility but delivered headaches. She needs to evaluate zOS-clone with extreme skepticism.
+Jennifer is a Principal Architect at a Fortune 500 retailer. The CFO wants to reduce the $8M annual mainframe bill. Jennifer has been burned before by migration tools that promised compatibility but delivered headaches. She needs to evaluate OpenMainframe with extreme skepticism.
 
 **Rising Action:**
 Jennifer assembles a tiger team: one mainframe developer, one Linux ops engineer, one security analyst. She defines success criteria: compile their 200 most critical COBOL programs, run their standard regression suite, achieve bit-identical output on 99%+ of test cases.
 
-The team sets up an isolated evaluation environment. Week one: 180 of 200 programs compile cleanly. Week two: the remaining 20 require minor JCL adjustments for zOS-clone's dataset naming conventions. Week three: regression testing begins.
+The team sets up an isolated evaluation environment. Week one: 180 of 200 programs compile cleanly. Week two: the remaining 20 require minor JCL adjustments for OpenMainframe's dataset naming conventions. Week three: regression testing begins.
 
 **Climax:**
-Final results: 99.7% of test cases pass with identical output. The three failures are edge cases involving obscure COBOL-85 features - and the zOS-clone team provides patches within 48 hours of the bug reports. Jennifer's security analyst confirms no concerning vulnerabilities in the codebase.
+Final results: 99.7% of test cases pass with identical output. The three failures are edge cases involving obscure COBOL-85 features - and the OpenMainframe team provides patches within 48 hours of the bug reports. Jennifer's security analyst confirms no concerning vulnerabilities in the codebase.
 
 **Resolution:**
 Jennifer presents her findings: "Low risk, high reward. Recommend phased adoption starting with development environments, expanding to non-critical batch, with production migration contingent on 6-month stability." The CTO approves. Jennifer's evaluation becomes the template other enterprises use.
@@ -321,15 +321,15 @@ Jennifer presents her findings: "Low risk, high reward. Recommend phased adoptio
 ### Journey 6: Sam Thompson - Support Troubleshooting (Operations - Error Recovery)
 
 **Opening Scene:**
-Sam is a Level 2 support engineer. A ticket comes in: "Job ACCTPAY01 failed on zOS-clone with condition code 3000 but runs fine on mainframe." The user is frustrated - they migrated this job last month and it's been working until today.
+Sam is a Level 2 support engineer. A ticket comes in: "Job ACCTPAY01 failed on OpenMainframe with condition code 3000 but runs fine on mainframe." The user is frustrated - they migrated this job last month and it's been working until today.
 
 **Rising Action:**
-Sam pulls up the job logs. Condition code 3000 isn't a standard z/OS code - it's a zOS-clone-specific error indicating the runtime couldn't locate a copybook. Sam checks the job's configuration: someone moved the copybook library to a new path yesterday without updating the JCL.
+Sam pulls up the job logs. Condition code 3000 isn't a standard z/OS code - it's a OpenMainframe-specific error indicating the runtime couldn't locate a copybook. Sam checks the job's configuration: someone moved the copybook library to a new path yesterday without updating the JCL.
 
 Sam could just fix the JCL, but that doesn't prevent recurrence. They check the documentation for best practices on copybook management.
 
 **Climax:**
-Sam realizes the team isn't using zOS-clone's copybook path configuration file - they've been hardcoding paths in JCL. Sam fixes the immediate issue, then creates a central `COPYLIB.conf` and updates the runbook. Error messages now include the searched paths, making future troubleshooting faster.
+Sam realizes the team isn't using OpenMainframe's copybook path configuration file - they've been hardcoding paths in JCL. Sam fixes the immediate issue, then creates a central `COPYLIB.conf` and updates the runbook. Error messages now include the searched paths, making future troubleshooting faster.
 
 **Resolution:**
 Sam closes the ticket with a root cause analysis and prevention steps. They submit a documentation improvement PR suggesting the copybook configuration be highlighted in the migration guide. The PR is merged. Three other users thank Sam in the GitHub discussion for saving them from the same issue.
@@ -436,7 +436,7 @@ Sam closes the ticket with a root cause analysis and prevention steps. They subm
 
 **Trademark Considerations:**
 - "z/OS" is IBM trademark; cannot use in product name
-- "zOS-clone" acceptable as descriptive term
+- "OpenMainframe" acceptable as descriptive term
 - Marketing materials must disclaim IBM affiliation
 - Documentation should reference compatibility, not equivalence
 
@@ -492,7 +492,7 @@ Sam closes the ticket with a root cause analysis and prevention steps. They subm
 
 **1. Compilation vs Emulation Paradigm Shift**
 
-Most mainframe migration solutions (Micro Focus, LzLabs, AWS Mainframe Modernization) rely on interpretation or emulation - running a compatibility layer that translates mainframe instructions at runtime. zOS-clone takes a fundamentally different approach: compiling COBOL source code directly to native Linux executables via a Rust backend.
+Most mainframe migration solutions (Micro Focus, LzLabs, AWS Mainframe Modernization) rely on interpretation or emulation - running a compatibility layer that translates mainframe instructions at runtime. OpenMainframe takes a fundamentally different approach: compiling COBOL source code directly to native Linux executables via a Rust backend.
 
 This paradigm shift enables:
 - Native execution speed (no interpretation overhead)
@@ -510,7 +510,7 @@ Applying Rust - a modern systems programming language - to the problem of legacy
 
 **3. Open Source Mainframe Ecosystem**
 
-zOS-clone represents the first serious open-source attempt at comprehensive mainframe compatibility:
+OpenMainframe represents the first serious open-source attempt at comprehensive mainframe compatibility:
 - Community-driven development in a traditionally closed, proprietary market
 - Transparent compatibility testing and bug tracking
 - No vendor lock-in; enterprises control their own destiny
@@ -534,7 +534,7 @@ The compiler architecture is purpose-built for mainframe semantics:
 | AWS Mainframe Mod | Replatforming service | Cloud lock-in, ongoing costs |
 | Manual Rewrite | Convert to Java/.NET | Expensive, risky, time-consuming |
 
-**zOS-clone Differentiation:**
+**OpenMainframe Differentiation:**
 - Only open-source option with serious compatibility goals
 - Only native compilation approach (vs interpretation/emulation)
 - Only solution built on modern, memory-safe foundation (Rust)
@@ -589,7 +589,7 @@ The compiler architecture is purpose-built for mainframe semantics:
 
 ### Project-Type Overview
 
-zOS-clone is a developer tool in the compiler/runtime category, targeting mainframe developers and operations teams who need to compile and execute COBOL programs on Linux. Unlike typical developer tools (SDKs, libraries), zOS-clone is a complete toolchain replacing IBM's mainframe compilation and execution environment.
+OpenMainframe is a developer tool in the compiler/runtime category, targeting mainframe developers and operations teams who need to compile and execute COBOL programs on Linux. Unlike typical developer tools (SDKs, libraries), OpenMainframe is a complete toolchain replacing IBM's mainframe compilation and execution environment.
 
 **Tool Category:** Compiler + Runtime + CLI
 **Primary Interface:** Command-line interface
@@ -646,19 +646,19 @@ zOS-clone is a developer tool in the compiler/runtime category, targeting mainfr
 
 ```bash
 # Docker (recommended for evaluation)
-docker pull zos-clone/zos-clone:latest
-docker run -v $(pwd):/workspace zos-clone compile program.cbl
+docker pull toreleon/OpenMainframe:latest
+docker run -v $(pwd):/workspace open-mainframe compile program.cbl
 
 # Cargo (for Rust developers)
-cargo install zos-clone
+cargo install open-mainframe
 
 # Binary release (Linux x86_64)
-curl -L https://github.com/zos-clone/zos-clone/releases/latest/download/zos-clone-linux-x64.tar.gz | tar xz
-sudo mv zos-clone /usr/local/bin/
+curl -L https://github.com/toreleon/OpenMainframe/releases/latest/download/open-mainframe-linux-x64.tar.gz | tar xz
+sudo mv open-mainframe /usr/local/bin/
 
 # From source
-git clone https://github.com/zos-clone/zos-clone.git
-cd zos-clone && cargo build --release
+git clone https://github.com/toreleon/OpenMainframe.git
+cd open-mainframe && cargo build --release
 ```
 
 **System Requirements:**
@@ -676,7 +676,7 @@ cd zos-clone && cargo build --release
 **Command Structure:**
 
 ```
-zos-clone <command> [options] [arguments]
+open-mainframe <command> [options] [arguments]
 
 Commands:
   compile     Compile COBOL source to executable
@@ -691,7 +691,7 @@ Commands:
 
 ```bash
 # Compile COBOL source
-zos-clone compile <source.cbl> [options]
+open-mainframe compile <source.cbl> [options]
   -o, --output <file>       Output executable name
   -c, --copybook <path>     Add copybook search path (repeatable)
   -I, --include <path>      Alias for --copybook
@@ -701,7 +701,7 @@ zos-clone compile <source.cbl> [options]
   --optimize <level>        Optimization level (0, 1, 2, 3)
 
 # Run JCL job
-zos-clone run <job.jcl> [options]
+open-mainframe run <job.jcl> [options]
   -D, --define <sym=val>    Define symbolic parameter
   --dataset-path <path>     Base path for dataset resolution
   --sysout <path>           Directory for SYSOUT files
@@ -709,12 +709,12 @@ zos-clone run <job.jcl> [options]
   --dry-run                 Parse and validate without execution
 
 # Validate source
-zos-clone check <source.cbl|job.jcl> [options]
+open-mainframe check <source.cbl|job.jcl> [options]
   --format <format>         Output format (text, json, sarif)
   --strict                  Treat warnings as errors
 
 # Convert datasets
-zos-clone convert <input> <output> [options]
+open-mainframe convert <input> <output> [options]
   --from <format>           Input format (ebcdic, ascii, vsam)
   --to <format>             Output format (ebcdic, ascii, vsam)
   --recfm <format>          Record format (F, FB, V, VB)
@@ -747,7 +747,7 @@ zos-clone convert <input> <output> [options]
 **Language Server Protocol (LSP):**
 
 ```
-zos-clone lsp [options]
+open-mainframe lsp [options]
   --stdio                   Use stdio for communication
   --tcp <port>              Use TCP socket
   --log <file>              Log file for debugging
@@ -769,7 +769,7 @@ zos-clone lsp [options]
 
 ```rust
 // Core compilation API
-use zos_clone::{Compiler, CompileOptions, CompileResult};
+use open_mainframe::{Compiler, CompileOptions, CompileResult};
 
 let compiler = Compiler::new();
 let options = CompileOptions::default()
@@ -784,12 +784,12 @@ let result: CompileResult = compiler.compile("program.cbl", &options)?;
 
 | Module | Purpose | Stability |
 |--------|---------|-----------|
-| `zos_clone::compiler` | COBOL compilation | Stable (MVP) |
-| `zos_clone::jcl` | JCL parsing and execution | Stable (MVP) |
-| `zos_clone::runtime` | COBOL runtime library | Stable (MVP) |
-| `zos_clone::dataset` | Dataset I/O operations | Stable (MVP) |
-| `zos_clone::lsp` | Language server | Experimental |
-| `zos_clone::vsam` | VSAM file support | Experimental (v1.1) |
+| `open_mainframe::compiler` | COBOL compilation | Stable (MVP) |
+| `open_mainframe::jcl` | JCL parsing and execution | Stable (MVP) |
+| `open_mainframe::runtime` | COBOL runtime library | Stable (MVP) |
+| `open_mainframe::dataset` | Dataset I/O operations | Stable (MVP) |
+| `open_mainframe::lsp` | Language server | Experimental |
+| `open_mainframe::vsam` | VSAM file support | Experimental (v1.1) |
 
 ### Documentation Requirements
 
@@ -809,7 +809,7 @@ let result: CompileResult = compiler.compile("program.cbl", &options)?;
 
 **Migration Guide Sections:**
 1. Assessment checklist (what to check before migration)
-2. Environment setup (Linux prerequisites, zOS-clone installation)
+2. Environment setup (Linux prerequisites, OpenMainframe installation)
 3. Code migration (copying source, copybooks, JCL)
 4. Dataset migration (converting files, setting up paths)
 5. Parallel run validation (comparing output)
@@ -1147,12 +1147,12 @@ examples/
 
 ### Developer CLI
 
-- FR54: Developer can invoke compilation via `zos-clone compile` command
-- FR55: Developer can invoke JCL execution via `zos-clone run` command
-- FR56: Developer can validate source without compilation via `zos-clone check` command
-- FR57: Developer can convert datasets via `zos-clone convert` command
-- FR58: Developer can view version information via `zos-clone version` command
-- FR59: Developer can access help for any command via `zos-clone help` command
+- FR54: Developer can invoke compilation via `open-mainframe compile` command
+- FR55: Developer can invoke JCL execution via `open-mainframe run` command
+- FR56: Developer can validate source without compilation via `open-mainframe check` command
+- FR57: Developer can convert datasets via `open-mainframe convert` command
+- FR58: Developer can view version information via `open-mainframe version` command
+- FR59: Developer can access help for any command via `open-mainframe help` command
 - FR60: Developer can specify output file name for compiled executables
 - FR61: Developer can receive exit codes indicating success, warning, error, or fatal conditions
 - FR62: Developer can receive output in multiple formats (text, JSON, SARIF) for tooling integration
@@ -1179,12 +1179,12 @@ examples/
 
 ### Distribution & Installation
 
-- FR77: Developer can install zOS-clone via Docker container
-- FR78: Developer can install zOS-clone via pre-built binary releases
-- FR79: Developer can install zOS-clone via Cargo (Rust package manager)
-- FR80: Developer can build zOS-clone from source
-- FR81: Developer can run zOS-clone on Linux x86_64 systems
-- FR82: Developer can run zOS-clone on Linux ARM64 systems
+- FR77: Developer can install OpenMainframe via Docker container
+- FR78: Developer can install OpenMainframe via pre-built binary releases
+- FR79: Developer can install OpenMainframe via Cargo (Rust package manager)
+- FR80: Developer can build OpenMainframe from source
+- FR81: Developer can run OpenMainframe on Linux x86_64 systems
+- FR82: Developer can run OpenMainframe on Linux ARM64 systems
 
 ### IDE & Tooling Integration
 
@@ -1197,16 +1197,16 @@ examples/
 
 - FR87: Developer can access quick start guide for initial setup
 - FR88: Developer can access CLI reference documentation
-- FR89: Developer can access migration guide for mainframe-to-zOS-clone transition
+- FR89: Developer can access migration guide for mainframe-to-OpenMainframe transition
 - FR90: Developer can access compatibility matrix showing supported features
 - FR91: Contributor can access contributing guide for open source participation
 - FR92: Developer can access API reference for programmatic usage
 
 ### Compatibility Validation
 
-- FR93: Developer can run NIST COBOL-85 test suite against zOS-clone
+- FR93: Developer can run NIST COBOL-85 test suite against OpenMainframe
 - FR94: Developer can compare output against IBM compiler for parity validation
-- FR95: Operations engineer can run parallel workloads on z/OS and zOS-clone for comparison
+- FR95: Operations engineer can run parallel workloads on z/OS and OpenMainframe for comparison
 - FR96: Developer can report compatibility issues via GitHub issues
 
 ---

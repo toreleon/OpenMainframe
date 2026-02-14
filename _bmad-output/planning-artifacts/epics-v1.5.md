@@ -5,7 +5,7 @@ date: '2026-02-13'
 status: 'draft'
 ---
 
-# Epics - zOS-clone v1.5: Interactive CICS Terminal
+# Epics - OpenMainframe v1.5: Interactive CICS Terminal
 
 ## Epic Overview
 
@@ -51,18 +51,18 @@ status: 'draft'
 
 **Goal:** Render the 3270 ScreenBuffer to a real terminal using ratatui/crossterm.
 
-**Crate:** `zos-tui` (new)
+**Crate:** `open-mainframe-tui` (new)
 **FRs:** FR-v1.5-001, FR-v1.5-008, FR-v1.5-009, FR-v1.5-011
 
 ### Story 44.1: ratatui/crossterm Integration Scaffold
 
 As a **developer**,
-I want **the zos-tui crate initialized with ratatui and crossterm**,
+I want **the open-mainframe-tui crate initialized with ratatui and crossterm**,
 So that **I have a foundation for terminal rendering**.
 
 **Acceptance Criteria:**
 
-**Given** the zos-tui crate is created
+**Given** the open-mainframe-tui crate is created
 **When** built
 **Then** ratatui and crossterm compile and link correctly
 
@@ -208,7 +208,7 @@ So that **I can see program name, cursor position, and key hints**.
 
 **Goal:** Capture keyboard input and implement 3270 field-level editing.
 
-**Crate:** `zos-tui`
+**Crate:** `open-mainframe-tui`
 **FRs:** FR-v1.5-002, FR-v1.5-003, FR-v1.5-004
 
 ### Story 45.1: Raw Keyboard Event Loop
@@ -364,7 +364,7 @@ So that **I can correct input**.
 
 **Goal:** Manage the full CICS pseudo-conversational lifecycle with RETURN TRANSID.
 
-**Crate:** `zos-tui`, `zos-cics`
+**Crate:** `open-mainframe-tui`, `open-mainframe-cics`
 **FRs:** FR-v1.5-005, FR-v1.5-004
 
 ### Story 46.1: Session State Machine
@@ -506,20 +506,20 @@ So that **I can understand and recover from problems**.
 
 ## Epic 47: Interactive CICS CLI Command
 
-**Goal:** Add the `zos-clone cics` subcommand for interactive sessions.
+**Goal:** Add the `open-mainframe cics` subcommand for interactive sessions.
 
-**Crate:** `zos-clone`
+**Crate:** `open-mainframe`
 **FRs:** FR-v1.5-006
 
 ### Story 47.1: `cics` Subcommand Definition
 
 As a **user**,
-I want **`zos-clone cics <program>` to launch an interactive session**,
+I want **`open-mainframe cics <program>` to launch an interactive session**,
 So that **I can run CICS applications**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone cics COSGN00C.cbl -I ./copybooks`
+**Given** `open-mainframe cics COSGN00C.cbl -I ./copybooks`
 **When** executed
 **Then** TUI initializes and program begins execution
 
@@ -527,7 +527,7 @@ So that **I can run CICS applications**.
 **When** command starts
 **Then** clear error message with file path suggestion
 
-**Given** `zos-clone cics --help`
+**Given** `open-mainframe cics --help`
 **When** executed
 **Then** all options documented with examples
 
@@ -615,7 +615,7 @@ So that **my terminal is always restored**.
 
 **Goal:** Render 3270 field attributes and colors accurately.
 
-**Crate:** `zos-tui`
+**Crate:** `open-mainframe-tui`
 **FRs:** FR-v1.5-007, FR-v1.5-012
 
 ### Story 48.1: Field Attribute to Style Mapping
@@ -730,7 +730,7 @@ So that **I know which field is active**.
 
 **Goal:** Enable SQL execution during interactive CICS sessions.
 
-**Crate:** `zos-db2`, `zos-tui`
+**Crate:** `open-mainframe-db2`, `open-mainframe-tui`
 **FRs:** FR-v1.5-010
 
 ### Story 49.1: DB2 Connection Configuration
@@ -848,7 +848,7 @@ So that **the basic flow works**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone cics COSGN00C.cbl -I ./copybooks --data USRSEC=usrsec.dat:10:100`
+**Given** `open-mainframe cics COSGN00C.cbl -I ./copybooks --data USRSEC=usrsec.dat:10:100`
 **When** session starts
 **Then** sign-on screen renders with User ID and Password fields
 
@@ -940,7 +940,7 @@ So that **CI can verify interactive functionality**.
 
 ### Phase 1: Foundation (Epics 44, 45)
 
-1. Create `zos-tui` crate with ratatui/crossterm
+1. Create `open-mainframe-tui` crate with ratatui/crossterm
 2. Implement ScreenBuffer-to-widget rendering
 3. Implement raw keyboard event loop
 4. Implement field navigation (tab, character input)

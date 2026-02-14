@@ -5,7 +5,7 @@ date: '2026-02-13'
 status: 'draft'
 ---
 
-# Epics - zOS-clone v1.3: Production Ready
+# Epics - OpenMainframe v1.3: Production Ready
 
 ## Epic Overview
 
@@ -28,7 +28,7 @@ status: 'draft'
 
 **Goal:** Complete CICS implementation with queues, interval control, and synchronization.
 
-**Crate:** `zos-cics`
+**Crate:** `open-mainframe-cics`
 **FRs:** FR-v1.3-001 to FR-v1.3-015
 
 ### Story 29.1: Temporary Storage Queue Write
@@ -211,7 +211,7 @@ So that **I can query and modify CICS resources**.
 
 **Goal:** Parse IMS definitions and establish runtime infrastructure.
 
-**Crate:** `zos-ims`
+**Crate:** `open-mainframe-ims`
 **FRs:** FR-v1.3-016 to FR-v1.3-019
 
 ### Story 30.1: DBD Parser
@@ -390,7 +390,7 @@ So that **DL/I calls can access data**.
 
 **Goal:** Implement core DL/I database calls.
 
-**Crate:** `zos-ims/dli`
+**Crate:** `open-mainframe-ims/dli`
 **FRs:** FR-v1.3-019 to FR-v1.3-028
 
 ### Story 31.1: GU (Get Unique) Call
@@ -544,7 +544,7 @@ So that **I can update segment data**.
 
 **Goal:** Implement modern COBOL intrinsic functions.
 
-**Crate:** `zos-cobol`
+**Crate:** `open-mainframe-cobol`
 **FRs:** FR-v1.3-031 to FR-v1.3-033, FR-v1.3-040
 
 ### Story 32.1: FUNCTION TRIM
@@ -685,7 +685,7 @@ So that **I can use efficient floating-point**.
 
 **Goal:** Implement modern COBOL data types.
 
-**Crate:** `zos-cobol`
+**Crate:** `open-mainframe-cobol`
 **FRs:** FR-v1.3-034 to FR-v1.3-039
 
 ### Story 33.1: BOOLEAN Type
@@ -801,7 +801,7 @@ So that **I can release dynamic memory**.
 
 **Goal:** Implement XML and JSON processing statements.
 
-**Crate:** `zos-cobol`
+**Crate:** `open-mainframe-cobol`
 **FRs:** FR-v1.3-041 to FR-v1.3-044
 
 ### Story 34.1: XML GENERATE
@@ -892,14 +892,14 @@ So that **I can process JSON documents**.
 
 **Goal:** Production-ready Kubernetes deployment.
 
-**Crate:** `zos-deploy`
+**Crate:** `open-mainframe-deploy`
 **FRs:** FR-v1.3-046 to FR-v1.3-049, FR-v1.3-055
 
 ### Story 35.1: Kubernetes Manifests
 
 As a **DevOps engineer**,
 I want **Kubernetes deployment manifests**,
-So that **I can deploy zOS-clone to clusters**.
+So that **I can deploy OpenMainframe to clusters**.
 
 **Acceptance Criteria:**
 
@@ -919,12 +919,12 @@ So that **I can deploy zOS-clone to clusters**.
 ### Story 35.2: Helm Chart
 
 As a **DevOps engineer**,
-I want **Helm chart for zOS-clone**,
+I want **Helm chart for OpenMainframe**,
 So that **I can customize deployments**.
 
 **Acceptance Criteria:**
 
-**Given** helm install zos-clone ./helm/zos-clone
+**Given** helm install open-mainframe ./helm/open-mainframe
 **When** executed
 **Then** all resources created
 
@@ -991,11 +991,11 @@ So that **I can configure without rebuilding**.
 
 **Acceptance Criteria:**
 
-**Given** ZOS_DB_URL environment variable
+**Given** OPEN_MAINFRAME_DB_URL environment variable
 **When** application starts
 **Then** uses specified database
 
-**Given** ZOS_LOG_LEVEL=debug
+**Given** OPEN_MAINFRAME_LOG_LEVEL=debug
 **When** application runs
 **Then** debug logging enabled
 
@@ -1029,7 +1029,7 @@ So that **sensitive data is managed properly**.
 
 **Goal:** Production monitoring and tracing.
 
-**Crate:** `zos-deploy`
+**Crate:** `open-mainframe-deploy`
 **FRs:** FR-v1.3-050, FR-v1.3-051
 
 ### Story 36.1: Prometheus Metrics
@@ -1103,7 +1103,7 @@ So that **logs can be aggregated and searched**.
 
 **Acceptance Criteria:**
 
-**Given** ZOS_LOG_FORMAT=json
+**Given** OPEN_MAINFRAME_LOG_FORMAT=json
 **When** log emitted
 **Then** JSON structure with timestamp, level, message
 

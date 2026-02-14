@@ -5,7 +5,7 @@ date: '2026-02-13'
 status: 'draft'
 ---
 
-# Architecture - zOS-clone v1.2: Enterprise Features
+# Architecture - OpenMainframe v1.2: Enterprise Features
 
 ## Overview
 
@@ -19,7 +19,7 @@ v1.2 introduces two major subsystems: DB2 SQL support with PostgreSQL backend an
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           zOS-clone v1.2                                 │
+│                           OpenMainframe v1.2                                 │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
@@ -65,7 +65,7 @@ v1.2 introduces two major subsystems: DB2 SQL support with PostgreSQL backend an
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      zos-db2 Crate                               │
+│                      open-mainframe-db2 Crate                               │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐    │
@@ -192,7 +192,7 @@ impl Sqlca {
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                       zos-cics Crate                             │
+│                       open-mainframe-cics Crate                             │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐    │
@@ -292,7 +292,7 @@ pub struct Eib {
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                       zos-bms Crate                              │
+│                       open-mainframe-bms Crate                              │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐    │
@@ -350,7 +350,7 @@ Output: COBOL Copybook
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     zos-migrate Crate                            │
+│                     open-mainframe-migrate Crate                            │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐    │
@@ -398,7 +398,7 @@ Output: COBOL Copybook
 
 ```
 crates/
-├── zos-db2/                    # NEW: DB2 subsystem
+├── open-mainframe-db2/                    # NEW: DB2 subsystem
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── preprocess/         # SQL preprocessor
@@ -421,7 +421,7 @@ crates/
 │   │       └── generator.rs    # Copybook generation
 │   └── Cargo.toml
 │
-├── zos-cics/                   # NEW: CICS subsystem
+├── open-mainframe-cics/                   # NEW: CICS subsystem
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── preprocess/         # CICS preprocessor
@@ -444,7 +444,7 @@ crates/
 │   │       └── handler.rs
 │   └── Cargo.toml
 │
-├── zos-bms/                    # NEW: BMS maps
+├── open-mainframe-bms/                    # NEW: BMS maps
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── compiler/           # BMS compiler
@@ -458,7 +458,7 @@ crates/
 │   │       └── json.rs         # REST API
 │   └── Cargo.toml
 │
-├── zos-migrate/                # NEW: Migration tools
+├── open-mainframe-migrate/                # NEW: Migration tools
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── scanner.rs          # Codebase discovery
@@ -467,7 +467,7 @@ crates/
 │   │   └── estimator.rs        # Effort estimation
 │   └── Cargo.toml
 │
-├── zos-clone/                  # CLI (modified)
+├── open-mainframe/                  # CLI (modified)
 │   └── src/
 │       └── commands/
 │           ├── db2.rs          # NEW: db2 subcommand

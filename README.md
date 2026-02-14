@@ -1,4 +1,4 @@
-# zOS-clone
+# OpenMainframe
 
 An open-source mainframe COBOL compiler and JCL interpreter written in Rust.
 
@@ -31,12 +31,12 @@ An open-source mainframe COBOL compiler and JCL interpreter written in Rust.
 Requires Rust 1.82 or later.
 
 ```bash
-git clone https://github.com/zos-clone/zos-clone.git
-cd zos-clone
+git clone https://github.com/toreleon/OpenMainframe.git
+cd open-mainframe
 cargo build --release
 ```
 
-The binary will be at `target/release/zos-clone`.
+The binary will be at `target/release/open-mainframe`.
 
 ### With LLVM Support
 
@@ -51,72 +51,72 @@ cargo build --release --features llvm
 ### Interpret a COBOL Program
 
 ```bash
-zos-clone interpret program.cbl
+open-mainframe interpret program.cbl
 ```
 
 ### Check COBOL Syntax
 
 ```bash
-zos-clone check program.cbl
+open-mainframe check program.cbl
 ```
 
 ### Compile a COBOL Program (requires LLVM feature)
 
 ```bash
-zos-clone compile program.cbl -o program
+open-mainframe compile program.cbl -o program
 ```
 
 ### Run a JCL Job
 
 ```bash
-zos-clone run job.jcl
+open-mainframe run job.jcl
 ```
 
 ### Parse JCL (show structure)
 
 ```bash
-zos-clone parse-jcl job.jcl
+open-mainframe parse-jcl job.jcl
 ```
 
 ### Show Tokens (debugging)
 
 ```bash
-zos-clone lex program.cbl
+open-mainframe lex program.cbl
 ```
 
 ### Configuration
 
 ```bash
 # Show current configuration
-zos-clone config show
+open-mainframe config show
 
 # Generate default config file
-zos-clone config init
+open-mainframe config init
 
 # Show config paths and environment variables
-zos-clone config paths
+open-mainframe config paths
 ```
 
 ### Shell Completions
 
 ```bash
 # Bash
-zos-clone completions bash > ~/.local/share/bash-completion/completions/zos-clone
+open-mainframe completions bash > ~/.local/share/bash-completion/completions/open-mainframe
 
 # Zsh
-zos-clone completions zsh > ~/.zfunc/_zos-clone
+open-mainframe completions zsh > ~/.zfunc/_open-mainframe
 
 # Fish
-zos-clone completions fish > ~/.config/fish/completions/zos-clone.fish
+open-mainframe completions fish > ~/.config/fish/completions/open-mainframe.fish
 ```
 
 ## Configuration
 
-zOS-clone supports configuration through:
+OpenMainframe supports configuration through:
 
-1. **Project config**: `./zos-clone.toml`
-2. **User config**: `~/.config/zos-clone/config.toml`
-3. **Environment variables**: `ZOS_CLONE_*`
+1. **Project config**: `./open-mainframe.toml`
+2. **User config**: `~/.config/open-mainframe/config.toml`
+3. **Environment variables**: `OPEN_MAINFRAME_*`
 
 Example configuration:
 
@@ -156,19 +156,19 @@ work_dir = "./work"
 
 Run with:
 ```bash
-zos-clone interpret hello.cbl
+open-mainframe interpret hello.cbl
 ```
 
 ## Project Structure
 
 ```
 crates/
-  zos-clone/     # CLI binary
-  zos-cobol/     # COBOL lexer, parser, semantic analysis, codegen
-  zos-jcl/       # JCL lexer, parser, executor
-  zos-runtime/   # Runtime library and interpreter
-  zos-dataset/   # Dataset I/O (QSAM, catalog)
-  zos-encoding/  # EBCDIC encoding support
+  open-mainframe/     # CLI binary
+  open-mainframe-cobol/     # COBOL lexer, parser, semantic analysis, codegen
+  open-mainframe-jcl/       # JCL lexer, parser, executor
+  open-mainframe-runtime/   # Runtime library and interpreter
+  open-mainframe-dataset/   # Dataset I/O (QSAM, catalog)
+  open-mainframe-encoding/  # EBCDIC encoding support
 ```
 
 ## Supported COBOL Features

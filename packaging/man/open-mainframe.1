@@ -1,0 +1,104 @@
+.TH OPEN-MAINFRAME 1 "February 2026" "OpenMainframe 0.1.0" "User Commands"
+.SH NAME
+open-mainframe \- mainframe COBOL compiler and JCL interpreter
+.SH SYNOPSIS
+.B open-mainframe
+[\fIOPTIONS\fR] \fICOMMAND\fR [\fIARGS\fR]
+.SH DESCRIPTION
+.B open-mainframe
+is a mainframe emulator that provides COBOL compilation, JCL interpretation,
+and dataset management capabilities for running legacy mainframe workloads
+on modern Linux systems.
+.SH OPTIONS
+.TP
+.BR \-v ", " \-\-verbose
+Enable verbose output for debugging.
+.TP
+.BR \-h ", " \-\-help
+Print help information.
+.TP
+.BR \-V ", " \-\-version
+Print version information.
+.SH COMMANDS
+.TP
+.B compile
+Compile a COBOL source file to native code. See \fBopen-mainframe-compile\fR(1).
+.TP
+.B run
+Execute a JCL job. See \fBopen-mainframe-run\fR(1).
+.TP
+.B check
+Parse and validate COBOL syntax without compiling. See \fBopen-mainframe-check\fR(1).
+.TP
+.B interpret
+Run a COBOL program using the interpreter (no compilation).
+.TP
+.B lex
+Display COBOL tokens for debugging.
+.TP
+.B parse-jcl
+Parse JCL and display the job structure.
+.TP
+.B gdg
+Manage Generation Data Groups. See \fBopen-mainframe-gdg\fR(1).
+.TP
+.B idcams
+Execute IDCAMS commands for dataset management. See \fBopen-mainframe-idcams\fR(1).
+.TP
+.B config
+Manage configuration settings.
+.TP
+.B completions
+Generate shell completion scripts.
+.SH ENVIRONMENT
+.TP
+.B OPEN_MAINFRAME_SOURCE_FORMAT
+Source format: fixed, free, or auto (default: auto).
+.TP
+.B OPEN_MAINFRAME_COPYBOOK_PATH
+Colon-separated list of copybook search paths.
+.TP
+.B OPEN_MAINFRAME_OPTIMIZATION
+Optimization level 0-3 (default: 0).
+.TP
+.B OPEN_MAINFRAME_DATASET_DIR
+Base directory for dataset files.
+.TP
+.B OPEN_MAINFRAME_PROGRAM_DIR
+Directory for compiled programs.
+.TP
+.B OPEN_MAINFRAME_WORK_DIR
+Working directory for job execution.
+.SH FILES
+.TP
+.I ./open-mainframe.toml
+Project configuration file.
+.TP
+.I ~/.config/open-mainframe/config.toml
+User configuration file.
+.SH EXAMPLES
+.TP
+Compile a COBOL program:
+.B open-mainframe compile program.cbl -o program
+.TP
+Run a JCL job:
+.B open-mainframe run job.jcl
+.TP
+Check COBOL syntax:
+.B open-mainframe check program.cbl
+.TP
+Create a GDG:
+.B open-mainframe gdg create MY.GDG --limit 5
+.TP
+Run IDCAMS command:
+.B open-mainframe idcams exec "LISTCAT ENTRIES(MY.DATASET)"
+.SH SEE ALSO
+.BR open-mainframe-compile (1),
+.BR open-mainframe-run (1),
+.BR open-mainframe-check (1),
+.BR open-mainframe-gdg (1),
+.BR open-mainframe-idcams (1)
+.SH AUTHORS
+OpenMainframe Contributors
+.SH BUGS
+Report bugs at: https://github.com/toreleon/OpenMainframe/issues

@@ -5,20 +5,20 @@ date: '2026-02-13'
 status: 'draft'
 ---
 
-# Architecture Document - zOS-clone v1.3: Production Ready
+# Architecture Document - OpenMainframe v1.3: Production Ready
 
 ## Overview
 
-v1.3 extends the zOS-clone architecture with IMS/DB hierarchical database support, advanced CICS services, COBOL-2014 language features, and production deployment infrastructure.
+v1.3 extends the OpenMainframe architecture with IMS/DB hierarchical database support, advanced CICS services, COBOL-2014 language features, and production deployment infrastructure.
 
 ## New Crates
 
-### zos-ims
+### open-mainframe-ims
 
 IMS/DB hierarchical database support with DL/I call interface.
 
 ```
-zos-ims/
+open-mainframe-ims/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs
@@ -45,12 +45,12 @@ zos-ims/
 │       └── scanner.rs
 ```
 
-### zos-deploy
+### open-mainframe-deploy
 
 Kubernetes and cloud deployment support.
 
 ```
-zos-deploy/
+open-mainframe-deploy/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs
@@ -64,7 +64,7 @@ zos-deploy/
 │   ├── configmap.yaml
 │   └── hpa.yaml
 └── helm/
-    └── zos-clone/
+    └── open-mainframe/
         ├── Chart.yaml
         ├── values.yaml
         └── templates/
@@ -72,12 +72,12 @@ zos-deploy/
 
 ## Extended Crates
 
-### zos-cics (Extended)
+### open-mainframe-cics (Extended)
 
 New modules for advanced CICS functionality:
 
 ```
-zos-cics/src/
+open-mainframe-cics/src/
 ├── queues/               # NEW: Queue Services
 │   ├── mod.rs
 │   ├── ts.rs            # Temporary Storage queues
@@ -101,12 +101,12 @@ zos-cics/src/
     └── mod.rs           # INQUIRE/SET commands
 ```
 
-### zos-cobol (Extended)
+### open-mainframe-cobol (Extended)
 
 COBOL-2014 features:
 
 ```
-zos-cobol/src/
+open-mainframe-cobol/src/
 ├── intrinsics/          # Extended intrinsic functions
 │   ├── string.rs        # TRIM, SUBSTITUTE, CONCATENATE (NEW)
 │   └── numeric.rs       # Extended numeric functions
@@ -139,13 +139,13 @@ zos-cobol/src/
          ▼
 ┌─────────────────┐
 │ DL/I Preprocessor│
-│ (zos-ims/preproc)│
+│ (open-mainframe-ims/preproc)│
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
 │  DL/I Runtime   │
-│ (zos-ims/runtime)│
+│ (open-mainframe-ims/runtime)│
 └────────┬────────┘
          │ SSA parsing
          │ Path navigation
@@ -168,7 +168,7 @@ zos-cobol/src/
          ▼
 ┌─────────────────┐     ┌─────────────┐
 │  Queue Manager  │────▶│   Redis     │ (optional fast path)
-│ (zos-cics/queues)│    └─────────────┘
+│ (open-mainframe-cics/queues)│    └─────────────┘
 └────────┬────────┘
          │
          ▼
@@ -325,11 +325,11 @@ pub struct TypeDef {
 ┌─────────────────────────────────────────────────┐
 │                  Kubernetes Cluster              │
 │  ┌──────────────────────────────────────────┐   │
-│  │            zos-clone Namespace            │   │
+│  │            open-mainframe Namespace            │   │
 │  │                                           │   │
 │  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  │   │
 │  │  │ Pod 1   │  │ Pod 2   │  │ Pod 3   │  │   │
-│  │  │zos-clone│  │zos-clone│  │zos-clone│  │   │
+│  │  │open-mainframe│  │open-mainframe│  │open-mainframe│  │   │
 │  │  └────┬────┘  └────┬────┘  └────┬────┘  │   │
 │  │       │            │            │        │   │
 │  │  ┌────┴────────────┴────────────┴────┐  │   │
@@ -353,7 +353,7 @@ pub struct TypeDef {
 ### Prometheus Metrics
 
 ```rust
-pub struct ZosMetrics {
+pub struct OpenMainframeMetrics {
     // COBOL execution
     cobol_programs_executed: Counter,
     cobol_execution_duration: Histogram,
@@ -400,13 +400,13 @@ pub async fn ready(db: &DbPool, redis: Option<&RedisPool>) -> impl Responder {
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ZOS_DB_URL` | PostgreSQL connection string | required |
-| `ZOS_REDIS_URL` | Redis connection string | optional |
-| `ZOS_LOG_LEVEL` | Log level (trace/debug/info/warn/error) | info |
-| `ZOS_METRICS_PORT` | Prometheus metrics port | 9090 |
-| `ZOS_HEALTH_PORT` | Health check port | 8080 |
-| `ZOS_CICS_TS_BACKEND` | TS queue backend (memory/redis/postgres) | memory |
-| `ZOS_IMS_SCHEMA` | PostgreSQL schema for IMS data | ims |
+| `OPEN_MAINFRAME_DB_URL` | PostgreSQL connection string | required |
+| `OPEN_MAINFRAME_REDIS_URL` | Redis connection string | optional |
+| `OPEN_MAINFRAME_LOG_LEVEL` | Log level (trace/debug/info/warn/error) | info |
+| `OPEN_MAINFRAME_METRICS_PORT` | Prometheus metrics port | 9090 |
+| `OPEN_MAINFRAME_HEALTH_PORT` | Health check port | 8080 |
+| `OPEN_MAINFRAME_CICS_TS_BACKEND` | TS queue backend (memory/redis/postgres) | memory |
+| `OPEN_MAINFRAME_IMS_SCHEMA` | PostgreSQL schema for IMS data | ims |
 
 ## Migration Path
 

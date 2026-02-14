@@ -1,9 +1,0 @@
-[package]
-name = "zos-sort"
-version = "0.1.0"
-edition = "2021"
-description = "DFSORT-compatible sort utility for zOS-clone"
-license = "MIT OR Apache-2.0"
-
-[dependencies]
-thiserror = "1.0"

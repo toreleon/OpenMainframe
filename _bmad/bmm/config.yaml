@@ -3,7 +3,7 @@
 # Version: 6.0.0-Beta.8
 # Date: 2026-02-12T15:15:33.459Z
 
-project_name: zOS-clone
+project_name: OpenMainframe
 user_skill_level: intermediate
 planning_artifacts: "{project-root}/_bmad-output/planning-artifacts"
 implementation_artifacts: "{project-root}/_bmad-output/implementation-artifacts"

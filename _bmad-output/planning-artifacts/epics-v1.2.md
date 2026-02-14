@@ -5,7 +5,7 @@ date: '2026-02-13'
 status: 'draft'
 ---
 
-# Epics - zOS-clone v1.2: Enterprise Features
+# Epics - OpenMainframe v1.2: Enterprise Features
 
 ## Epic Overview
 
@@ -28,7 +28,7 @@ status: 'draft'
 
 **Goal:** Extract EXEC SQL statements from COBOL and generate runtime calls.
 
-**Crate:** `zos-db2/preprocess`
+**Crate:** `open-mainframe-db2/preprocess`
 **FRs:** FR-v1.2-001 to FR-v1.2-005
 
 ### Story 21.1: EXEC SQL Scanner
@@ -165,7 +165,7 @@ So that **I can preprocess SQL independently**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone db2 preprocess program.cbl`
+**Given** `open-mainframe db2 preprocess program.cbl`
 **When** executed
 **Then** outputs program.cob (pure COBOL) and program.dbrm
 
@@ -182,7 +182,7 @@ So that **I can preprocess SQL independently**.
 
 **Goal:** Execute SQL against PostgreSQL at runtime.
 
-**Crate:** `zos-db2/runtime`
+**Crate:** `open-mainframe-db2/runtime`
 **FRs:** FR-v1.2-006 to FR-v1.2-010, FR-v1.2-019 to FR-v1.2-021
 
 ### Story 22.1: PostgreSQL Connection
@@ -357,7 +357,7 @@ So that **data converts correctly**.
 
 **Goal:** Implement multi-row result set processing.
 
-**Crate:** `zos-db2/runtime`
+**Crate:** `open-mainframe-db2/runtime`
 **FRs:** FR-v1.2-011 to FR-v1.2-015
 
 ### Story 23.1: DECLARE CURSOR
@@ -478,7 +478,7 @@ So that **I can modify the fetched row**.
 
 **Goal:** Support DB2 utilities and JCL integration.
 
-**Crate:** `zos-db2/utilities`, `zos-jcl`
+**Crate:** `open-mainframe-db2/utilities`, `open-mainframe-jcl`
 **FRs:** FR-v1.2-016 to FR-v1.2-018, FR-v1.2-021, FR-v1.2-022
 
 ### Story 24.1: COMMIT/ROLLBACK
@@ -531,7 +531,7 @@ So that **my COBOL matches the database schema**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone db2 dclgen TABLENAME`
+**Given** `open-mainframe db2 dclgen TABLENAME`
 **When** executed
 **Then** COBOL copybook generated matching table columns
 
@@ -552,7 +552,7 @@ So that **SQL is optimized for execution**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone db2 bind program.dbrm`
+**Given** `open-mainframe db2 bind program.dbrm`
 **When** executed
 **Then** prepared statements created in PostgreSQL
 
@@ -607,7 +607,7 @@ So that **I can diagnose problems**.
 
 **Goal:** Process EXEC CICS commands at runtime.
 
-**Crate:** `zos-cics`
+**Crate:** `open-mainframe-cics`
 **FRs:** FR-v1.2-023 to FR-v1.2-039
 
 ### Story 25.1: EXEC CICS Scanner
@@ -774,7 +774,7 @@ So that **I can handle errors gracefully**.
 
 **Goal:** Compile BMS map definitions and generate copybooks.
 
-**Crate:** `zos-bms`
+**Crate:** `open-mainframe-bms`
 **FRs:** FR-v1.2-027 to FR-v1.2-030
 
 ### Story 26.1: BMS Macro Parser
@@ -903,7 +903,7 @@ So that **I can compile maps independently**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone bms compile mapset.bms`
+**Given** `open-mainframe bms compile mapset.bms`
 **When** executed
 **Then** copybooks and layout files created
 
@@ -916,7 +916,7 @@ So that **I can compile maps independently**.
 
 **Goal:** Provide terminal emulation for BMS screens.
 
-**Crate:** `zos-bms/render`, `zos-cics`
+**Crate:** `open-mainframe-bms/render`, `open-mainframe-cics`
 **FRs:** FR-v1.2-040 to FR-v1.2-042
 
 ### Story 27.1: Console Mode Renderer
@@ -990,7 +990,7 @@ So that **browsers can connect**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone cics web --port 3270`
+**Given** `open-mainframe cics web --port 3270`
 **When** browser connects
 **Then** transaction menu displayed
 
@@ -1074,11 +1074,11 @@ So that **I can control the environment**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone cics start`
+**Given** `open-mainframe cics start`
 **When** executed
 **Then** CICS runtime initialized
 
-**Given** `zos-clone cics run TRAN`
+**Given** `open-mainframe cics run TRAN`
 **When** executed
 **Then** transaction executed in console mode
 
@@ -1091,7 +1091,7 @@ So that **I can control the environment**.
 
 **Goal:** Analyze mainframe codebases for compatibility.
 
-**Crate:** `zos-migrate`
+**Crate:** `open-mainframe-migrate`
 **FRs:** FR-v1.2-051 to FR-v1.2-057
 
 ### Story 28.1: Codebase Scanner
@@ -1102,7 +1102,7 @@ So that **I know the scope of migration**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone migrate scan /path/to/code`
+**Given** `open-mainframe migrate scan /path/to/code`
 **When** executed
 **Then** all COBOL, JCL, copybook files listed
 
@@ -1228,7 +1228,7 @@ So that **stakeholders can review**.
 
 **Acceptance Criteria:**
 
-**Given** `zos-clone migrate report --format html`
+**Given** `open-mainframe migrate report --format html`
 **When** executed
 **Then** HTML report with charts and details
 

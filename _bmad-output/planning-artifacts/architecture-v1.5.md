@@ -9,17 +9,17 @@ status: 'draft'
 
 _Addendum to the base architecture document. All patterns, naming conventions, and enforcement guidelines from the base architecture remain in effect._
 
-## New Crate: `zos-tui`
+## New Crate: `open-mainframe-tui`
 
 ### Responsibility
 
-Interactive terminal rendering and input handling for CICS applications. Bridges the existing `zos-cics` infrastructure (ScreenBuffer, TerminalManager, MapRenderer) to a real terminal via ratatui/crossterm.
+Interactive terminal rendering and input handling for CICS applications. Bridges the existing `open-mainframe-cics` infrastructure (ScreenBuffer, TerminalManager, MapRenderer) to a real terminal via ratatui/crossterm.
 
 ### Updated Dependency Graph
 
 ```
                     ┌─────────────┐
-                    │  zos-clone  │  (binary)
+                    │  open-mainframe  │  (binary)
                     │    (CLI)    │
                     └──────┬──────┘
                            │
@@ -27,26 +27,26 @@ Interactive terminal rendering and input handling for CICS applications. Bridges
       │                    │                    │
       ▼                    ▼                    ▼
 ┌───────────┐       ┌───────────┐        ┌───────────┐
-│  zos-tui  │       │  zos-jcl  │        │zos-dataset│
+│  open-mainframe-tui  │       │  open-mainframe-jcl  │        │open-mainframe-dataset│
 │   (TUI)   │       │(interpret)│        │  (files)  │
 └─────┬─────┘       └─────┬─────┘        └─────┬─────┘
       │                    │                    │
       ▼                    └────────┬───────────┘
 ┌───────────┐                      │
-│ zos-cics  │◄─────────────────────┘
+│ open-mainframe-cics  │◄─────────────────────┘
 │  (CICS)   │
 └─────┬─────┘
       │
       ▼
 ┌───────────┐    ┌───────────┐    ┌───────────┐
-│ zos-cobol │    │zos-runtime│    │  zos-db2  │
+│ open-mainframe-cobol │    │open-mainframe-runtime│    │  open-mainframe-db2  │
 │(compiler) │    │ (library) │    │  (SQL)    │
 └─────┬─────┘    └─────┬─────┘    └───────────┘
       │                │
       └────────┬───────┘
                ▼
          ┌───────────┐
-         │zos-encoding│
+         │open-mainframe-encoding│
          │  (codec)  │
          └───────────┘
 ```
@@ -54,7 +54,7 @@ Interactive terminal rendering and input handling for CICS applications. Bridges
 ### Crate API
 
 ```rust
-// zos-tui/src/lib.rs
+// open-mainframe-tui/src/lib.rs
 
 /// Configuration for an interactive CICS session
 pub struct SessionConfig {
@@ -75,7 +75,7 @@ pub fn run_session(config: SessionConfig) -> Result<(), SessionError>;
 ### Internal Module Structure
 
 ```
-crates/zos-tui/
+crates/open-mainframe-tui/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs               # Public API: SessionConfig, run_session()
@@ -98,14 +98,14 @@ crates/zos-tui/
 
 ```toml
 [package]
-name = "zos-tui"
+name = "open-mainframe-tui"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-zos-cics = { path = "../zos-cics" }
-zos-cobol = { path = "../zos-cobol" }
-zos-db2 = { path = "../zos-db2", optional = true }
+open-mainframe-cics = { path = "../open-mainframe-cics" }
+open-mainframe-cobol = { path = "../open-mainframe-cobol" }
+open-mainframe-db2 = { path = "../open-mainframe-db2", optional = true }
 ratatui = "0.29"
 crossterm = "0.28"
 thiserror.workspace = true
@@ -116,7 +116,7 @@ insta = "1"  # Snapshot testing
 
 [features]
 default = []
-db2 = ["dep:zos-db2"]
+db2 = ["dep:open-mainframe-db2"]
 ```
 
 ---
@@ -207,7 +207,7 @@ pub fn run_session(config: SessionConfig) -> Result<()> {
 The COBOL interpreter calls CICS commands via the existing CicsBridge. For v1.5, the bridge gains a `TerminalCallback` trait that the TUI implements:
 
 ```rust
-// In zos-cics
+// In open-mainframe-cics
 pub trait TerminalCallback {
     /// Called when SEND MAP is executed - render the screen
     fn on_send_map(&mut self, screen: &ScreenBuffer, options: &SendMapOptions) -> Result<()>;
@@ -224,7 +224,7 @@ pub trait TerminalCallback {
 ```
 
 **Rationale:**
-- Clean separation: zos-cics doesn't depend on zos-tui (no circular dependency)
+- Clean separation: open-mainframe-cics doesn't depend on open-mainframe-tui (no circular dependency)
 - Existing non-interactive mode continues to work (different callback implementation)
 - Testable: mock callbacks for unit tests
 
@@ -293,30 +293,30 @@ bright = "yellow"
 
 ### What Changes in Existing Crates
 
-#### `zos-cics` Changes
+#### `open-mainframe-cics` Changes
 
 1. **Add `TerminalCallback` trait** to `terminal/mod.rs`
 2. **Modify `TerminalManager`** to accept a boxed callback: `Box<dyn TerminalCallback>`
 3. **Existing non-interactive behavior** preserved via a `StdioCallback` implementation that prints to stdout (current behavior)
 
-#### `zos-clone` Changes
+#### `open-mainframe` Changes
 
 1. **Add `cics` subcommand** to `commands/mod.rs` and `cli.rs`
 2. **New file** `commands/cics.rs` for the interactive command handler
 3. **Existing `interpret` command unchanged** (continues to work as before)
 
-#### `zos-db2` Changes (Optional)
+#### `open-mainframe-db2` Changes (Optional)
 
-1. **Expose `Db2Runtime` initialization** from the library for use by `zos-tui`
+1. **Expose `Db2Runtime` initialization** from the library for use by `open-mainframe-tui`
 2. **No structural changes** - existing runtime API sufficient
 
 ### What Does NOT Change
 
-- `zos-cobol`: No changes (interpreter interface unchanged)
-- `zos-encoding`: No changes
-- `zos-dataset`: No changes
-- `zos-runtime`: No changes
-- `zos-jcl`: No changes
+- `open-mainframe-cobol`: No changes (interpreter interface unchanged)
+- `open-mainframe-encoding`: No changes
+- `open-mainframe-dataset`: No changes
+- `open-mainframe-runtime`: No changes
+- `open-mainframe-jcl`: No changes
 
 ---
 
@@ -325,7 +325,7 @@ bright = "yellow"
 ### New Error Type
 
 ```rust
-// zos-tui/src/error.rs
+// open-mainframe-tui/src/error.rs
 #[derive(Debug, Error, Diagnostic)]
 pub enum SessionError {
     #[error("Terminal initialization failed: {0}")]
@@ -419,15 +419,15 @@ impl TerminalCallback for MockTerminal {
 ```toml
 [workspace]
 members = [
-    "crates/zos-clone",
-    "crates/zos-cobol",
-    "crates/zos-cics",
-    "crates/zos-tui",        # NEW
-    "crates/zos-jcl",
-    "crates/zos-runtime",
-    "crates/zos-dataset",
-    "crates/zos-encoding",
-    "crates/zos-db2",
+    "crates/open-mainframe",
+    "crates/open-mainframe-cobol",
+    "crates/open-mainframe-cics",
+    "crates/open-mainframe-tui",        # NEW
+    "crates/open-mainframe-jcl",
+    "crates/open-mainframe-runtime",
+    "crates/open-mainframe-dataset",
+    "crates/open-mainframe-encoding",
+    "crates/open-mainframe-db2",
 ]
 
 [workspace.dependencies]
@@ -440,11 +440,11 @@ crossterm = "0.28"           # NEW
 
 ## Implementation Priority
 
-1. **zos-tui scaffold** - Crate creation, ratatui setup, terminal init/restore
+1. **open-mainframe-tui scaffold** - Crate creation, ratatui setup, terminal init/restore
 2. **ScreenBuffer renderer** - Widget that displays the 24x80 grid
 3. **Keyboard event loop** - Raw mode input, AID mapping
 4. **Field navigation** - Tab, character input, MDT
-5. **TerminalCallback trait** - Add to zos-cics, implement StdioCallback
+5. **TerminalCallback trait** - Add to open-mainframe-cics, implement StdioCallback
 6. **Session state machine** - Execute/WaitingForInput/Ending lifecycle
 7. **`cics` CLI command** - Wire everything together
 8. **SEND MAP integration** - Connect CicsBridge to TUI renderer

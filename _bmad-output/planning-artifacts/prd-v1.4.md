@@ -5,11 +5,11 @@ date: '2026-02-13'
 status: 'draft'
 ---
 
-# Product Requirements Document - zOS-clone v1.4: CardDemo Compatibility
+# Product Requirements Document - OpenMainframe v1.4: CardDemo Compatibility
 
 ## Overview
 
-**Goal:** Run the AWS CardDemo application (https://github.com/aws-samples/aws-mainframe-modernization-carddemo) on zOS-clone.
+**Goal:** Run the AWS CardDemo application (https://github.com/aws-samples/aws-mainframe-modernization-carddemo) on OpenMainframe.
 
 CardDemo is a comprehensive COBOL/CICS credit card management application that serves as an industry-standard benchmark for mainframe modernization capabilities.
 

@@ -6,7 +6,7 @@ status: 'draft'
 codename: 'Enterprise Features'
 ---
 
-# PRD - zOS-clone v1.2: Enterprise Features
+# PRD - OpenMainframe v1.2: Enterprise Features
 
 **Author:** Tore
 **Date:** 2026-02-13
@@ -18,7 +18,7 @@ codename: 'Enterprise Features'
 
 ### Version Overview
 
-zOS-clone v1.2 extends batch processing capabilities with enterprise database and transaction support. While v1.1 handled VSAM files and batch utilities, v1.2 adds DB2 SQL support via PostgreSQL backend and introduces basic CICS command-level programming. This release enables migration of database-driven batch jobs and prepares the foundation for online transaction processing.
+OpenMainframe v1.2 extends batch processing capabilities with enterprise database and transaction support. While v1.1 handled VSAM files and batch utilities, v1.2 adds DB2 SQL support via PostgreSQL backend and introduces basic CICS command-level programming. This release enables migration of database-driven batch jobs and prepares the foundation for online transaction processing.
 
 ### Key Deliverables
 
@@ -73,7 +73,7 @@ zOS-clone v1.2 extends batch processing capabilities with enterprise database an
 | JCL executor | Extension | DB2 utility steps |
 | COBOL runtime | Extension | EXEC SQL integration |
 | IDCAMS utility | Usage | Database object management |
-| zos-dataset crate | Extension | DB2 data storage |
+| open-mainframe-dataset crate | Extension | DB2 data storage |
 
 ### v1.1 Features Required
 
@@ -240,7 +240,7 @@ zOS-clone v1.2 extends batch processing capabilities with enterprise database an
                       │
                       ▼
 ┌─────────────────────────────────────────────────┐
-│            SQL Preprocessor (zos-db2)           │
+│            SQL Preprocessor (open-mainframe-db2)           │
 │  - Extract EXEC SQL blocks                      │
 │  - Generate COBOL CALLs to runtime              │
 │  - Create DBRM (database request module)        │
@@ -274,7 +274,7 @@ zOS-clone v1.2 extends batch processing capabilities with enterprise database an
                       │
                       ▼
 ┌─────────────────────────────────────────────────┐
-│         CICS Command Processor (zos-cics)       │
+│         CICS Command Processor (open-mainframe-cics)       │
 │  - Command parsing and dispatch                 │
 │  - Resource management                          │
 │  - Exception handling                           │
@@ -306,18 +306,18 @@ zOS-clone v1.2 extends batch processing capabilities with enterprise database an
 
 | Crate | Purpose | Dependencies |
 |-------|---------|--------------|
-| zos-db2 | DB2 SQL preprocessing and runtime | zos-cobol, tokio-postgres |
-| zos-cics | CICS command processor and runtime | zos-cobol, zos-dataset |
-| zos-bms | BMS map compiler and screen handler | zos-cics |
-| zos-migrate | Migration assessment tooling | zos-cobol, zos-jcl |
+| open-mainframe-db2 | DB2 SQL preprocessing and runtime | open-mainframe-cobol, tokio-postgres |
+| open-mainframe-cics | CICS command processor and runtime | open-mainframe-cobol, open-mainframe-dataset |
+| open-mainframe-bms | BMS map compiler and screen handler | open-mainframe-cics |
+| open-mainframe-migrate | Migration assessment tooling | open-mainframe-cobol, open-mainframe-jcl |
 
 ### Modified Crates
 
 | Crate | Changes |
 |-------|---------|
-| zos-cobol | EXEC SQL/CICS preprocessing hooks |
-| zos-clone | CLI commands for db2, cics, migrate |
-| zos-jcl | DB2 utility recognition |
+| open-mainframe-cobol | EXEC SQL/CICS preprocessing hooks |
+| open-mainframe | CLI commands for db2, cics, migrate |
+| open-mainframe-jcl | DB2 utility recognition |
 
 ---
 

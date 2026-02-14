@@ -1,0 +1,19 @@
+[package]
+name = "open-mainframe-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Interactive 3270 terminal UI for OpenMainframe CICS applications"
+
+[dependencies]
+open-mainframe-cics.workspace = true
+open-mainframe-cobol.workspace = true
+open-mainframe-runtime.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]

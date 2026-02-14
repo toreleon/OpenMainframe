@@ -5,11 +5,11 @@ date: 2026-02-12
 author: Tore
 ---
 
-# Product Brief: zOS-clone
+# Product Brief: OpenMainframe
 
 ## Executive Summary
 
-zOS-clone is an open-source mainframe compiler built in Rust that enables enterprises to execute their existing mainframe source code on commodity Linux hardware. By providing a faster, cheaper alternative to IBM mainframe licensing, zOS-clone breaks vendor lock-in and democratizes access to mainframe computing. The project combines a novel compiler architecture with Rust's performance characteristics to deliver full z/OS language and feature compatibility without the prohibitive costs of traditional mainframe infrastructure.
+OpenMainframe is an open-source mainframe compiler built in Rust that enables enterprises to execute their existing mainframe source code on commodity Linux hardware. By providing a faster, cheaper alternative to IBM mainframe licensing, OpenMainframe breaks vendor lock-in and democratizes access to mainframe computing. The project combines a novel compiler architecture with Rust's performance characteristics to deliver full z/OS language and feature compatibility without the prohibitive costs of traditional mainframe infrastructure.
 
 ---
 
@@ -32,7 +32,7 @@ Current alternatives like Micro Focus, LzLabs, and cloud provider migration tool
 
 ### Proposed Solution
 
-zOS-clone is a Rust-based compiler system that executes mainframe source code natively on Linux. It targets full compatibility with IBM-supported languages and features including COBOL, PL/I, Assembler, JCL, CICS, IMS, DB2, VSAM, and RACF. The system allows enterprises to lift their existing mainframe workloads onto commodity hardware with minimal or no code changes.
+OpenMainframe is a Rust-based compiler system that executes mainframe source code natively on Linux. It targets full compatibility with IBM-supported languages and features including COBOL, PL/I, Assembler, JCL, CICS, IMS, DB2, VSAM, and RACF. The system allows enterprises to lift their existing mainframe workloads onto commodity hardware with minimal or no code changes.
 
 ### Key Differentiators
 
@@ -120,18 +120,18 @@ Modern application developers who need to call mainframe services or consume mai
 
 #### Mainframe Developer Journey
 
-1. **Discovery:** Hears about zOS-clone at a SHARE conference or through mainframe community forums
+1. **Discovery:** Hears about OpenMainframe at a SHARE conference or through mainframe community forums
 2. **Evaluation:** Downloads open-source version, attempts to compile a sample COBOL program locally
-3. **Proof of Concept:** Works with ops team to run a non-critical batch job on zOS-clone in a test environment
-4. **Adoption:** Integrates zOS-clone into CI/CD pipeline for automated testing
+3. **Proof of Concept:** Works with ops team to run a non-critical batch job on OpenMainframe in a test environment
+4. **Adoption:** Integrates OpenMainframe into CI/CD pipeline for automated testing
 5. **Aha Moment:** First time running full test suite locally in minutes instead of hours on shared LPAR
 6. **Long-term:** Development workflow modernized; new developers onboard faster
 
 #### Operations Team Journey
 
 1. **Discovery:** IT leadership asks team to evaluate mainframe cost reduction options
-2. **Evaluation:** Runs parallel workloads on zOS-clone vs z/OS, comparing output and performance
-3. **Proof of Concept:** Migrates low-risk batch workloads to Linux environment running zOS-clone
+2. **Evaluation:** Runs parallel workloads on OpenMainframe vs z/OS, comparing output and performance
+3. **Proof of Concept:** Migrates low-risk batch workloads to Linux environment running OpenMainframe
 4. **Adoption:** Gradually shifts production workloads, maintaining rollback capability
 5. **Aha Moment:** First month-end close runs successfully on commodity hardware at 20% of previous cost
 6. **Long-term:** Mainframe workloads fully integrated into modern infrastructure and observability stack
@@ -151,7 +151,7 @@ Modern application developers who need to call mainframe services or consume mai
 | Onboarding time | New developer productive in <1 week | Time to first successful compile |
 
 **Key Behavior Indicators:**
-- Developers choose zOS-clone for daily development over mainframe access
+- Developers choose OpenMainframe for daily development over mainframe access
 - Test suites running in CI pipelines instead of batch submission
 - Community contributions (bug reports, PRs, documentation)
 
@@ -164,7 +164,7 @@ Modern application developers who need to call mainframe services or consume mai
 | Uptime | 99.9% availability | Standard monitoring/alerting |
 
 **Key Behavior Indicators:**
-- Ops teams recommend zOS-clone for new workload deployments
+- Ops teams recommend OpenMainframe for new workload deployments
 - Production workloads running without rollback to mainframe
 - Integration with existing observability stack (Prometheus, Grafana)
 
@@ -180,7 +180,7 @@ Modern application developers who need to call mainframe services or consume mai
 
 #### Phase 2: Enterprise Traction (Months 12-24)
 - **Pilot deployments:** 10+ enterprises running non-production workloads
-- **Production migrations:** 3+ enterprises with production workloads on zOS-clone
+- **Production migrations:** 3+ enterprises with production workloads on OpenMainframe
 - **Commercial revenue:** First paying support/consulting customers
 - **Partnership:** Relationship with cloud providers (AWS, Azure, GCP)
 
@@ -237,7 +237,7 @@ Modern application developers who need to call mainframe services or consume mai
 - Competitive wins against incumbents
 
 **North Star Metric:**
-> **Mainframe MIPS displaced** - Total estimated MIPS of workloads running on zOS-clone instead of IBM hardware. This single metric captures user adoption, technical success, and business value creation.
+> **Mainframe MIPS displaced** - Total estimated MIPS of workloads running on OpenMainframe instead of IBM hardware. This single metric captures user adoption, technical success, and business value creation.
 
 ---
 
@@ -278,9 +278,9 @@ The MVP focuses on enabling developers to compile and run COBOL batch jobs local
 - ABEND handling with dump generation
 
 **5. Developer Tooling**
-- CLI: `zos-clone compile <source>` - compile COBOL to executable
-- CLI: `zos-clone run <jcl>` - execute JCL job
-- CLI: `zos-clone check <source>` - syntax validation
+- CLI: `open-mainframe compile <source>` - compile COBOL to executable
+- CLI: `open-mainframe run <jcl>` - execute JCL job
+- CLI: `open-mainframe check <source>` - syntax validation
 - Docker image for consistent environment
 - VS Code extension for syntax highlighting (community contribution)
 

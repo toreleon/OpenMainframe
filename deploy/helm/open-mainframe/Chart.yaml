@@ -1,0 +1,16 @@
+apiVersion: v2
+name: open-mainframe
+description: Mainframe-compatible runtime environment for COBOL, CICS, and IMS
+type: application
+version: 1.3.0
+appVersion: "1.3.0"
+keywords:
+  - cobol
+  - cics
+  - ims
+  - mainframe
+  - legacy-modernization
+home: https://github.com/toreleon/OpenMainframe
+maintainers:
+  - name: OpenMainframe Team
+    email: team@openmainframe.dev

@@ -1,17 +1,17 @@
-# zOS-clone Kubernetes Deployment
+# OpenMainframe Kubernetes Deployment
 # Production-ready deployment manifest
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: zos-clone
+  name: open-mainframe
   labels:
-    app: zos-clone
+    app: open-mainframe
     version: v1.3.0
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: zos-clone
+      app: open-mainframe
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -20,22 +20,22 @@ spec:
   template:
     metadata:
       labels:
-        app: zos-clone
+        app: open-mainframe
         version: v1.3.0
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
         prometheus.io/path: "/metrics"
     spec:
-      serviceAccountName: zos-clone
+      serviceAccountName: open-mainframe
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
       containers:
-        - name: zos-clone
-          image: ghcr.io/zos-clone/zos-clone:v1.3.0
+        - name: open-mainframe
+          image: ghcr.io/toreleon/OpenMainframe:v1.3.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -52,25 +52,25 @@ spec:
               cpu: 1000m
               memory: 1Gi
           env:
-            - name: ZOS_LOG_LEVEL
+            - name: OPEN_MAINFRAME_LOG_LEVEL
               valueFrom:
                 configMapKeyRef:
-                  name: zos-clone-config
+                  name: open-mainframe-config
                   key: log_level
-            - name: ZOS_LOG_FORMAT
+            - name: OPEN_MAINFRAME_LOG_FORMAT
               valueFrom:
                 configMapKeyRef:
-                  name: zos-clone-config
+                  name: open-mainframe-config
                   key: log_format
-            - name: ZOS_DB_URL
+            - name: OPEN_MAINFRAME_DB_URL
               valueFrom:
                 secretKeyRef:
-                  name: zos-clone-secrets
+                  name: open-mainframe-secrets
                   key: database_url
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               valueFrom:
                 configMapKeyRef:
-                  name: zos-clone-config
+                  name: open-mainframe-config
                   key: otel_endpoint
                   optional: true
           livenessProbe:
@@ -104,14 +104,14 @@ spec:
                 - ALL
           volumeMounts:
             - name: config
-              mountPath: /etc/zos-clone
+              mountPath: /etc/open-mainframe
               readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: config
           configMap:
-            name: zos-clone-config
+            name: open-mainframe-config
         - name: tmp
           emptyDir: {}
       affinity:
@@ -121,15 +121,15 @@ spec:
               podAffinityTerm:
                 labelSelector:
                   matchLabels:
-                    app: zos-clone
+                    app: open-mainframe
                 topologyKey: kubernetes.io/hostname
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: zos-clone
+  name: open-mainframe
   labels:
-    app: zos-clone
+    app: open-mainframe
 spec:
   type: ClusterIP
   ports:
@@ -142,11 +142,11 @@ spec:
       targetPort: metrics
       protocol: TCP
   selector:
-    app: zos-clone
+    app: open-mainframe
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: zos-clone
+  name: open-mainframe
   labels:
-    app: zos-clone
+    app: open-mainframe

@@ -1180,6 +1180,161 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "open-mainframe"
+version = "0.1.0"
+dependencies = [
+ "atty",
+ "clap",
+ "clap_complete",
+ "dirs",
+ "inkwell",
+ "miette",
+ "open-mainframe-cics",
+ "open-mainframe-cobol",
+ "open-mainframe-dataset",
+ "open-mainframe-db2",
+ "open-mainframe-encoding",
+ "open-mainframe-jcl",
+ "open-mainframe-runtime",
+ "open-mainframe-tui",
+ "serde",
+ "thiserror",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "open-mainframe-assess"
+version = "0.1.0"
+dependencies = [
+ "open-mainframe-cobol",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-cics"
+version = "0.1.0"
+dependencies = [
+ "open-mainframe-dataset",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-cobol"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "inkwell",
+ "miette",
+ "open-mainframe-encoding",
+ "open-mainframe-runtime",
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-dataset"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "open-mainframe-encoding",
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-db2"
+version = "0.1.0"
+dependencies = [
+ "postgres",
+ "r2d2",
+ "r2d2_postgres",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-deploy"
+version = "0.1.0"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "open-mainframe-encoding"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "rust_decimal",
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-ims"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-jcl"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "open-mainframe-dataset",
+ "open-mainframe-sort",
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-runtime"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "open-mainframe-encoding",
+ "rust_decimal",
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-sort"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "open-mainframe-cics",
+ "open-mainframe-cobol",
+ "open-mainframe-runtime",
+ "ratatui",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "opentelemetry"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2979,158 +3134,3 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
-
-[[package]]
-name = "zos-assess"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror",
- "zos-cobol",
-]
-
-[[package]]
-name = "zos-cics"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror",
- "zos-dataset",
-]
-
-[[package]]
-name = "zos-clone"
-version = "0.1.0"
-dependencies = [
- "atty",
- "clap",
- "clap_complete",
- "dirs",
- "inkwell",
- "miette",
- "serde",
- "thiserror",
- "toml",
- "tracing",
- "tracing-subscriber",
- "zos-cics",
- "zos-cobol",
- "zos-dataset",
- "zos-db2",
- "zos-encoding",
- "zos-jcl",
- "zos-runtime",
- "zos-tui",
-]
-
-[[package]]
-name = "zos-cobol"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "inkwell",
- "miette",
- "thiserror",
- "zos-encoding",
- "zos-runtime",
-]
-
-[[package]]
-name = "zos-dataset"
-version = "0.1.0"
-dependencies = [
- "miette",
- "thiserror",
- "zos-encoding",
-]
-
-[[package]]
-name = "zos-db2"
-version = "0.1.0"
-dependencies = [
- "postgres",
- "r2d2",
- "r2d2_postgres",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "zos-deploy"
-version = "0.1.0"
-dependencies = [
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "prometheus",
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror",
- "tokio",
- "tokio-test",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "zos-encoding"
-version = "0.1.0"
-dependencies = [
- "miette",
- "rust_decimal",
- "thiserror",
-]
-
-[[package]]
-name = "zos-ims"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "zos-jcl"
-version = "0.1.0"
-dependencies = [
- "miette",
- "thiserror",
- "zos-dataset",
- "zos-sort",
-]
-
-[[package]]
-name = "zos-runtime"
-version = "0.1.0"
-dependencies = [
- "miette",
- "rust_decimal",
- "thiserror",
- "zos-encoding",
-]
-
-[[package]]
-name = "zos-sort"
-version = "0.1.0"
-dependencies = [
- "thiserror",
-]
-
-[[package]]
-name = "zos-tui"
-version = "0.1.0"
-dependencies = [
- "crossterm",
- "ratatui",
- "thiserror",
- "tracing",
- "zos-cics",
- "zos-cobol",
- "zos-runtime",
-]
