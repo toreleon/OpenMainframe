@@ -405,6 +405,10 @@ impl SemanticAnalyzer {
             Statement::String(s) => self.validate_string(s),
             Statement::Unstring(s) => self.validate_unstring(s),
             Statement::Set(s) => self.validate_set(s),
+            Statement::Sort(s) => self.validate_sort(s),
+            Statement::Merge(s) => self.validate_merge(s),
+            Statement::Release(s) => self.validate_release(s),
+            Statement::ReturnStmt(s) => self.validate_return(s),
             // Simple statements that don't need validation
             Statement::Accept(_)
             | Statement::Open(_)
@@ -412,10 +416,6 @@ impl SemanticAnalyzer {
             | Statement::StopRun(_)
             | Statement::GoBack(_)
             | Statement::Cancel(_)
-            | Statement::Sort(_)
-            | Statement::Merge(_)
-            | Statement::Release(_)
-            | Statement::ReturnStmt(_)
             | Statement::Exit(_)
             | Statement::Continue(_)
             | Statement::Inspect(_)
@@ -634,6 +634,12 @@ impl SemanticAnalyzer {
         if let Some(ref stmts) = stmt.not_at_end {
             self.validate_statements(stmts);
         }
+        if let Some(ref stmts) = stmt.invalid_key {
+            self.validate_statements(stmts);
+        }
+        if let Some(ref stmts) = stmt.not_invalid_key {
+            self.validate_statements(stmts);
+        }
     }
 
     fn validate_write(&mut self, stmt: &WriteStatement) {
@@ -750,6 +756,44 @@ impl SemanticAnalyzer {
                 self.resolve_qualified_name(target);
                 self.resolve_qualified_name(source);
             }
+        }
+    }
+
+    fn validate_sort(&mut self, stmt: &SortStatement) {
+        for key in &stmt.keys {
+            self.resolve_qualified_name(&key.field);
+        }
+    }
+
+    fn validate_merge(&mut self, stmt: &MergeStatement) {
+        for key in &stmt.keys {
+            self.resolve_qualified_name(&key.field);
+        }
+    }
+
+    fn validate_release(&mut self, stmt: &ReleaseStatement) {
+        self.resolve_qualified_name(&stmt.record);
+        if let Some(ref from) = stmt.from {
+            self.validate_expression(from);
+        }
+    }
+
+    fn validate_return(&mut self, stmt: &ReturnStatement) {
+        if self.symbol_table.lookup_file(&stmt.file).is_none() {
+            self.error(
+                "E402",
+                format!("Undefined file: '{}'", stmt.file),
+                stmt.span,
+            );
+        }
+        if let Some(ref into) = stmt.into {
+            self.resolve_qualified_name(into);
+        }
+        if let Some(ref stmts) = stmt.at_end {
+            self.validate_statements(stmts);
+        }
+        if let Some(ref stmts) = stmt.not_at_end {
+            self.validate_statements(stmts);
         }
     }
 
