@@ -214,8 +214,9 @@ impl CobolType {
             }
             Usage::Comp1 => 4,   // Single precision float
             Usage::Comp2 => 8,   // Double precision float
-            Usage::Pointer => 8, // 64-bit pointer
+            Usage::Pointer | Usage::FunctionPointer | Usage::ProcedurePointer => 8, // 64-bit pointer
             Usage::Index => 4,   // Index size
+            Usage::National => pic_size * 2, // National uses UTF-16 (2 bytes per char)
         }
     }
 }

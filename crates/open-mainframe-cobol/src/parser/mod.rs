@@ -525,9 +525,28 @@ impl Parser {
         let mut value = None;
         let mut occurs = None;
         let mut redefines = None;
+        let mut renames = None;
         let mut sign = None;
         let mut justified = false;
         let mut blank_when_zero = false;
+        let mut external = false;
+        let mut global = false;
+        let mut synchronized = None;
+
+        // Level 66 RENAMES
+        if level == 66 {
+            if self.check_keyword(Keyword::Renames) {
+                self.advance();
+                let from = self.parse_qualified_name()?;
+                let thru = if self.check_keyword(Keyword::Through) || self.check_keyword(Keyword::Thru) {
+                    self.advance();
+                    Some(self.parse_qualified_name()?)
+                } else {
+                    None
+                };
+                renames = Some((from, thru));
+            }
+        }
 
         // Parse clauses until period
         while !self.check(TokenKind::Period) && !self.is_at_end() {
@@ -573,6 +592,23 @@ impl Parser {
                     self.advance();
                 }
                 blank_when_zero = true;
+            } else if self.check_identifier_value("EXTERNAL") {
+                self.advance();
+                external = true;
+            } else if self.check_identifier_value("GLOBAL") {
+                self.advance();
+                global = true;
+            } else if self.check_identifier_value("SYNCHRONIZED") || self.check_identifier_value("SYNC") {
+                self.advance();
+                synchronized = Some(if self.check_keyword(Keyword::Left) {
+                    self.advance();
+                    SyncDirection::Left
+                } else if self.check_keyword(Keyword::Right) {
+                    self.advance();
+                    SyncDirection::Right
+                } else {
+                    SyncDirection::Default
+                });
             } else if self.is_usage_keyword() {
                 // Implicit USAGE
                 usage = Some(self.parse_usage()?);
@@ -629,6 +665,10 @@ impl Parser {
             sign,
             justified,
             blank_when_zero,
+            external,
+            global,
+            synchronized,
+            renames,
             children,
             condition_values,
             span: start.extend(end),
@@ -713,6 +753,15 @@ impl Parser {
         } else if self.check_keyword(Keyword::Indexed) {
             self.advance();
             Ok(Usage::Index)
+        } else if self.check_identifier_value("FUNCTION-POINTER") {
+            self.advance();
+            Ok(Usage::FunctionPointer)
+        } else if self.check_identifier_value("PROCEDURE-POINTER") {
+            self.advance();
+            Ok(Usage::ProcedurePointer)
+        } else if self.check_identifier_value("NATIONAL") {
+            self.advance();
+            Ok(Usage::National)
         } else {
             Ok(Usage::Display)
         }
@@ -3607,6 +3656,9 @@ impl Parser {
             || self.check_keyword(Keyword::Computational5)
             || self.check_keyword(Keyword::PackedDecimal)
             || self.check_keyword(Keyword::Pointer)
+            || self.check_identifier_value("FUNCTION-POINTER")
+            || self.check_identifier_value("PROCEDURE-POINTER")
+            || self.check_identifier_value("NATIONAL")
     }
 
     fn consume_until_period(&mut self) -> String {

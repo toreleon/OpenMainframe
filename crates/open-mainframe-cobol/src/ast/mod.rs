@@ -232,6 +232,14 @@ pub struct DataItem {
     pub justified: bool,
     /// BLANK WHEN ZERO clause.
     pub blank_when_zero: bool,
+    /// EXTERNAL clause (01 level only).
+    pub external: bool,
+    /// GLOBAL clause (01 level only).
+    pub global: bool,
+    /// SYNCHRONIZED clause.
+    pub synchronized: Option<SyncDirection>,
+    /// RENAMES clause (level 66): from_name THRU to_name.
+    pub renames: Option<(QualifiedName, Option<QualifiedName>)>,
     /// Subordinate items (for group items).
     pub children: Vec<DataItem>,
     /// Condition names (level 88 items).
@@ -308,6 +316,23 @@ pub enum Usage {
     Pointer,
     /// INDEX.
     Index,
+    /// FUNCTION-POINTER.
+    FunctionPointer,
+    /// PROCEDURE-POINTER.
+    ProcedurePointer,
+    /// NATIONAL.
+    National,
+}
+
+/// SYNCHRONIZED direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncDirection {
+    /// SYNCHRONIZED (unspecified).
+    Default,
+    /// SYNCHRONIZED LEFT.
+    Left,
+    /// SYNCHRONIZED RIGHT.
+    Right,
 }
 
 /// OCCURS clause.
