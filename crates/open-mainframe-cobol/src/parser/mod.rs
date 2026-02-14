@@ -1074,6 +1074,14 @@ impl Parser {
             self.parse_evaluate_statement()
         } else if self.check_keyword(Keyword::Cancel) {
             self.parse_cancel_statement()
+        } else if self.check_keyword(Keyword::Sort) {
+            self.parse_sort_statement()
+        } else if self.check_keyword(Keyword::Merge) {
+            self.parse_merge_statement()
+        } else if self.check_keyword(Keyword::Release) {
+            self.parse_release_statement()
+        } else if self.check_keyword(Keyword::Return) {
+            self.parse_return_statement()
         } else {
             // Skip unknown statement - but stop at statement boundaries
             let start = self.current_span();
@@ -3859,6 +3867,335 @@ impl Parser {
         let end = self.previous_span();
         Ok(Statement::Cancel(CancelStatement {
             programs,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse SORT statement
+    fn parse_sort_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // SORT
+
+        let file = self.expect_identifier()?;
+
+        // Parse sort keys: ON ASCENDING/DESCENDING KEY field...
+        let mut keys = Vec::new();
+        while self.check_keyword(Keyword::On)
+            || self.check_keyword(Keyword::Ascending)
+            || self.check_keyword(Keyword::Descending)
+        {
+            if self.check_keyword(Keyword::On) {
+                self.advance();
+            }
+            let ascending = if self.check_keyword(Keyword::Ascending) {
+                self.advance();
+                true
+            } else if self.check_keyword(Keyword::Descending) {
+                self.advance();
+                false
+            } else {
+                true
+            };
+            if self.check_keyword(Keyword::Key) {
+                self.advance();
+            }
+            // One or more key fields
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.check_keyword(Keyword::On)
+                && !self.check_keyword(Keyword::Ascending)
+                && !self.check_keyword(Keyword::Descending)
+                && !self.check_keyword(Keyword::Using)
+                && !self.check_keyword(Keyword::Giving)
+                && !self.check_identifier_value("INPUT")
+                && !self.check_identifier_value("OUTPUT")
+                && !self.check_identifier_value("DUPLICATES")
+                && !self.check_identifier_value("COLLATING")
+                && !self.check_identifier_value("WITH")
+                && !self.is_statement_start()
+            {
+                let field = self.parse_qualified_name()?;
+                keys.push(SortKey { field, ascending });
+            }
+        }
+
+        // Skip optional WITH DUPLICATES IN ORDER
+        if self.check_identifier_value("WITH") || self.check_identifier_value("DUPLICATES") {
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.check_keyword(Keyword::Using)
+                && !self.check_keyword(Keyword::Giving)
+                && !self.check_identifier_value("INPUT")
+                && !self.check_identifier_value("OUTPUT")
+                && !self.is_statement_start()
+            {
+                self.advance();
+            }
+        }
+
+        // Skip optional COLLATING SEQUENCE clause
+        if self.check_identifier_value("COLLATING") {
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.check_keyword(Keyword::Using)
+                && !self.check_keyword(Keyword::Giving)
+                && !self.check_identifier_value("INPUT")
+                && !self.check_identifier_value("OUTPUT")
+                && !self.is_statement_start()
+            {
+                self.advance();
+            }
+        }
+
+        let mut using = Vec::new();
+        let mut giving = Vec::new();
+        let mut input_procedure = None;
+        let mut output_procedure = None;
+
+        // USING / GIVING / INPUT PROCEDURE / OUTPUT PROCEDURE
+        loop {
+            if self.check_keyword(Keyword::Using) {
+                self.advance();
+                while !self.check(TokenKind::Period)
+                    && !self.is_at_end()
+                    && !self.check_keyword(Keyword::Giving)
+                    && !self.check_identifier_value("INPUT")
+                    && !self.check_identifier_value("OUTPUT")
+                    && !self.is_statement_start()
+                {
+                    using.push(self.expect_identifier()?);
+                }
+            } else if self.check_keyword(Keyword::Giving) {
+                self.advance();
+                while !self.check(TokenKind::Period)
+                    && !self.is_at_end()
+                    && !self.check_identifier_value("OUTPUT")
+                    && !self.is_statement_start()
+                {
+                    giving.push(self.expect_identifier()?);
+                }
+            } else if self.check_identifier_value("INPUT") {
+                self.advance(); // INPUT
+                if self.check_keyword(Keyword::Procedure) {
+                    self.advance();
+                }
+                if self.check_keyword(Keyword::Is) {
+                    self.advance();
+                }
+                input_procedure = Some(self.expect_identifier()?);
+                // Optional THRU/THROUGH
+                if self.check_keyword(Keyword::Thru) || self.check_keyword(Keyword::Through) {
+                    self.advance();
+                    let _end_proc = self.expect_identifier()?;
+                }
+            } else if self.check_identifier_value("OUTPUT") {
+                self.advance(); // OUTPUT
+                if self.check_keyword(Keyword::Procedure) {
+                    self.advance();
+                }
+                if self.check_keyword(Keyword::Is) {
+                    self.advance();
+                }
+                output_procedure = Some(self.expect_identifier()?);
+                if self.check_keyword(Keyword::Thru) || self.check_keyword(Keyword::Through) {
+                    self.advance();
+                    let _end_proc = self.expect_identifier()?;
+                }
+            } else {
+                break;
+            }
+        }
+
+        let end = self.previous_span();
+        Ok(Statement::Sort(SortStatement {
+            file,
+            keys,
+            input_procedure,
+            output_procedure,
+            using,
+            giving,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse MERGE statement
+    fn parse_merge_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // MERGE
+
+        let file = self.expect_identifier()?;
+
+        // Parse keys (same as SORT)
+        let mut keys = Vec::new();
+        while self.check_keyword(Keyword::On)
+            || self.check_keyword(Keyword::Ascending)
+            || self.check_keyword(Keyword::Descending)
+        {
+            if self.check_keyword(Keyword::On) {
+                self.advance();
+            }
+            let ascending = if self.check_keyword(Keyword::Ascending) {
+                self.advance();
+                true
+            } else if self.check_keyword(Keyword::Descending) {
+                self.advance();
+                false
+            } else {
+                true
+            };
+            if self.check_keyword(Keyword::Key) {
+                self.advance();
+            }
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.check_keyword(Keyword::On)
+                && !self.check_keyword(Keyword::Ascending)
+                && !self.check_keyword(Keyword::Descending)
+                && !self.check_keyword(Keyword::Using)
+                && !self.check_keyword(Keyword::Giving)
+                && !self.check_identifier_value("OUTPUT")
+                && !self.is_statement_start()
+            {
+                let field = self.parse_qualified_name()?;
+                keys.push(SortKey { field, ascending });
+            }
+        }
+
+        // Skip optional COLLATING SEQUENCE
+        if self.check_identifier_value("COLLATING") {
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.check_keyword(Keyword::Using)
+                && !self.check_keyword(Keyword::Giving)
+                && !self.check_identifier_value("OUTPUT")
+                && !self.is_statement_start()
+            {
+                self.advance();
+            }
+        }
+
+        let mut using = Vec::new();
+        let mut giving = Vec::new();
+        let mut output_procedure = None;
+
+        loop {
+            if self.check_keyword(Keyword::Using) {
+                self.advance();
+                while !self.check(TokenKind::Period)
+                    && !self.is_at_end()
+                    && !self.check_keyword(Keyword::Giving)
+                    && !self.check_identifier_value("OUTPUT")
+                    && !self.is_statement_start()
+                {
+                    using.push(self.expect_identifier()?);
+                }
+            } else if self.check_keyword(Keyword::Giving) {
+                self.advance();
+                while !self.check(TokenKind::Period)
+                    && !self.is_at_end()
+                    && !self.check_identifier_value("OUTPUT")
+                    && !self.is_statement_start()
+                {
+                    giving.push(self.expect_identifier()?);
+                }
+            } else if self.check_identifier_value("OUTPUT") {
+                self.advance();
+                if self.check_keyword(Keyword::Procedure) {
+                    self.advance();
+                }
+                if self.check_keyword(Keyword::Is) {
+                    self.advance();
+                }
+                output_procedure = Some(self.expect_identifier()?);
+                if self.check_keyword(Keyword::Thru) || self.check_keyword(Keyword::Through) {
+                    self.advance();
+                    let _end_proc = self.expect_identifier()?;
+                }
+            } else {
+                break;
+            }
+        }
+
+        let end = self.previous_span();
+        Ok(Statement::Merge(MergeStatement {
+            file,
+            keys,
+            using,
+            giving,
+            output_procedure,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse RELEASE statement
+    fn parse_release_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // RELEASE
+
+        let record = self.parse_qualified_name()?;
+
+        let from = if self.check_keyword(Keyword::From) {
+            self.advance();
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        let end = self.previous_span();
+        Ok(Statement::Release(ReleaseStatement {
+            record,
+            from,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse RETURN statement (file I/O, not procedure return)
+    fn parse_return_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // RETURN
+
+        let file = self.expect_identifier()?;
+
+        // Optional RECORD
+        if self.check_keyword(Keyword::Record) {
+            self.advance();
+        }
+
+        // Optional INTO target
+        let into = if self.check_keyword(Keyword::Into) {
+            self.advance();
+            Some(self.parse_qualified_name()?)
+        } else {
+            None
+        };
+
+        // AT END / NOT AT END handlers
+        let mut at_end = None;
+        let mut not_at_end = None;
+
+        loop {
+            if self.check_keyword(Keyword::AtEnd) {
+                self.advance();
+                at_end = Some(self.parse_io_handler_statements(Keyword::EndReturn)?);
+            } else if self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::AtEnd) {
+                self.advance();
+                self.advance();
+                not_at_end = Some(self.parse_io_handler_statements(Keyword::EndReturn)?);
+            } else {
+                break;
+            }
+        }
+
+        if self.check_keyword(Keyword::EndReturn) {
+            self.advance();
+        }
+
+        let end = self.previous_span();
+        Ok(Statement::ReturnStmt(ReturnStatement {
+            file,
+            into,
+            at_end,
+            not_at_end,
             span: start.extend(end),
         }))
     }

@@ -502,6 +502,14 @@ pub enum Statement {
     Search(SearchStatement),
     /// CANCEL statement.
     Cancel(CancelStatement),
+    /// SORT statement.
+    Sort(SortStatement),
+    /// MERGE statement.
+    Merge(MergeStatement),
+    /// RELEASE statement.
+    Release(ReleaseStatement),
+    /// RETURN statement.
+    ReturnStmt(ReturnStatement),
     /// CONTINUE statement.
     Continue(ContinueStatement),
     /// EXEC CICS statement.
@@ -541,6 +549,10 @@ impl Statement {
             Statement::Set(s) => s.span,
             Statement::Search(s) => s.span,
             Statement::Cancel(s) => s.span,
+            Statement::Sort(s) => s.span,
+            Statement::Merge(s) => s.span,
+            Statement::Release(s) => s.span,
+            Statement::ReturnStmt(s) => s.span,
             Statement::Continue(s) => s.span,
             Statement::ExecCics(s) => s.span,
             Statement::ExecSql(s) => s.span,
@@ -1220,6 +1232,77 @@ pub enum SetMode {
 pub struct CancelStatement {
     /// Program names to cancel.
     pub programs: Vec<Expression>,
+    /// Source span.
+    pub span: Span,
+}
+
+/// SORT statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SortStatement {
+    /// Sort file/work area name.
+    pub file: String,
+    /// Sort keys (ascending/descending + field).
+    pub keys: Vec<SortKey>,
+    /// INPUT PROCEDURE paragraph/section.
+    pub input_procedure: Option<String>,
+    /// OUTPUT PROCEDURE paragraph/section.
+    pub output_procedure: Option<String>,
+    /// USING file names.
+    pub using: Vec<String>,
+    /// GIVING file names.
+    pub giving: Vec<String>,
+    /// Source span.
+    pub span: Span,
+}
+
+/// A sort key.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SortKey {
+    /// Field name.
+    pub field: QualifiedName,
+    /// Ascending (true) or descending (false).
+    pub ascending: bool,
+}
+
+/// MERGE statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeStatement {
+    /// Merge file name.
+    pub file: String,
+    /// Merge keys.
+    pub keys: Vec<SortKey>,
+    /// USING file names.
+    pub using: Vec<String>,
+    /// GIVING file names.
+    pub giving: Vec<String>,
+    /// OUTPUT PROCEDURE.
+    pub output_procedure: Option<String>,
+    /// Source span.
+    pub span: Span,
+}
+
+/// RELEASE statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReleaseStatement {
+    /// Record name.
+    pub record: QualifiedName,
+    /// FROM clause source.
+    pub from: Option<Expression>,
+    /// Source span.
+    pub span: Span,
+}
+
+/// RETURN statement (file I/O).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReturnStatement {
+    /// File name.
+    pub file: String,
+    /// INTO clause target.
+    pub into: Option<QualifiedName>,
+    /// AT END handler.
+    pub at_end: Option<Vec<Statement>>,
+    /// NOT AT END handler.
+    pub not_at_end: Option<Vec<Statement>>,
     /// Source span.
     pub span: Span,
 }
