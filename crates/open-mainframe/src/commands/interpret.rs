@@ -814,6 +814,37 @@ fn decode_hex_string(hex: &str) -> String {
     String::from_utf8_lossy(&bytes).to_string()
 }
 
+/// Convert AST InspectMode to runtime SimpleInspectMode.
+fn convert_inspect_mode(mode: open_mainframe_cobol::ast::InspectMode) -> open_mainframe_runtime::interpreter::SimpleInspectMode {
+    use open_mainframe_cobol::ast::InspectMode;
+    use open_mainframe_runtime::interpreter::SimpleInspectMode;
+    match mode {
+        InspectMode::Characters => SimpleInspectMode::Characters,
+        InspectMode::All => SimpleInspectMode::All,
+        InspectMode::Leading => SimpleInspectMode::Leading,
+        InspectMode::First => SimpleInspectMode::First,
+    }
+}
+
+/// Convert AST InspectDelimiter list to (before, after) option strings.
+fn convert_inspect_delimiters(delimiters: &[open_mainframe_cobol::ast::InspectDelimiter]) -> (Option<String>, Option<String>) {
+    let mut before = None;
+    let mut after = None;
+    for d in delimiters {
+        let val = match convert_expr(&d.value) {
+            Ok(SimpleExpr::String(s)) => Some(s),
+            Ok(SimpleExpr::Integer(n)) => Some(n.to_string()),
+            _ => None,
+        };
+        if d.before {
+            before = val;
+        } else {
+            after = val;
+        }
+    }
+    (before, after)
+}
+
 /// Convert a COBOL Statement to SimpleStatement.
 fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
     match stmt {
@@ -1140,7 +1171,176 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
             }))
         }
 
-        // Other statements not yet implemented (Open, Close, Read, Write, etc.)
+        Statement::Inspect(ins) => {
+            let target = ins.target.name.clone();
+
+            if let Some(ref tallying) = ins.tallying {
+                let counter = tallying.counter.name.clone();
+                let for_clauses = tallying.for_clauses.iter().map(|f| {
+                    let pattern = f.pattern.as_ref().and_then(|e| {
+                        if let Ok(SimpleExpr::String(s)) = convert_expr(e) { Some(s) }
+                        else if let Ok(SimpleExpr::Integer(n)) = convert_expr(e) { Some(n.to_string()) }
+                        else { None }
+                    });
+                    let (before, after) = convert_inspect_delimiters(&f.delimiters);
+                    open_mainframe_runtime::interpreter::SimpleInspectFor {
+                        mode: convert_inspect_mode(f.mode),
+                        pattern,
+                        before,
+                        after,
+                    }
+                }).collect();
+                return Ok(Some(SimpleStatement::InspectTallying {
+                    target,
+                    counter,
+                    for_clauses,
+                }));
+            }
+
+            if let Some(ref replacing) = ins.replacing {
+                let rules = replacing.rules.iter().map(|r| {
+                    let pattern = r.pattern.as_ref().and_then(|e| {
+                        if let Ok(SimpleExpr::String(s)) = convert_expr(e) { Some(s) }
+                        else if let Ok(SimpleExpr::Integer(n)) = convert_expr(e) { Some(n.to_string()) }
+                        else { None }
+                    });
+                    let by = match convert_expr(&r.by) {
+                        Ok(SimpleExpr::String(s)) => s,
+                        Ok(SimpleExpr::Integer(n)) => n.to_string(),
+                        _ => String::new(),
+                    };
+                    let (before, after) = convert_inspect_delimiters(&r.delimiters);
+                    open_mainframe_runtime::interpreter::SimpleInspectRule {
+                        mode: convert_inspect_mode(r.mode),
+                        pattern,
+                        by,
+                        before,
+                        after,
+                    }
+                }).collect();
+                return Ok(Some(SimpleStatement::InspectReplacing { target, rules }));
+            }
+
+            if let Some(ref converting) = ins.converting {
+                let from = match convert_expr(&converting.from) {
+                    Ok(SimpleExpr::String(s)) => s,
+                    _ => String::new(),
+                };
+                let to = match convert_expr(&converting.to) {
+                    Ok(SimpleExpr::String(s)) => s,
+                    _ => String::new(),
+                };
+                let (before, after) = convert_inspect_delimiters(&converting.delimiters);
+                return Ok(Some(SimpleStatement::InspectConverting { target, from, to, before, after }));
+            }
+
+            Ok(None)
+        }
+
+        Statement::Unstring(u) => {
+            let source = u.source.name.clone();
+            let delimiters: Vec<String> = u.delimiters.iter().filter_map(|d| {
+                match convert_expr(&d.value) {
+                    Ok(SimpleExpr::String(s)) => Some(s),
+                    Ok(SimpleExpr::Integer(n)) => Some(n.to_string()),
+                    _ => None,
+                }
+            }).collect();
+            let into: Vec<String> = u.into.iter().map(|t| t.name.name.clone()).collect();
+            let tallying = u.tallying.as_ref().map(|t| t.name.clone());
+            Ok(Some(SimpleStatement::Unstring { source, delimiters, into, tallying }))
+        }
+
+        Statement::Open(o) => {
+            let files = o.files.iter().map(|f| {
+                let mode = match f.mode {
+                    open_mainframe_cobol::ast::OpenMode::Input =>
+                        open_mainframe_runtime::interpreter::SimpleOpenMode::Input,
+                    open_mainframe_cobol::ast::OpenMode::Output =>
+                        open_mainframe_runtime::interpreter::SimpleOpenMode::Output,
+                    open_mainframe_cobol::ast::OpenMode::InputOutput =>
+                        open_mainframe_runtime::interpreter::SimpleOpenMode::InputOutput,
+                    open_mainframe_cobol::ast::OpenMode::Extend =>
+                        open_mainframe_runtime::interpreter::SimpleOpenMode::Extend,
+                };
+                (f.name.clone(), mode)
+            }).collect();
+            Ok(Some(SimpleStatement::FileOpen { files }))
+        }
+
+        Statement::Close(c) => {
+            Ok(Some(SimpleStatement::FileClose { files: c.files.clone() }))
+        }
+
+        Statement::Read(r) => {
+            let into = r.into.as_ref().map(|q| q.name.clone());
+            let at_end = r.at_end.as_ref().map(|stmts| {
+                stmts.iter().filter_map(|s| convert_statement(s).ok().flatten()).collect()
+            });
+            let not_at_end = r.not_at_end.as_ref().map(|stmts| {
+                stmts.iter().filter_map(|s| convert_statement(s).ok().flatten()).collect()
+            });
+            Ok(Some(SimpleStatement::FileRead {
+                file: r.file.clone(),
+                into,
+                at_end,
+                not_at_end,
+            }))
+        }
+
+        Statement::Write(w) => {
+            let from = w.from.as_ref().map(|q| q.name.clone());
+            let advancing = w.advancing.as_ref().map(|a| {
+                match a {
+                    open_mainframe_cobol::ast::WriteAdvancing::Lines { count, before } => {
+                        let n = match convert_expr(count) {
+                            Ok(SimpleExpr::Integer(n)) => n,
+                            _ => 1,
+                        };
+                        open_mainframe_runtime::interpreter::SimpleAdvancing::Lines {
+                            count: n,
+                            before: *before,
+                        }
+                    }
+                    open_mainframe_cobol::ast::WriteAdvancing::Page { before } => {
+                        open_mainframe_runtime::interpreter::SimpleAdvancing::Page { before: *before }
+                    }
+                }
+            });
+            Ok(Some(SimpleStatement::FileWrite {
+                record: w.record.name.clone(),
+                from,
+                advancing,
+            }))
+        }
+
+        Statement::Search(s) => {
+            let at_end = s.at_end.as_ref().map(|stmts| {
+                stmts.iter().filter_map(|st| convert_statement(st).ok().flatten()).collect()
+            });
+            let when_clauses = s.when_clauses.iter().filter_map(|w| {
+                let condition = convert_condition(&w.condition).ok()?;
+                let statements = w.statements.iter()
+                    .filter_map(|st| convert_statement(st).ok().flatten())
+                    .collect();
+                Some(open_mainframe_runtime::interpreter::SimpleSearchWhen {
+                    condition,
+                    statements,
+                })
+            }).collect();
+            Ok(Some(SimpleStatement::Search {
+                table: s.table.name.clone(),
+                all: s.all,
+                at_end,
+                when_clauses,
+            }))
+        }
+
+        // Sort/Merge/Release/Return are batch-only — not meaningful in interpreter
+        Statement::Sort(_) | Statement::Merge(_) | Statement::Release(_) | Statement::ReturnStmt(_) => {
+            Ok(None)
+        }
+
         _ => Ok(None),
     }
 }

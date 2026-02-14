@@ -63,6 +63,19 @@ pub trait CicsCommandHandler {
     }
 }
 
+/// State for an open file in the interpreter.
+#[derive(Debug)]
+pub struct FileState {
+    /// Open mode.
+    pub mode: SimpleOpenMode,
+    /// Records (in-memory simulation).
+    pub records: Vec<String>,
+    /// Current record position (for sequential read).
+    pub position: usize,
+    /// File status code.
+    pub status: String,
+}
+
 /// Runtime environment for interpreter.
 pub struct Environment {
     /// Data item values.
@@ -79,6 +92,8 @@ pub struct Environment {
     stopped: bool,
     /// CICS command handler (optional).
     pub cics_handler: Option<Box<dyn CicsCommandHandler>>,
+    /// Open files (in-memory simulation).
+    pub files: HashMap<String, FileState>,
 }
 
 impl Environment {
@@ -92,6 +107,7 @@ impl Environment {
             return_code: 0,
             stopped: false,
             cics_handler: None,
+            files: HashMap::new(),
         }
     }
 
@@ -105,6 +121,7 @@ impl Environment {
             return_code: 0,
             stopped: false,
             cics_handler: None,
+            files: HashMap::new(),
         }
     }
 
@@ -296,6 +313,126 @@ pub enum SimpleStatement {
         /// VARYING clause: (variable, FROM, BY)
         varying: Option<(String, SimpleExpr, SimpleExpr)>,
     },
+    /// INSPECT TALLYING
+    InspectTallying {
+        target: String,
+        counter: String,
+        for_clauses: Vec<SimpleInspectFor>,
+    },
+    /// INSPECT REPLACING
+    InspectReplacing {
+        target: String,
+        rules: Vec<SimpleInspectRule>,
+    },
+    /// INSPECT CONVERTING
+    InspectConverting {
+        target: String,
+        from: String,
+        to: String,
+        before: Option<String>,
+        after: Option<String>,
+    },
+    /// UNSTRING
+    Unstring {
+        source: String,
+        delimiters: Vec<String>,
+        into: Vec<String>,
+        tallying: Option<String>,
+    },
+    /// OPEN file
+    FileOpen {
+        files: Vec<(String, SimpleOpenMode)>,
+    },
+    /// CLOSE file
+    FileClose {
+        files: Vec<String>,
+    },
+    /// READ file
+    FileRead {
+        file: String,
+        into: Option<String>,
+        at_end: Option<Vec<SimpleStatement>>,
+        not_at_end: Option<Vec<SimpleStatement>>,
+    },
+    /// WRITE record
+    FileWrite {
+        record: String,
+        from: Option<String>,
+        advancing: Option<SimpleAdvancing>,
+    },
+    /// SEARCH table
+    Search {
+        table: String,
+        all: bool,
+        at_end: Option<Vec<SimpleStatement>>,
+        when_clauses: Vec<SimpleSearchWhen>,
+    },
+}
+
+/// INSPECT FOR clause (tallying).
+#[derive(Debug, Clone)]
+pub struct SimpleInspectFor {
+    /// Mode: Characters, All, Leading, First.
+    pub mode: SimpleInspectMode,
+    /// Pattern to match (None for CHARACTERS mode).
+    pub pattern: Option<String>,
+    /// BEFORE INITIAL delimiter.
+    pub before: Option<String>,
+    /// AFTER INITIAL delimiter.
+    pub after: Option<String>,
+}
+
+/// INSPECT REPLACING rule.
+#[derive(Debug, Clone)]
+pub struct SimpleInspectRule {
+    /// Mode: Characters, All, Leading, First.
+    pub mode: SimpleInspectMode,
+    /// Pattern to match (None for CHARACTERS mode).
+    pub pattern: Option<String>,
+    /// Replacement string.
+    pub by: String,
+    /// BEFORE INITIAL delimiter.
+    pub before: Option<String>,
+    /// AFTER INITIAL delimiter.
+    pub after: Option<String>,
+}
+
+/// INSPECT mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimpleInspectMode {
+    /// CHARACTERS (count or replace all characters).
+    Characters,
+    /// ALL occurrences.
+    All,
+    /// LEADING occurrences only.
+    Leading,
+    /// FIRST occurrence only.
+    First,
+}
+
+/// File open mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimpleOpenMode {
+    Input,
+    Output,
+    InputOutput,
+    Extend,
+}
+
+/// WRITE ADVANCING clause.
+#[derive(Debug, Clone)]
+pub enum SimpleAdvancing {
+    Lines { count: i64, before: bool },
+    Page { before: bool },
+}
+
+/// SEARCH WHEN clause.
+#[derive(Debug, Clone)]
+pub struct SimpleSearchWhen {
+    /// Condition to check.
+    pub condition: SimpleCondition,
+    /// Statements to execute on match.
+    pub statements: Vec<SimpleStatement>,
 }
 
 /// EVALUATE WHEN clause.
@@ -854,7 +991,7 @@ fn execute_statement_impl(
             }
 
             // Determine the UNTIL condition: prefer varying's until (embedded in `until` field)
-            let effective_until = if let Some(ref v) = varying {
+            let effective_until = if let Some(ref _v) = varying {
                 // For PERFORM VARYING, the UNTIL is stored in the `until` field
                 until.as_ref()
             } else {
@@ -892,6 +1029,385 @@ fn execute_statement_impl(
                 }
             }
         }
+
+        SimpleStatement::InspectTallying { target, counter, for_clauses } => {
+            let target_val = env.get(target).cloned().unwrap_or(CobolValue::Alphanumeric(String::new()));
+            let data = target_val.to_display_string();
+            let mut tally: i64 = 0;
+
+            for clause in for_clauses {
+                let (start, end) = inspect_delimited_range(&data, &clause.before, &clause.after);
+                let region = &data[start..end];
+
+                match clause.mode {
+                    SimpleInspectMode::Characters => {
+                        tally += region.len() as i64;
+                    }
+                    SimpleInspectMode::All => {
+                        if let Some(ref pat) = clause.pattern {
+                            if !pat.is_empty() {
+                                tally += region.matches(pat.as_str()).count() as i64;
+                            }
+                        }
+                    }
+                    SimpleInspectMode::Leading => {
+                        if let Some(ref pat) = clause.pattern {
+                            if !pat.is_empty() {
+                                let mut pos = 0;
+                                while pos + pat.len() <= region.len() && &region[pos..pos + pat.len()] == pat.as_str() {
+                                    tally += 1;
+                                    pos += pat.len();
+                                }
+                            }
+                        }
+                    }
+                    SimpleInspectMode::First => {
+                        if let Some(ref pat) = clause.pattern {
+                            if region.contains(pat.as_str()) {
+                                tally += 1;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Add tally to the counter variable (INSPECT adds to existing value)
+            let current = env.get(counter).cloned().unwrap_or(CobolValue::from_i64(0));
+            let new_val = to_numeric(&current).add(&NumericValue::from_i64(tally));
+            env.set(counter, CobolValue::Numeric(new_val))?;
+        }
+
+        SimpleStatement::InspectReplacing { target, rules } => {
+            let target_val = env.get(target).cloned().unwrap_or(CobolValue::Alphanumeric(String::new()));
+            let mut data = target_val.to_display_string();
+
+            for rule in rules {
+                let (start, end) = inspect_delimited_range(&data, &rule.before, &rule.after);
+
+                match rule.mode {
+                    SimpleInspectMode::Characters => {
+                        // Replace every character in range with first char of `by`
+                        if let Some(by_ch) = rule.by.chars().next() {
+                            let mut chars: Vec<char> = data.chars().collect();
+                            for i in start..end.min(chars.len()) {
+                                chars[i] = by_ch;
+                            }
+                            data = chars.into_iter().collect();
+                        }
+                    }
+                    SimpleInspectMode::All => {
+                        if let Some(ref pat) = rule.pattern {
+                            if !pat.is_empty() {
+                                let prefix = &data[..start];
+                                let region = &data[start..end];
+                                let suffix = &data[end..];
+                                let replaced = region.replace(pat.as_str(), &rule.by);
+                                data = format!("{}{}{}", prefix, replaced, suffix);
+                            }
+                        }
+                    }
+                    SimpleInspectMode::Leading => {
+                        if let Some(ref pat) = rule.pattern {
+                            if !pat.is_empty() {
+                                let prefix = data[..start].to_string();
+                                let region = data[start..end].to_string();
+                                let suffix = data[end..].to_string();
+                                let mut result = String::new();
+                                let mut pos = 0;
+                                // Replace leading occurrences only
+                                while pos + pat.len() <= region.len() && &region[pos..pos + pat.len()] == pat.as_str() {
+                                    result.push_str(&rule.by);
+                                    pos += pat.len();
+                                }
+                                result.push_str(&region[pos..]);
+                                data = format!("{}{}{}", prefix, result, suffix);
+                            }
+                        }
+                    }
+                    SimpleInspectMode::First => {
+                        if let Some(ref pat) = rule.pattern {
+                            if !pat.is_empty() {
+                                let prefix = data[..start].to_string();
+                                let region = data[start..end].to_string();
+                                let suffix = data[end..].to_string();
+                                let replaced = region.replacen(pat.as_str(), &rule.by, 1);
+                                data = format!("{}{}{}", prefix, replaced, suffix);
+                            }
+                        }
+                    }
+                }
+            }
+
+            env.set(target, CobolValue::Alphanumeric(data))?;
+        }
+
+        SimpleStatement::InspectConverting { target, from, to, before, after } => {
+            let target_val = env.get(target).cloned().unwrap_or(CobolValue::Alphanumeric(String::new()));
+            let mut data = target_val.to_display_string();
+            let (start, end) = inspect_delimited_range(&data, before, after);
+
+            let from_chars: Vec<char> = from.chars().collect();
+            let to_chars: Vec<char> = to.chars().collect();
+            let mut chars: Vec<char> = data.chars().collect();
+
+            for i in start..end.min(chars.len()) {
+                if let Some(pos) = from_chars.iter().position(|&c| c == chars[i]) {
+                    if pos < to_chars.len() {
+                        chars[i] = to_chars[pos];
+                    }
+                }
+            }
+            data = chars.into_iter().collect();
+            env.set(target, CobolValue::Alphanumeric(data))?;
+        }
+
+        SimpleStatement::Unstring { source, delimiters, into, tallying } => {
+            let source_val = env.get(source).cloned().unwrap_or(CobolValue::Alphanumeric(String::new()));
+            let data = source_val.to_display_string();
+
+            let parts: Vec<&str> = if delimiters.is_empty() {
+                vec![data.as_str()]
+            } else {
+                // Split by the first delimiter (simplified: multiple delimiters act as alternatives)
+                let mut result = vec![data.as_str()];
+                for delim in delimiters {
+                    let mut new_result = Vec::new();
+                    for part in &result {
+                        let splits: Vec<&str> = part.split(delim.as_str()).collect();
+                        new_result.extend(splits);
+                    }
+                    result = new_result;
+                }
+                result
+            };
+
+            let mut field_count: i64 = 0;
+            for (i, target) in into.iter().enumerate() {
+                if i < parts.len() {
+                    env.set(target, CobolValue::Alphanumeric(parts[i].to_string()))?;
+                    field_count += 1;
+                }
+            }
+
+            if let Some(ref tally_var) = tallying {
+                env.set(tally_var, CobolValue::from_i64(field_count))?;
+            }
+        }
+
+        SimpleStatement::FileOpen { files } => {
+            for (file_name, mode) in files {
+                let file_upper = file_name.to_uppercase();
+                let records = if *mode == SimpleOpenMode::Input || *mode == SimpleOpenMode::InputOutput {
+                    // Try to load records from a pre-set variable "{FILE}-DATA"
+                    let data_var = format!("{}-DATA", file_upper);
+                    if let Some(val) = env.get(&data_var) {
+                        val.to_display_string().lines().map(|l| l.to_string()).collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+                env.files.insert(file_upper.clone(), FileState {
+                    mode: *mode,
+                    records,
+                    position: 0,
+                    status: "00".to_string(),
+                });
+                // Set FILE STATUS variable if it exists
+                let status_var = format!("{}-STATUS", file_upper);
+                let _ = env.set(&status_var, CobolValue::Alphanumeric("00".to_string()));
+            }
+        }
+
+        SimpleStatement::FileClose { files } => {
+            for file_name in files {
+                let file_upper = file_name.to_uppercase();
+                if env.files.remove(&file_upper).is_none() {
+                    // File wasn't open — status 42
+                    let status_var = format!("{}-STATUS", file_upper);
+                    let _ = env.set(&status_var, CobolValue::Alphanumeric("42".to_string()));
+                } else {
+                    let status_var = format!("{}-STATUS", file_upper);
+                    let _ = env.set(&status_var, CobolValue::Alphanumeric("00".to_string()));
+                }
+            }
+        }
+
+        SimpleStatement::FileRead { file, into, at_end, not_at_end } => {
+            let file_upper = file.to_uppercase();
+            let (record, at_eof) = if let Some(state) = env.files.get_mut(&file_upper) {
+                if state.position < state.records.len() {
+                    let rec = state.records[state.position].clone();
+                    state.position += 1;
+                    state.status = "00".to_string();
+                    (Some(rec), false)
+                } else {
+                    state.status = "10".to_string();
+                    (None, true)
+                }
+            } else {
+                (None, true)
+            };
+
+            // Set FILE STATUS
+            let status = if at_eof { "10" } else { "00" };
+            let status_var = format!("{}-STATUS", file_upper);
+            let _ = env.set(&status_var, CobolValue::Alphanumeric(status.to_string()));
+
+            if let Some(rec) = record {
+                // Set INTO target or the file record variable
+                if let Some(ref into_var) = into {
+                    env.set(into_var, CobolValue::Alphanumeric(rec))?;
+                } else {
+                    // Set the record variable (conventionally: {FILE}-RECORD)
+                    let rec_var = format!("{}-RECORD", file_upper);
+                    env.set(&rec_var, CobolValue::Alphanumeric(rec))?;
+                }
+                // Execute NOT AT END
+                if let Some(ref stmts) = not_at_end {
+                    execute_statements(stmts, program, env)?;
+                }
+            } else {
+                // Execute AT END
+                if let Some(ref stmts) = at_end {
+                    execute_statements(stmts, program, env)?;
+                }
+            }
+        }
+
+        SimpleStatement::FileWrite { record, from, advancing } => {
+            // Get the record data
+            let data = if let Some(ref from_var) = from {
+                env.get(from_var).map(|v| v.to_display_string()).unwrap_or_default()
+            } else {
+                env.get(record).map(|v| v.to_display_string()).unwrap_or_default()
+            };
+
+            // Find which file this record belongs to (try {RECORD}-FILE or any open output file)
+            let file_key = {
+                let record_upper = record.to_uppercase();
+                // Convention: look for an output file whose name is a prefix of the record name
+                let mut found = None;
+                for (name, state) in &env.files {
+                    if state.mode == SimpleOpenMode::Output || state.mode == SimpleOpenMode::Extend
+                        || state.mode == SimpleOpenMode::InputOutput
+                    {
+                        if found.is_none() {
+                            found = Some(name.clone());
+                        }
+                        // Check if record name starts with file name
+                        if record_upper.starts_with(name.as_str()) {
+                            found = Some(name.clone());
+                            break;
+                        }
+                    }
+                }
+                found
+            };
+
+            if let Some(ref fk) = file_key {
+                if let Some(state) = env.files.get_mut(fk) {
+                    // Handle ADVANCING
+                    if let Some(ref adv) = advancing {
+                        match adv {
+                            SimpleAdvancing::Lines { count, before } => {
+                                if *before {
+                                    for _ in 0..*count { state.records.push(String::new()); }
+                                    state.records.push(data.clone());
+                                } else {
+                                    state.records.push(data.clone());
+                                    for _ in 0..*count { state.records.push(String::new()); }
+                                }
+                            }
+                            SimpleAdvancing::Page { before } => {
+                                if *before {
+                                    state.records.push("\x0C".to_string()); // form feed
+                                }
+                                state.records.push(data.clone());
+                                if !before {
+                                    state.records.push("\x0C".to_string());
+                                }
+                            }
+                        }
+                    } else {
+                        state.records.push(data);
+                    }
+                    state.status = "00".to_string();
+                }
+            }
+        }
+
+        SimpleStatement::Search { table, all, at_end, when_clauses } => {
+            // Get table size by looking for subscripted variables
+            let table_upper = table.to_uppercase();
+            let max_entries = 100; // Safety limit
+            let mut found = false;
+
+            if *all {
+                // Binary search: simplified — just check each entry (proper binary search
+                // would require knowing the sorted key, which we approximate here)
+                let mut lo = 1i64;
+                let mut hi = max_entries;
+                while lo <= hi && !found && !env.is_stopped() {
+                    let mid = (lo + hi) / 2;
+                    // Set the index variable
+                    let idx_var = format!("{}-IDX", table_upper);
+                    env.set(&idx_var, CobolValue::from_i64(mid))?;
+
+                    // Check if entry exists
+                    let entry_key = format!("{}({})", table_upper, mid);
+                    if env.get(&entry_key).is_none() {
+                        hi = mid - 1;
+                        continue;
+                    }
+
+                    // Check WHEN conditions
+                    for when in when_clauses {
+                        if eval_condition(&when.condition, env, program)? {
+                            execute_statements(&when.statements, program, env)?;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        // Can't determine search direction without key info; just try next
+                        lo = mid + 1;
+                    }
+                }
+            } else {
+                // Sequential search
+                for i in 1..=max_entries {
+                    if env.is_stopped() { break; }
+
+                    // Set index variable
+                    let idx_var = format!("{}-IDX", table_upper);
+                    env.set(&idx_var, CobolValue::from_i64(i))?;
+
+                    // Check if entry exists
+                    let entry_key = format!("{}({})", table_upper, i);
+                    if env.get(&entry_key).is_none() {
+                        break; // Past end of table
+                    }
+
+                    // Check WHEN conditions
+                    for when in when_clauses {
+                        if eval_condition(&when.condition, env, program)? {
+                            execute_statements(&when.statements, program, env)?;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if found { break; }
+                }
+            }
+
+            if !found {
+                if let Some(ref stmts) = at_end {
+                    execute_statements(stmts, program, env)?;
+                }
+            }
+        }
     }
 
     Ok(())
@@ -911,6 +1427,25 @@ fn to_numeric(value: &CobolValue) -> NumericValue {
         }
         CobolValue::Group(_) => NumericValue::from_i64(0),
     }
+}
+
+/// Compute the effective byte range for INSPECT BEFORE/AFTER INITIAL delimiters.
+fn inspect_delimited_range(data: &str, before: &Option<String>, after: &Option<String>) -> (usize, usize) {
+    let mut start = 0;
+    let mut end = data.len();
+
+    if let Some(ref after_delim) = after {
+        if let Some(pos) = data.find(after_delim.as_str()) {
+            start = pos + after_delim.len();
+        }
+    }
+    if let Some(ref before_delim) = before {
+        if let Some(pos) = data[start..].find(before_delim.as_str()) {
+            end = start + pos;
+        }
+    }
+
+    (start, end)
 }
 
 /// Resolve a target expression to a variable name string.
