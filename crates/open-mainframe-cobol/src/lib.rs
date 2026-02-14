@@ -16,6 +16,10 @@
 //! 5. Code generation produces LLVM IR
 //! 6. LLVM compiles to native code
 
+// Macro definitions must come first so they're visible to all subsequent modules.
+#[macro_use]
+mod macros;
+
 pub mod ast;
 #[cfg(feature = "llvm")]
 pub mod codegen;

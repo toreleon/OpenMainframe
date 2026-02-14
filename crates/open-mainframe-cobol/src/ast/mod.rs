@@ -470,120 +470,32 @@ pub struct Paragraph {
 // ============================================================================
 
 /// A COBOL statement.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum Statement {
-    /// MOVE statement.
-    Move(MoveStatement),
-    /// COMPUTE statement.
-    Compute(ComputeStatement),
-    /// ADD statement.
-    Add(AddStatement),
-    /// SUBTRACT statement.
-    Subtract(SubtractStatement),
-    /// MULTIPLY statement.
-    Multiply(MultiplyStatement),
-    /// DIVIDE statement.
-    Divide(DivideStatement),
-    /// IF statement.
-    If(IfStatement),
-    /// EVALUATE statement.
-    Evaluate(EvaluateStatement),
-    /// PERFORM statement.
-    Perform(PerformStatement),
-    /// CALL statement.
-    Call(CallStatement),
-    /// DISPLAY statement.
-    Display(DisplayStatement),
-    /// ACCEPT statement.
-    Accept(AcceptStatement),
-    /// OPEN statement.
-    Open(OpenStatement),
-    /// CLOSE statement.
-    Close(CloseStatement),
-    /// READ statement.
-    Read(ReadStatement),
-    /// WRITE statement.
-    Write(WriteStatement),
-    /// STOP RUN statement.
-    StopRun(StopRunStatement),
-    /// GOBACK statement.
-    GoBack(GoBackStatement),
-    /// EXIT statement.
-    Exit(ExitStatement),
-    /// GO TO statement.
-    GoTo(GoToStatement),
-    /// INITIALIZE statement.
-    Initialize(InitializeStatement),
-    /// INSPECT statement.
-    Inspect(InspectStatement),
-    /// STRING statement.
-    String(StringStatement),
-    /// UNSTRING statement.
-    Unstring(UnstringStatement),
-    /// SET statement.
-    Set(SetStatement),
-    /// SEARCH statement.
-    Search(SearchStatement),
-    /// CANCEL statement.
-    Cancel(CancelStatement),
-    /// SORT statement.
-    Sort(SortStatement),
-    /// MERGE statement.
-    Merge(MergeStatement),
-    /// RELEASE statement.
-    Release(ReleaseStatement),
-    /// RETURN statement.
-    ReturnStmt(ReturnStatement),
-    /// CONTINUE statement.
-    Continue(ContinueStatement),
-    /// EXEC CICS statement.
-    ExecCics(ExecCicsStatement),
-    /// EXEC SQL statement.
-    ExecSql(ExecSqlStatement),
-}
-
-impl Statement {
-    /// Get the span of this statement.
-    pub fn span(&self) -> Span {
-        match self {
-            Statement::Move(s) => s.span,
-            Statement::Compute(s) => s.span,
-            Statement::Add(s) => s.span,
-            Statement::Subtract(s) => s.span,
-            Statement::Multiply(s) => s.span,
-            Statement::Divide(s) => s.span,
-            Statement::If(s) => s.span,
-            Statement::Evaluate(s) => s.span,
-            Statement::Perform(s) => s.span,
-            Statement::Call(s) => s.span,
-            Statement::Display(s) => s.span,
-            Statement::Accept(s) => s.span,
-            Statement::Open(s) => s.span,
-            Statement::Close(s) => s.span,
-            Statement::Read(s) => s.span,
-            Statement::Write(s) => s.span,
-            Statement::StopRun(s) => s.span,
-            Statement::GoBack(s) => s.span,
-            Statement::Exit(s) => s.span,
-            Statement::GoTo(s) => s.span,
-            Statement::Initialize(s) => s.span,
-            Statement::Inspect(s) => s.span,
-            Statement::String(s) => s.span,
-            Statement::Unstring(s) => s.span,
-            Statement::Set(s) => s.span,
-            Statement::Search(s) => s.span,
-            Statement::Cancel(s) => s.span,
-            Statement::Sort(s) => s.span,
-            Statement::Merge(s) => s.span,
-            Statement::Release(s) => s.span,
-            Statement::ReturnStmt(s) => s.span,
-            Statement::Continue(s) => s.span,
-            Statement::ExecCics(s) => s.span,
-            Statement::ExecSql(s) => s.span,
+///
+/// Generated from the master statement table in `macros.rs`.
+/// To add a new statement variant, add one line there — the enum variant
+/// and `span()` arm are generated automatically.
+macro_rules! gen_statement_enum {
+    ( $($variant:ident($stype:ident)),* $(,)? ) => {
+        #[derive(Debug, Clone, PartialEq)]
+        #[non_exhaustive]
+        pub enum Statement {
+            $(
+                #[doc = concat!(stringify!($variant), " statement.")]
+                $variant($stype),
+            )*
         }
-    }
+
+        impl Statement {
+            /// Get the span of this statement.
+            pub fn span(&self) -> Span {
+                match self {
+                    $(Statement::$variant(s) => s.span,)*
+                }
+            }
+        }
+    };
 }
+for_all_statement_variants!(gen_statement_enum);
 
 /// MOVE statement.
 #[derive(Debug, Clone, PartialEq)]

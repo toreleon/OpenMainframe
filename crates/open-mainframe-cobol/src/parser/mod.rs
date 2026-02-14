@@ -1058,96 +1058,42 @@ impl Parser {
         })
     }
 
-    fn parse_statement(&mut self) -> Result<Statement> {
-        if self.check_keyword(Keyword::Move) {
-            self.parse_move_statement()
-        } else if self.check_keyword(Keyword::Display) {
-            self.parse_display_statement()
-        } else if self.check_keyword(Keyword::Stop) {
-            self.parse_stop_statement()
-        } else if self.check_keyword(Keyword::Perform) {
-            self.parse_perform_statement()
-        } else if self.check_keyword(Keyword::If) {
-            self.parse_if_statement()
-        } else if self.check_keyword(Keyword::Continue) {
-            self.parse_continue_statement()
-        } else if self.check_keyword(Keyword::Add) {
-            self.parse_add_statement()
-        } else if self.check_keyword(Keyword::Subtract) {
-            self.parse_subtract_statement()
-        } else if self.check_keyword(Keyword::Multiply) {
-            self.parse_multiply_statement()
-        } else if self.check_keyword(Keyword::Divide) {
-            self.parse_divide_statement()
-        } else if self.check_keyword(Keyword::Compute) {
-            self.parse_compute_statement()
-        } else if self.check_keyword(Keyword::String) {
-            self.parse_string_statement()
-        } else if self.check_keyword(Keyword::Unstring) {
-            self.parse_unstring_statement()
-        } else if self.check_keyword(Keyword::Call) {
-            self.parse_call_statement()
-        } else if self.check_keyword(Keyword::GoBack) {
-            self.parse_goback_statement()
-        } else if self.check_keyword(Keyword::GoTo) || self.check_keyword(Keyword::Go) {
-            self.parse_goto_statement()
-        } else if self.check_keyword(Keyword::Exit) {
-            self.parse_exit_statement()
-        } else if self.check_keyword(Keyword::Exec) {
-            self.parse_exec_statement()
-        } else if self.check_keyword(Keyword::Set) {
-            self.parse_set_statement()
-        } else if self.check_keyword(Keyword::Initialize) {
-            self.parse_initialize_statement()
-        } else if self.check_keyword(Keyword::Accept) {
-            self.parse_accept_statement()
-        } else if self.check_keyword(Keyword::Open) {
-            self.parse_open_statement()
-        } else if self.check_keyword(Keyword::Close) {
-            self.parse_close_statement()
-        } else if self.check_keyword(Keyword::Read) {
-            self.parse_read_statement()
-        } else if self.check_keyword(Keyword::Write) {
-            self.parse_write_statement()
-        } else if self.check_keyword(Keyword::Rewrite) {
-            self.parse_rewrite_statement()
-        } else if self.check_keyword(Keyword::Delete) {
-            self.parse_delete_statement()
-        } else if self.check_keyword(Keyword::Start) {
-            self.parse_start_statement()
-        } else if self.check_keyword(Keyword::Search) {
-            self.parse_search_statement()
-        } else if self.check_keyword(Keyword::Inspect) {
-            self.parse_inspect_statement()
-        } else if self.check_keyword(Keyword::Evaluate) {
-            self.parse_evaluate_statement()
-        } else if self.check_keyword(Keyword::Cancel) {
-            self.parse_cancel_statement()
-        } else if self.check_keyword(Keyword::Sort) {
-            self.parse_sort_statement()
-        } else if self.check_keyword(Keyword::Merge) {
-            self.parse_merge_statement()
-        } else if self.check_keyword(Keyword::Release) {
-            self.parse_release_statement()
-        } else if self.check_keyword(Keyword::Return) {
-            self.parse_return_statement()
-        } else {
-            // Skip unknown statement - but stop at statement boundaries
-            let start = self.current_span();
-            // Must advance at least once to avoid infinite loop
-            self.advance();
-            // Then skip tokens until we hit a statement start or scope terminator
-            while !self.check(TokenKind::Period)
-                && !self.is_at_end()
-                && !self.is_statement_start()
-                && !self.is_scope_terminator()
-            {
-                self.advance();
-            }
-            Ok(Statement::Continue(ContinueStatement { span: start }))
-        }
-    }
+}
 
+// ── Macro-generated dispatch ───────────────────────────────────────────────
+// Statement dispatch is generated from `for_parse_dispatch!` in `macros.rs`.
+// To add a new statement, add one line there and write the `parse_xxx_statement()`
+// method in the impl block below.
+
+macro_rules! gen_parse_dispatch {
+    ( $($kw:ident => $parse_fn:ident),* $(,)? ) => {
+        impl Parser {
+            fn parse_statement(&mut self) -> Result<Statement> {
+                $(
+                    if self.check_keyword(Keyword::$kw) {
+                        return self.$parse_fn();
+                    }
+                )*
+                // Skip unknown statement - but stop at statement boundaries
+                let start = self.current_span();
+                // Must advance at least once to avoid infinite loop
+                self.advance();
+                // Then skip tokens until we hit a statement start or scope terminator
+                while !self.check(TokenKind::Period)
+                    && !self.is_at_end()
+                    && !self.is_statement_start()
+                    && !self.is_scope_terminator()
+                {
+                    self.advance();
+                }
+                Ok(Statement::Continue(ContinueStatement { span: start }))
+            }
+        }
+    };
+}
+for_parse_dispatch!(gen_parse_dispatch);
+
+impl Parser {
     fn parse_move_statement(&mut self) -> Result<Statement> {
         let start = self.current_span();
         self.advance(); // MOVE
@@ -3564,47 +3510,23 @@ impl Parser {
             && self.peek_keyword(Keyword::Section)
     }
 
-    fn is_statement_start(&self) -> bool {
-        self.check_keyword(Keyword::Move)
-            || self.check_keyword(Keyword::Add)
-            || self.check_keyword(Keyword::Subtract)
-            || self.check_keyword(Keyword::Multiply)
-            || self.check_keyword(Keyword::Divide)
-            || self.check_keyword(Keyword::Compute)
-            || self.check_keyword(Keyword::If)
-            || self.check_keyword(Keyword::Evaluate)
-            || self.check_keyword(Keyword::Perform)
-            || self.check_keyword(Keyword::Call)
-            || self.check_keyword(Keyword::Display)
-            || self.check_keyword(Keyword::Accept)
-            || self.check_keyword(Keyword::Open)
-            || self.check_keyword(Keyword::Close)
-            || self.check_keyword(Keyword::Read)
-            || self.check_keyword(Keyword::Write)
-            || self.check_keyword(Keyword::Rewrite)
-            || self.check_keyword(Keyword::Delete)
-            || self.check_keyword(Keyword::Start)
-            || self.check_keyword(Keyword::Stop)
-            || self.check_keyword(Keyword::Exit)
-            || self.check_keyword(Keyword::Go)
-            || self.check_keyword(Keyword::GoBack)
-            || self.check_keyword(Keyword::Initialize)
-            || self.check_keyword(Keyword::Inspect)
-            || self.check_keyword(Keyword::String)
-            || self.check_keyword(Keyword::Unstring)
-            || self.check_keyword(Keyword::Set)
-            || self.check_keyword(Keyword::Search)
-            || self.check_keyword(Keyword::Sort)
-            || self.check_keyword(Keyword::Merge)
-            || self.check_keyword(Keyword::Release)
-            || self.check_keyword(Keyword::Return)
-            || self.check_keyword(Keyword::Cancel)
-            || self.check_keyword(Keyword::Continue)
-            || self.check_keyword(Keyword::Exec)
-            // Also include scope terminators
-            || self.is_scope_terminator()
-    }
+}
 
+// `is_statement_start` — generated from `for_parse_dispatch!` in `macros.rs`.
+macro_rules! gen_is_statement_start {
+    ( $($kw:ident => $parse_fn:ident),* $(,)? ) => {
+        impl Parser {
+            fn is_statement_start(&self) -> bool {
+                $(self.check_keyword(Keyword::$kw) ||)*
+                // Also include scope terminators
+                self.is_scope_terminator()
+            }
+        }
+    };
+}
+for_parse_dispatch!(gen_is_statement_start);
+
+impl Parser {
     fn is_scope_terminator(&self) -> bool {
         self.check_keyword(Keyword::Else)
             || self.check_keyword(Keyword::EndIf)
