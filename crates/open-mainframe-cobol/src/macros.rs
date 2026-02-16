@@ -341,6 +341,10 @@ macro_rules! for_all_keywords {
                 Resume          => "RESUME",
                 Typedef         => "TYPEDEF",
                 Strong          => "STRONG",
+                EndJson         => "END-JSON",
+                Name            => "NAME",
+                Suppress        => "SUPPRESS",
+                Detail          => "DETAIL",
             }
             @alias {
                 // Contextual variants constructed by the parser, NOT in the
@@ -410,6 +414,8 @@ macro_rules! for_all_statement_variants {
             Continue(ContinueStatement),
             ExecCics(ExecCicsStatement),
             ExecSql(ExecSqlStatement),
+            JsonGenerate(JsonGenerateStatement),
+            JsonParse(JsonParseStatement),
         }
     };
 }
@@ -467,6 +473,7 @@ macro_rules! for_parse_dispatch {
             Merge       => parse_merge_statement,
             Release     => parse_release_statement,
             Return      => parse_return_statement,
+            Json        => parse_json_statement,
         }
     };
 }

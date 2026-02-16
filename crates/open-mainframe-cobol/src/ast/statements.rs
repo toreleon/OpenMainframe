@@ -837,3 +837,66 @@ pub struct ExecSqlStatement {
     /// Source span.
     pub span: Span,
 }
+
+/// JSON GENERATE statement.
+///
+/// `JSON GENERATE receiver FROM source [COUNT IN count]
+///  [NAME OF name IS 'literal' ...] [SUPPRESS ...] [ON EXCEPTION ...] [END-JSON]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsonGenerateStatement {
+    /// Receiver data item (where JSON text is stored).
+    pub receiver: QualifiedName,
+    /// Source data item (the COBOL group to convert).
+    pub source: QualifiedName,
+    /// Optional COUNT IN data item (stores the number of characters generated).
+    pub count_in: Option<QualifiedName>,
+    /// NAME phrases: rename fields in the JSON output.
+    pub name_phrases: Vec<JsonNamePhrase>,
+    /// SUPPRESS phrases: omit fields from JSON output.
+    pub suppress_phrases: Vec<QualifiedName>,
+    /// ON EXCEPTION handler.
+    pub on_exception: Option<Vec<Statement>>,
+    /// NOT ON EXCEPTION handler.
+    pub not_on_exception: Option<Vec<Statement>>,
+    /// Whether END-JSON was present.
+    pub end_json: bool,
+    /// Source span.
+    pub span: Span,
+}
+
+/// JSON PARSE statement.
+///
+/// `JSON PARSE source INTO target [WITH DETAIL]
+///  [NAME OF name IS 'literal' ...] [SUPPRESS ...] [ON EXCEPTION ...] [END-JSON]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsonParseStatement {
+    /// Source data item containing JSON text.
+    pub source: QualifiedName,
+    /// Target data item to populate from JSON.
+    pub target: QualifiedName,
+    /// Whether WITH DETAIL was specified.
+    pub with_detail: bool,
+    /// NAME phrases: map JSON keys to COBOL field names.
+    pub name_phrases: Vec<JsonNamePhrase>,
+    /// SUPPRESS phrases: omit fields from parsing.
+    pub suppress_phrases: Vec<QualifiedName>,
+    /// ON EXCEPTION handler.
+    pub on_exception: Option<Vec<Statement>>,
+    /// NOT ON EXCEPTION handler.
+    pub not_on_exception: Option<Vec<Statement>>,
+    /// Whether END-JSON was present.
+    pub end_json: bool,
+    /// Source span.
+    pub span: Span,
+}
+
+/// NAME phrase for JSON GENERATE/PARSE.
+///
+/// `NAME OF data-name IS 'json-name'`
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsonNamePhrase {
+    /// The COBOL data name.
+    pub data_name: QualifiedName,
+    /// The JSON key name to use instead.
+    pub json_name: String,
+}

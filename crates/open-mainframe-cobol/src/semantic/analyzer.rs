@@ -367,7 +367,9 @@ impl SemanticAnalyzer {
             | Statement::Continue(_)
             | Statement::Inspect(_)
             | Statement::ExecCics(_)
-            | Statement::ExecSql(_) => {}
+            | Statement::ExecSql(_)
+            | Statement::JsonGenerate(_)
+            | Statement::JsonParse(_) => {}
         }
     }
 

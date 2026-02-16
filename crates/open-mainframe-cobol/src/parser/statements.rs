@@ -2932,4 +2932,231 @@ impl super::Parser {
         }
         Ok(delimiters)
     }
+
+    // ========================================================================
+    // JSON GENERATE / JSON PARSE
+    // ========================================================================
+
+    /// Parse a JSON GENERATE or JSON PARSE statement.
+    ///
+    /// The dispatch macro sends us here when the current token is `JSON`.
+    pub(super) fn parse_json_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // JSON
+
+        if self.check_keyword(Keyword::Generate) {
+            self.parse_json_generate_statement(start)
+        } else if self.check_keyword(Keyword::Parse) {
+            self.parse_json_parse_statement(start)
+        } else {
+            Err(CobolError::ParseError {
+                message: format!(
+                    "Expected GENERATE or PARSE after JSON, found {:?}",
+                    self.current().kind
+                ),
+            })
+        }
+    }
+
+    /// Parse `JSON GENERATE receiver FROM source [COUNT IN count]
+    ///  [NAME ...] [SUPPRESS ...] [ON EXCEPTION ...] [NOT ON EXCEPTION ...] [END-JSON]`
+    fn parse_json_generate_statement(&mut self, start: Span) -> Result<Statement> {
+        self.advance(); // GENERATE
+
+        let receiver = self.parse_qualified_name()?;
+
+        self.expect_keyword(Keyword::From)?;
+        let source = self.parse_qualified_name()?;
+
+        // Optional COUNT IN
+        let count_in = if self.check_keyword(Keyword::Count) {
+            self.advance(); // COUNT
+            if self.check_keyword(Keyword::Into) || self.check_identifier_value("IN") {
+                self.advance(); // IN
+            }
+            Some(self.parse_qualified_name()?)
+        } else {
+            None
+        };
+
+        // Optional NAME phrases
+        let name_phrases = self.parse_json_name_phrases()?;
+
+        // Optional SUPPRESS phrases
+        let suppress_phrases = self.parse_json_suppress_phrases()?;
+
+        // ON EXCEPTION / NOT ON EXCEPTION
+        let (on_exception, not_on_exception) = self.parse_json_exception_handlers()?;
+
+        // Optional END-JSON
+        let end_json = if self.check_keyword(Keyword::EndJson) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        self.skip_if(TokenKind::Period);
+        let end = self.previous_span();
+
+        Ok(Statement::JsonGenerate(JsonGenerateStatement {
+            receiver,
+            source,
+            count_in,
+            name_phrases,
+            suppress_phrases,
+            on_exception,
+            not_on_exception,
+            end_json,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse `JSON PARSE source INTO target [WITH DETAIL]
+    ///  [NAME ...] [SUPPRESS ...] [ON EXCEPTION ...] [NOT ON EXCEPTION ...] [END-JSON]`
+    fn parse_json_parse_statement(&mut self, start: Span) -> Result<Statement> {
+        self.advance(); // PARSE
+
+        let source = self.parse_qualified_name()?;
+
+        self.expect_keyword(Keyword::Into)?;
+        let target = self.parse_qualified_name()?;
+
+        // Optional WITH DETAIL
+        let with_detail = if self.check_keyword(Keyword::With) {
+            self.advance(); // WITH
+            if self.check_keyword(Keyword::Detail) {
+                self.advance(); // DETAIL
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // Optional NAME phrases
+        let name_phrases = self.parse_json_name_phrases()?;
+
+        // Optional SUPPRESS phrases
+        let suppress_phrases = self.parse_json_suppress_phrases()?;
+
+        // ON EXCEPTION / NOT ON EXCEPTION
+        let (on_exception, not_on_exception) = self.parse_json_exception_handlers()?;
+
+        // Optional END-JSON
+        let end_json = if self.check_keyword(Keyword::EndJson) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        self.skip_if(TokenKind::Period);
+        let end = self.previous_span();
+
+        Ok(Statement::JsonParse(JsonParseStatement {
+            source,
+            target,
+            with_detail,
+            name_phrases,
+            suppress_phrases,
+            on_exception,
+            not_on_exception,
+            end_json,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse NAME phrases: `NAME [OF] data-name IS 'literal' ...`
+    fn parse_json_name_phrases(&mut self) -> Result<Vec<JsonNamePhrase>> {
+        let mut phrases = Vec::new();
+        while self.check_keyword(Keyword::Name) {
+            self.advance(); // NAME
+            // Optional OF keyword
+            if self.check_keyword(Keyword::Of) {
+                self.advance();
+            }
+            let data_name = self.parse_qualified_name()?;
+            self.expect_keyword(Keyword::Is)?;
+            // Expect a string literal for the JSON name
+            let json_name = match &self.current().kind {
+                TokenKind::StringLiteral(s) => {
+                    let name = s.clone();
+                    self.advance();
+                    name
+                }
+                _ => {
+                    return Err(CobolError::ParseError {
+                        message: format!(
+                            "Expected string literal after IS in NAME phrase, found {:?}",
+                            self.current().kind
+                        ),
+                    });
+                }
+            };
+            phrases.push(JsonNamePhrase { data_name, json_name });
+        }
+        Ok(phrases)
+    }
+
+    /// Parse SUPPRESS phrases: `SUPPRESS data-name ...`
+    fn parse_json_suppress_phrases(&mut self) -> Result<Vec<QualifiedName>> {
+        let mut names = Vec::new();
+        if self.check_keyword(Keyword::Suppress) {
+            self.advance(); // SUPPRESS
+            // Parse one or more data names to suppress
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.check_keyword(Keyword::OnException)
+                && !self.check_keyword(Keyword::Not)
+                && !self.check_keyword(Keyword::EndJson)
+                && !self.check_keyword(Keyword::Name)
+                && !self.is_statement_start()
+            {
+                names.push(self.parse_qualified_name()?);
+            }
+        }
+        Ok(names)
+    }
+
+    /// Parse ON EXCEPTION / NOT ON EXCEPTION handlers for JSON statements.
+    fn parse_json_exception_handlers(
+        &mut self,
+    ) -> Result<(Option<Vec<Statement>>, Option<Vec<Statement>>)> {
+        let mut on_exception = None;
+        let mut not_on_exception = None;
+
+        // ON EXCEPTION
+        if self.check_keyword(Keyword::OnException) {
+            self.advance(); // EXCEPTION
+            let mut stmts = Vec::new();
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.check_keyword(Keyword::Not)
+                && !self.check_keyword(Keyword::EndJson)
+            {
+                stmts.push(self.parse_statement()?);
+            }
+            on_exception = Some(stmts);
+        }
+
+        // NOT ON EXCEPTION
+        if self.check_keyword(Keyword::Not) {
+            self.advance(); // NOT
+            if self.check_keyword(Keyword::OnException) {
+                self.advance(); // EXCEPTION
+                let mut stmts = Vec::new();
+                while !self.check(TokenKind::Period)
+                    && !self.is_at_end()
+                    && !self.check_keyword(Keyword::EndJson)
+                {
+                    stmts.push(self.parse_statement()?);
+                }
+                not_on_exception = Some(stmts);
+            }
+        }
+
+        Ok((on_exception, not_on_exception))
+    }
 }

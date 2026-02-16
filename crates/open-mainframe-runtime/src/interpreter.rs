@@ -218,6 +218,32 @@ impl Environment {
     pub fn resume(&mut self) {
         self.stopped = false;
     }
+
+    /// Get a variable value as a string (returns empty string if not found).
+    pub fn get_string(&self, name: &str) -> String {
+        match self.get(name) {
+            Some(CobolValue::Alphanumeric(s)) => s.clone(),
+            Some(CobolValue::Numeric(n)) => n.to_string(),
+            Some(CobolValue::Group(bytes)) => {
+                String::from_utf8_lossy(bytes).to_string()
+            }
+            None => String::new(),
+        }
+    }
+
+    /// Get all fields belonging to a group item (variables with the group prefix).
+    pub fn get_group_fields(&self, group: &str) -> Vec<(String, CobolValue)> {
+        let prefix = format!("{}-", group);
+        let dot_prefix = format!("{}.", group);
+        let mut fields: Vec<(String, CobolValue)> = self
+            .variables
+            .iter()
+            .filter(|(k, _)| k.starts_with(&prefix) || k.starts_with(&dot_prefix))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        fields.sort_by(|a, b| a.0.cmp(&b.0));
+        fields
+    }
 }
 
 impl Default for Environment {
@@ -366,6 +392,22 @@ pub enum SimpleStatement {
         all: bool,
         at_end: Option<Vec<SimpleStatement>>,
         when_clauses: Vec<SimpleSearchWhen>,
+    },
+    /// JSON GENERATE: convert COBOL group item to JSON text.
+    JsonGenerate {
+        /// Receiver data item name (stores JSON text).
+        receiver: String,
+        /// Source data item name (COBOL group to convert).
+        source: String,
+        /// Optional COUNT IN data item (stores character count).
+        count_in: Option<String>,
+    },
+    /// JSON PARSE: populate COBOL data items from JSON text.
+    JsonParse {
+        /// Source data item name (contains JSON text).
+        source: String,
+        /// Target data item name (COBOL group to populate).
+        target: String,
     },
 }
 
@@ -1408,6 +1450,100 @@ fn execute_statement_impl(
                 }
             }
         }
+
+        SimpleStatement::JsonGenerate { receiver, source, count_in } => {
+            // Collect fields from the source group item into a JSON object
+            let source_upper = source.to_uppercase();
+            let mut json_obj = String::from("{");
+            let mut first = true;
+
+            // Iterate through environment variables that belong to the source group
+            let fields = env.get_group_fields(&source_upper);
+            for (field_name, field_value) in &fields {
+                if !first {
+                    json_obj.push(',');
+                }
+                first = false;
+                // Strip the group prefix to get the field name
+                let short_name = field_name
+                    .strip_prefix(&format!("{}-", source_upper))
+                    .or_else(|| field_name.strip_prefix(&format!("{}.", source_upper)))
+                    .unwrap_or(field_name);
+                json_obj.push('"');
+                json_obj.push_str(short_name);
+                json_obj.push_str("\":");
+                match field_value {
+                    CobolValue::Numeric(n) => {
+                        json_obj.push_str(&n.to_string());
+                    }
+                    CobolValue::Alphanumeric(s) => {
+                        json_obj.push('"');
+                        // Escape special characters
+                        for ch in s.trim_end().chars() {
+                            match ch {
+                                '"' => json_obj.push_str("\\\""),
+                                '\\' => json_obj.push_str("\\\\"),
+                                '\n' => json_obj.push_str("\\n"),
+                                '\r' => json_obj.push_str("\\r"),
+                                '\t' => json_obj.push_str("\\t"),
+                                c => json_obj.push(c),
+                            }
+                        }
+                        json_obj.push('"');
+                    }
+                    CobolValue::Group(_) => {
+                        json_obj.push_str("{}");
+                    }
+                }
+            }
+            json_obj.push('}');
+
+            let json_len = json_obj.len() as i64;
+            env.set(receiver, CobolValue::Alphanumeric(json_obj))?;
+
+            if let Some(ref count_var) = count_in {
+                env.set(count_var, CobolValue::from_i64(json_len))?;
+            }
+
+            // Set JSON-CODE to 0 (success)
+            env.set("JSON-CODE", CobolValue::from_i64(0))?;
+        }
+
+        SimpleStatement::JsonParse { source, target } => {
+            // Get the JSON text from the source variable
+            let json_text = env.get_string(source);
+            let json_text = json_text.trim();
+
+            if json_text.starts_with('{') {
+                // Simple JSON object parsing — extract key-value pairs
+                let target_upper = target.to_uppercase();
+                // Strip outer braces and split on commas (simplified parser)
+                let inner = &json_text[1..json_text.len().saturating_sub(1)];
+                for pair in split_json_pairs(inner) {
+                    let pair = pair.trim();
+                    if let Some(colon_pos) = pair.find(':') {
+                        let key = pair[..colon_pos].trim().trim_matches('"');
+                        let value = pair[colon_pos + 1..].trim();
+                        let field_name = format!("{}-{}", target_upper, key.to_uppercase());
+
+                        if value.starts_with('"') && value.ends_with('"') {
+                            // String value
+                            let s = &value[1..value.len() - 1];
+                            env.set(&field_name, CobolValue::Alphanumeric(s.to_string()))?;
+                        } else if let Ok(n) = value.parse::<i64>() {
+                            env.set(&field_name, CobolValue::from_i64(n))?;
+                        } else {
+                            env.set(&field_name, CobolValue::Alphanumeric(value.to_string()))?;
+                        }
+                    }
+                }
+
+                env.set("JSON-CODE", CobolValue::from_i64(0))?;
+            } else {
+                // Invalid JSON
+                env.set("JSON-CODE", CobolValue::from_i64(1))?;
+            }
+        }
     }
 
     Ok(())
@@ -1427,6 +1563,32 @@ fn to_numeric(value: &CobolValue) -> NumericValue {
         }
         CobolValue::Group(_) => NumericValue::from_i64(0),
     }
+}
+
+/// Split a JSON object's inner text into key-value pairs, respecting nested strings.
+fn split_json_pairs(inner: &str) -> Vec<&str> {
+    let mut pairs = Vec::new();
+    let mut start = 0;
+    let mut in_string = false;
+    let mut depth = 0;
+
+    for (i, ch) in inner.char_indices() {
+        match ch {
+            '"' if !in_string => in_string = true,
+            '"' if in_string => in_string = false,
+            '{' | '[' if !in_string => depth += 1,
+            '}' | ']' if !in_string => depth -= 1,
+            ',' if !in_string && depth == 0 => {
+                pairs.push(&inner[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < inner.len() {
+        pairs.push(&inner[start..]);
+    }
+    pairs
 }
 
 /// Compute the effective byte range for INSPECT BEFORE/AFTER INITIAL delimiters.
