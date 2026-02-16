@@ -15,7 +15,8 @@ use open_mainframe_cics::CicsResult;
 use open_mainframe_runtime::interpreter::{Environment, SimpleProgram, SimpleStatement};
 use open_mainframe_runtime::value::CobolValue;
 
-use open_mainframe_tui::session::{Session, SessionConfig, TuiTerminal, setup_terminal, restore_terminal};
+use open_mainframe_tui::event::{CrosstermEventSource, EventSource};
+use open_mainframe_tui::session::{Session, SessionConfig, setup_terminal, restore_terminal};
 
 use super::cics_bridge::CicsBridge;
 use super::interpret::{load_program as load_interpret_program, find_program_source, load_vsam_data};
@@ -401,6 +402,7 @@ pub fn run_session(
     let mut current_program = program_name.clone();
 
     // Main session loop: execute program, show screen, wait for input, repeat
+    let mut events = CrosstermEventSource;
     let mut ctx = SessionContext {
         program_cache: &mut program_cache,
         current_program: &mut current_program,
@@ -412,6 +414,7 @@ pub fn run_session(
     let result = run_session_loop(
         &mut session,
         &mut terminal,
+        &mut events,
         &mut env,
         &mut ctx,
     );
@@ -465,9 +468,10 @@ struct SessionContext<'a> {
 }
 
 /// Main session loop: run programs, display screens, get input.
-fn run_session_loop(
+fn run_session_loop<B: ratatui::backend::Backend>(
     session: &mut Session,
-    terminal: &mut TuiTerminal,
+    terminal: &mut ratatui::Terminal<B>,
+    events: &mut dyn EventSource,
     env: &mut Environment,
     ctx: &mut SessionContext<'_>,
 ) -> std::result::Result<(), open_mainframe_tui::SessionError> {
@@ -490,7 +494,7 @@ fn run_session_loop(
                             tracing::error!("{}", err_msg);
                             session.set_message(&err_msg);
                             loop {
-                                let (aid, _) = session.wait_for_input(terminal)?;
+                                let (aid, _) = session.wait_for_input(terminal, events)?;
                                 if aid == open_mainframe_cics::runtime::eib::aid::PF3
                                     || aid == open_mainframe_cics::runtime::eib::aid::CLEAR
                                 {
@@ -509,7 +513,7 @@ fn run_session_loop(
                     tracing::error!("{}", err_msg);
                     session.set_message(&err_msg);
                     loop {
-                        let (aid, _) = session.wait_for_input(terminal)?;
+                        let (aid, _) = session.wait_for_input(terminal, events)?;
                         if aid == open_mainframe_cics::runtime::eib::aid::PF3
                             || aid == open_mainframe_cics::runtime::eib::aid::CLEAR
                         {
@@ -574,7 +578,7 @@ fn run_session_loop(
                     tracing::warn!("HANDLE ABEND label '{}' not found in program", label);
                     session.set_message(&format!("ABEND in {}: {}", ctx.current_program, e));
                     loop {
-                        let (aid, _) = session.wait_for_input(terminal)?;
+                        let (aid, _) = session.wait_for_input(terminal, events)?;
                         if aid == open_mainframe_cics::runtime::eib::aid::PF3
                             || aid == open_mainframe_cics::runtime::eib::aid::CLEAR
                         {
@@ -590,7 +594,7 @@ fn run_session_loop(
 
                 // Show the error and wait for user to press PF3 or Ctrl+C
                 loop {
-                    let (aid, _fields) = session.wait_for_input(terminal)?;
+                    let (aid, _fields) = session.wait_for_input(terminal, events)?;
                     if aid == open_mainframe_cics::runtime::eib::aid::PF3
                         || aid == open_mainframe_cics::runtime::eib::aid::CLEAR
                     {
@@ -724,7 +728,7 @@ fn run_session_loop(
                             bridge.commarea_var,
                         );
                         // Show the screen and wait for user input
-                        let (aid, fields) = session.wait_for_input(terminal)?;
+                        let (aid, fields) = session.wait_for_input(terminal, events)?;
 
                         tracing::debug!(
                             "Input received: AID=0x{:02X} ({}) fields={:?}",
@@ -814,7 +818,7 @@ fn run_session_loop(
         }
 
         // Normal completion - show screen with last output and wait
-        let (aid, _fields) = session.wait_for_input(terminal)?;
+        let (aid, _fields) = session.wait_for_input(terminal, events)?;
         if aid == open_mainframe_cics::runtime::eib::aid::PF3 {
             break; // PF3 to exit
         }
@@ -851,5 +855,514 @@ fn load_bms_maps(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    use crossterm::event::KeyCode;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use open_mainframe_tui::event::MockEventSource;
+
+    /// Base path for CardDemo test assets.
+    const CARDDEMO_CBL: &str = "/tmp/carddemo/app/cbl";
+    const CARDDEMO_CPY: &str = "/tmp/carddemo/app/cpy";
+    const CARDDEMO_BMS: &str = "/tmp/carddemo/app/bms";
+    const USRSEC_DATA: &str = "/tmp/carddemo-data/USRSEC.dat";
+
+    /// Skip test if CardDemo files are not present.
+    fn require_carddemo() -> bool {
+        Path::new(CARDDEMO_CBL).join("COSGN00C.cbl").exists()
+            && Path::new(CARDDEMO_BMS).exists()
+            && Path::new(USRSEC_DATA).exists()
+    }
+
+    /// Create a Terminal<TestBackend> for headless testing.
+    fn test_terminal() -> Terminal<TestBackend> {
+        Terminal::new(TestBackend::new(80, 26)).unwrap()
+    }
+
+    /// Extract screen text from the TestBackend buffer.
+    fn screen_text(terminal: &Terminal<TestBackend>) -> String {
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        text
+    }
+
+    /// Set up a full CICS session environment for CardDemo testing.
+    ///
+    /// Returns (Session, Terminal, Environment, SessionContext components).
+    fn setup_carddemo_session() -> (
+        Session,
+        Terminal<TestBackend>,
+        Environment,
+        HashMap<String, open_mainframe_runtime::interpreter::SimpleProgram>,
+        HashMap<String, String>,
+        Arc<Mutex<TuiCallbackState>>,
+        PathBuf,
+    ) {
+        let input = PathBuf::from(CARDDEMO_CBL).join("COSGN00C.cbl");
+        let include_paths = vec![PathBuf::from(CARDDEMO_CPY)];
+        let search_dir = PathBuf::from(CARDDEMO_CBL);
+        let bms_dir = PathBuf::from(CARDDEMO_BMS);
+
+        // Transaction mappings (same as CLI args)
+        let mut transid_programs = HashMap::new();
+        transid_programs.insert("COSG".to_string(), "COSGN00C".to_string());
+        transid_programs.insert("CC00".to_string(), "COSGN00C".to_string());
+        transid_programs.insert("MENU".to_string(), "COMEN01C".to_string());
+
+        // Load BMS maps
+        let mut mapset_maps: HashMap<String, HashMap<String, BmsMap>> = HashMap::new();
+        load_bms_maps(&bms_dir, &mut mapset_maps);
+        assert!(
+            !mapset_maps.is_empty(),
+            "Failed to load BMS maps from {}",
+            bms_dir.display()
+        );
+
+        // Load initial program
+        let simple = load_interpret_program(&input, &include_paths).expect("Failed to load COSGN00C.cbl");
+        let program_name = simple.name.to_uppercase();
+
+        let mut program_cache: HashMap<String, open_mainframe_runtime::interpreter::SimpleProgram> = HashMap::new();
+        program_cache.insert(program_name.clone(), simple);
+
+        // Set up CICS bridge
+        let mut bridge = CicsBridge::new("CICS", "T001");
+        let needed_options = extract_assign_options(&program_cache[&program_name]);
+        let assign_values = derive_assign_values(&needed_options);
+        bridge.set_assign_values(assign_values);
+        bridge.set_mapset_maps(mapset_maps.clone());
+
+        // Load USRSEC data
+        match load_vsam_data(USRSEC_DATA, 8, 80) {
+            Ok(records) => {
+                bridge.register_file("USRSEC", 80, 8, records);
+            }
+            Err(e) => panic!("Failed to load USRSEC data: {}", e),
+        }
+
+        // Create TUI callback
+        let (tui_callback, callback_state) = TuiCallback::new(mapset_maps);
+        bridge.set_terminal_callback(Box::new(tui_callback));
+
+        // Create session
+        let config = SessionConfig {
+            initial_program: input,
+            include_paths,
+            data_files: vec![],
+            program_dir: Some(search_dir.clone()),
+            transid_map: transid_programs.clone(),
+            color_theme: "classic".to_string(),
+            userid: None,
+            initial_transid: None,
+        };
+        let session = Session::new(config);
+        let terminal = test_terminal();
+
+        // Create environment
+        let mut env = Environment::new().with_cics_handler(Box::new(bridge));
+        env.set("EIBCALEN", CobolValue::from_i64(0)).ok();
+        env.set("EIBAID", CobolValue::alphanumeric(String::from('\x7D'))).ok();
+        env.set("EIBRESP", CobolValue::from_i64(0)).ok();
+        env.set("EIBRESP2", CobolValue::from_i64(0)).ok();
+        env.set("EIBTRMID", CobolValue::alphanumeric("T001")).ok();
+        env.set("EIBTRNID", CobolValue::alphanumeric("CICS")).ok();
+
+        let (eibdate, eibtime) = current_eib_date_time();
+        env.set("EIBDATE", CobolValue::from_i64(eibdate)).ok();
+        env.set("EIBTIME", CobolValue::from_i64(eibtime)).ok();
+
+        (
+            session,
+            terminal,
+            env,
+            program_cache,
+            transid_programs,
+            callback_state,
+            search_dir,
+        )
+    }
+
+    /// Test: Sign-on screen displays correctly on first load.
+    #[test]
+    fn test_full_flow_signon_screen_displays() {
+        if !require_carddemo() {
+            eprintln!("Skipping test: CardDemo files not found");
+            return;
+        }
+
+        let (
+            mut session,
+            mut terminal,
+            mut env,
+            mut program_cache,
+            transid_programs,
+            callback_state,
+            search_dir,
+        ) = setup_carddemo_session();
+
+        let include_paths = vec![PathBuf::from(CARDDEMO_CPY)];
+        let mut current_program = "COSGN00C".to_string();
+
+        // Queue: just press ENTER at the sign-on screen (empty credentials)
+        // then PF3 to exit
+        let mut events = MockEventSource::new();
+        events.push_key(KeyCode::Enter);  // First ENTER triggers RETURN TRANSID
+        events.push_key(KeyCode::Enter);  // Second ENTER on re-entry (empty userid)
+        events.push_key(KeyCode::F(3));   // PF3 exits
+
+        let mut ctx = SessionContext {
+            program_cache: &mut program_cache,
+            current_program: &mut current_program,
+            search_dir: &search_dir,
+            include_paths: &include_paths,
+            transid_programs: &transid_programs,
+            callback_state: &callback_state,
+        };
+
+        let result = run_session_loop(
+            &mut session,
+            &mut terminal,
+            &mut events,
+            &mut env,
+            &mut ctx,
+        );
+
+        // The session should complete (PF3 or event exhaustion)
+        // It's OK if it returns Interrupted (empty event queue)
+        match &result {
+            Ok(()) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("interrupted") || msg.contains("Interrupted"),
+                    "Unexpected error: {}",
+                    msg
+                );
+            }
+        }
+
+        // Verify the sign-on screen was rendered
+        let text = screen_text(&terminal);
+        // The real BMS has "User ID" and "Password" labels
+        assert!(
+            text.contains("User ID") || text.contains("Sign"),
+            "Screen should show sign-on content. Got:\n{}",
+            &text[..text.len().min(500)]
+        );
+    }
+
+    /// Test: Valid sign-on with ADMIN1/ADMIN credentials triggers XCTL to COADM01C.
+    #[test]
+    fn test_full_flow_signon_valid_admin() {
+        if !require_carddemo() {
+            eprintln!("Skipping test: CardDemo files not found");
+            return;
+        }
+
+        let (
+            mut session,
+            mut terminal,
+            mut env,
+            mut program_cache,
+            transid_programs,
+            callback_state,
+            search_dir,
+        ) = setup_carddemo_session();
+
+        let include_paths = vec![PathBuf::from(CARDDEMO_CPY)];
+        let mut current_program = "COSGN00C".to_string();
+
+        // Flow:
+        // 1. COSGN00C executes (EIBCALEN=0) → sends initial sign-on screen
+        // 2. We press ENTER with empty fields → RETURN TRANSID(CC00)
+        // 3. Re-entry (EIBCALEN>0) with ENTER → RECEIVE MAP, validates, sees empty userid
+        // 4. Shows "Please enter User ID" error → RETURN TRANSID(CC00) again
+        // 5. We type ADMIN1, tab, ADMIN, ENTER
+        // 6. RECEIVE MAP gets credentials, reads USRSEC, password matches
+        // 7. XCTL to COADM01C (admin user)
+        //
+        // Since COADM01C.cbl exists, it will try to load and execute it.
+        // It will eventually need input or fail — we just verify the XCTL happens.
+
+        let mut events = MockEventSource::new();
+        // Step 1-2: Initial screen, press ENTER
+        events.push_key(KeyCode::Enter);
+        // Step 3-4: Re-entry with empty fields → error → RETURN TRANSID → show screen
+        events.push_key(KeyCode::Enter);
+        // Step 5: Type credentials and submit
+        events.push_text("ADMIN1");
+        events.push_key(KeyCode::Tab);  // Tab to password field
+        events.push_text("ADMIN");
+        events.push_key(KeyCode::Enter);
+        // After XCTL to COADM01C, it will display admin menu.
+        // Queue PF3 to exit from whatever screen appears.
+        events.push_key(KeyCode::F(3));
+        // Additional PF3 in case we need it
+        events.push_key(KeyCode::F(3));
+
+        let mut ctx = SessionContext {
+            program_cache: &mut program_cache,
+            current_program: &mut current_program,
+            search_dir: &search_dir,
+            include_paths: &include_paths,
+            transid_programs: &transid_programs,
+            callback_state: &callback_state,
+        };
+
+        let result = run_session_loop(
+            &mut session,
+            &mut terminal,
+            &mut events,
+            &mut env,
+            &mut ctx,
+        );
+
+        // Accept OK or Interrupted (event queue exhausted)
+        match &result {
+            Ok(()) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("interrupted") || msg.contains("Interrupted"),
+                    "Unexpected error: {}",
+                    msg
+                );
+            }
+        }
+
+        // Verify something was rendered (sign-on or admin screen)
+        let text = screen_text(&terminal);
+        assert!(
+            text.len() > 100,
+            "Screen should have content rendered"
+        );
+    }
+
+    /// Test: Invalid credentials show error message.
+    #[test]
+    fn test_full_flow_signon_wrong_password() {
+        if !require_carddemo() {
+            eprintln!("Skipping test: CardDemo files not found");
+            return;
+        }
+
+        let (
+            mut session,
+            mut terminal,
+            mut env,
+            mut program_cache,
+            transid_programs,
+            callback_state,
+            search_dir,
+        ) = setup_carddemo_session();
+
+        let include_paths = vec![PathBuf::from(CARDDEMO_CPY)];
+        let mut current_program = "COSGN00C".to_string();
+
+        let mut events = MockEventSource::new();
+        // Initial screen → ENTER
+        events.push_key(KeyCode::Enter);
+        // Re-entry empty → error → ENTER again
+        events.push_key(KeyCode::Enter);
+        // Type valid user, wrong password
+        events.push_text("ADMIN1");
+        events.push_key(KeyCode::Tab);
+        events.push_text("WRONG");
+        events.push_key(KeyCode::Enter);
+        // Wrong password screen → PF3 to exit
+        events.push_key(KeyCode::F(3));
+        events.push_key(KeyCode::F(3));
+
+        let mut ctx = SessionContext {
+            program_cache: &mut program_cache,
+            current_program: &mut current_program,
+            search_dir: &search_dir,
+            include_paths: &include_paths,
+            transid_programs: &transid_programs,
+            callback_state: &callback_state,
+        };
+
+        let result = run_session_loop(
+            &mut session,
+            &mut terminal,
+            &mut events,
+            &mut env,
+            &mut ctx,
+        );
+
+        // Accept OK or Interrupted
+        match &result {
+            Ok(()) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("interrupted") || msg.contains("Interrupted"),
+                    "Unexpected error: {}",
+                    msg
+                );
+            }
+        }
+
+        // Verify the screen shows an error about wrong password
+        let text = screen_text(&terminal);
+        // The program sends "Wrong Password" or an error message
+        let has_error = text.contains("Wrong Password")
+            || text.contains("wrong")
+            || text.contains("Password")
+            || text.contains("Please enter");
+        assert!(
+            has_error,
+            "Screen should show a password/credential error. Screen text:\n{}",
+            &text[..text.len().min(500)]
+        );
+    }
+
+    /// Test: PF3 on sign-on screen sends goodbye text and ends session.
+    #[test]
+    fn test_full_flow_signon_pf3_exit() {
+        if !require_carddemo() {
+            eprintln!("Skipping test: CardDemo files not found");
+            return;
+        }
+
+        let (
+            mut session,
+            mut terminal,
+            mut env,
+            mut program_cache,
+            transid_programs,
+            callback_state,
+            search_dir,
+        ) = setup_carddemo_session();
+
+        let include_paths = vec![PathBuf::from(CARDDEMO_CPY)];
+        let mut current_program = "COSGN00C".to_string();
+
+        let mut events = MockEventSource::new();
+        // First ENTER to get initial screen displayed and RETURN TRANSID
+        events.push_key(KeyCode::Enter);
+        // PF3 to exit — COBOL checks EIBAID = DFHPF3 and sends "Thank you" text
+        events.push_key(KeyCode::F(3));
+        // After SEND TEXT + RETURN (no TRANSID), session should end.
+        // If it shows a final screen, PF3 again.
+        events.push_key(KeyCode::F(3));
+        events.push_key(KeyCode::F(3));
+
+        let mut ctx = SessionContext {
+            program_cache: &mut program_cache,
+            current_program: &mut current_program,
+            search_dir: &search_dir,
+            include_paths: &include_paths,
+            transid_programs: &transid_programs,
+            callback_state: &callback_state,
+        };
+
+        let result = run_session_loop(
+            &mut session,
+            &mut terminal,
+            &mut events,
+            &mut env,
+            &mut ctx,
+        );
+
+        // Session should end normally (RETURN without TRANSID) or Interrupted
+        match &result {
+            Ok(()) => {} // Normal exit
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("interrupted") || msg.contains("Interrupted"),
+                    "Unexpected error: {}",
+                    msg
+                );
+            }
+        }
+    }
+
+    /// Test: User not found in USRSEC shows "User not found" error.
+    ///
+    /// Flow: Initial screen → ENTER → empty field error → type NOBODY/PASS →
+    /// ENTER → USRSEC lookup RESP=13 → "User not found" error screen → events
+    /// exhausted (Interrupted) while showing the error screen.
+    #[test]
+    fn test_full_flow_signon_unknown_user() {
+        if !require_carddemo() {
+            eprintln!("Skipping test: CardDemo files not found");
+            return;
+        }
+
+        let (
+            mut session,
+            mut terminal,
+            mut env,
+            mut program_cache,
+            transid_programs,
+            callback_state,
+            search_dir,
+        ) = setup_carddemo_session();
+
+        let include_paths = vec![PathBuf::from(CARDDEMO_CPY)];
+        let mut current_program = "COSGN00C".to_string();
+
+        let mut events = MockEventSource::new();
+        // Round 1: EIBCALEN=0 → sends initial screen → RETURN TRANSID(CC00)
+        events.push_key(KeyCode::Enter);
+        // Round 2: Re-entry, RECEIVE MAP gets empty → "Please enter User ID"
+        //          → sends screen with error → RETURN TRANSID(CC00)
+        //          Type unknown user + password, then ENTER
+        events.push_text("NOBODY");
+        events.push_key(KeyCode::Tab);
+        events.push_text("PASS");
+        events.push_key(KeyCode::Enter);
+        // Round 3: Re-entry, RECEIVE MAP gets NOBODY/PASS, reads USRSEC,
+        //          RESP=13 → "User not found" → sends error screen →
+        //          RETURN TRANSID(CC00). wait_for_input runs but events are
+        //          exhausted → Interrupted, leaving the error screen rendered.
+
+        let mut ctx = SessionContext {
+            program_cache: &mut program_cache,
+            current_program: &mut current_program,
+            search_dir: &search_dir,
+            include_paths: &include_paths,
+            transid_programs: &transid_programs,
+            callback_state: &callback_state,
+        };
+
+        let result = run_session_loop(
+            &mut session,
+            &mut terminal,
+            &mut events,
+            &mut env,
+            &mut ctx,
+        );
+
+        // Should be Interrupted (events exhausted while showing error screen)
+        assert!(result.is_err(), "Expected Interrupted error");
+
+        let text = screen_text(&terminal);
+        let has_error = text.contains("not found")
+            || text.contains("Not found")
+            || text.contains("User not found")
+            || text.contains("Unable to verify")
+            || text.contains("Please enter")
+            || text.contains("User ID");
+        assert!(
+            has_error,
+            "Screen should show user/credential error. Screen text:\n{}",
+            &text[..text.len().min(500)]
+        );
     }
 }

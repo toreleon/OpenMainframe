@@ -36,6 +36,7 @@
 
 pub mod color;
 pub mod error;
+pub mod event;
 pub mod fields;
 pub mod input;
 pub mod mock;
@@ -47,4 +48,5 @@ pub mod styles;
 // Re-export key types for convenience.
 pub use color::ColorTheme;
 pub use error::SessionError;
+pub use event::{CrosstermEventSource, EventSource, MockEventSource};
 pub use session::{Session, SessionConfig, SessionState};

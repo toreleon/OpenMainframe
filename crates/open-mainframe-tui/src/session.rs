@@ -7,11 +7,12 @@ use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 
-use crossterm::event;
 use crossterm::terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::Terminal;
+
+use crate::event::EventSource;
 
 /// Terminal type alias for the TUI backend.
 pub type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
@@ -203,9 +204,13 @@ impl Session {
 
     /// Run the TUI input loop, rendering the screen and waiting for user input.
     /// Returns the AID key pressed and the modified field data.
-    pub fn wait_for_input(
+    ///
+    /// Generic over the ratatui backend and the event source so that tests
+    /// can use `TestBackend` + `MockEventSource` instead of a real terminal.
+    pub fn wait_for_input<B: ratatui::backend::Backend>(
         &mut self,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        terminal: &mut Terminal<B>,
+        events: &mut dyn EventSource,
     ) -> Result<(u8, HashMap<String, Vec<u8>>), SessionError> {
         self.needs_redraw = true;
 
@@ -216,7 +221,7 @@ impl Session {
             }
 
             // Wait for keyboard event
-            let evt = event::read().map_err(SessionError::TerminalInit)?;
+            let evt = events.read_event()?;
             let action = input::map_key_event(&evt);
 
             match action {
@@ -319,9 +324,9 @@ impl Session {
     }
 
     /// Render the TUI screen.
-    fn render(
+    fn render<B: ratatui::backend::Backend>(
         &self,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        terminal: &mut Terminal<B>,
     ) -> Result<(), SessionError> {
         let theme = &self.theme;
         let field_table = &self.field_table;
