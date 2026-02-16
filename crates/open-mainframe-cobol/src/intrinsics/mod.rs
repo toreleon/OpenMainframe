@@ -630,6 +630,63 @@ pub static INTRINSIC_FUNCTIONS: &[IntrinsicFunction] = &[
         max_args: Some(1),
         description: "Test if YYYYDDD Julian date is valid (0=valid)",
     },
+    // ISO 8601 FORMATTED date/time functions (Epic 74)
+    IntrinsicFunction {
+        name: "FORMATTED-CURRENT-DATE",
+        category: FunctionCategory::DateTime,
+        result_type: FunctionResultType::Alphanumeric,
+        min_args: 1,
+        max_args: Some(1),
+        description: "Current date/time in ISO 8601 format",
+    },
+    IntrinsicFunction {
+        name: "FORMATTED-DATE",
+        category: FunctionCategory::DateTime,
+        result_type: FunctionResultType::Alphanumeric,
+        min_args: 2,
+        max_args: Some(2),
+        description: "Integer date to ISO 8601 date string",
+    },
+    IntrinsicFunction {
+        name: "FORMATTED-TIME",
+        category: FunctionCategory::DateTime,
+        result_type: FunctionResultType::Alphanumeric,
+        min_args: 2,
+        max_args: Some(2),
+        description: "Seconds past midnight to ISO 8601 time string",
+    },
+    IntrinsicFunction {
+        name: "FORMATTED-DATETIME",
+        category: FunctionCategory::DateTime,
+        result_type: FunctionResultType::Alphanumeric,
+        min_args: 3,
+        max_args: Some(3),
+        description: "Integer date and seconds to ISO 8601 datetime string",
+    },
+    IntrinsicFunction {
+        name: "INTEGER-OF-FORMATTED-DATE",
+        category: FunctionCategory::DateTime,
+        result_type: FunctionResultType::Integer,
+        min_args: 2,
+        max_args: Some(2),
+        description: "ISO 8601 date string to integer date",
+    },
+    IntrinsicFunction {
+        name: "SECONDS-FROM-FORMATTED-TIME",
+        category: FunctionCategory::DateTime,
+        result_type: FunctionResultType::Numeric,
+        min_args: 2,
+        max_args: Some(2),
+        description: "ISO 8601 time string to seconds past midnight",
+    },
+    IntrinsicFunction {
+        name: "TEST-FORMATTED-DATETIME",
+        category: FunctionCategory::DateTime,
+        result_type: FunctionResultType::Integer,
+        min_args: 2,
+        max_args: Some(2),
+        description: "Test if ISO 8601 datetime string is valid (0=valid)",
+    },
 ];
 
 /// Look up an intrinsic function by name.
@@ -743,11 +800,30 @@ mod tests {
     }
 
     #[test]
+    fn test_iso8601_formatted_functions() {
+        assert!(lookup_function("FORMATTED-CURRENT-DATE").is_some());
+        assert!(lookup_function("FORMATTED-DATE").is_some());
+        assert!(lookup_function("FORMATTED-TIME").is_some());
+        assert!(lookup_function("FORMATTED-DATETIME").is_some());
+        assert!(lookup_function("INTEGER-OF-FORMATTED-DATE").is_some());
+        assert!(lookup_function("SECONDS-FROM-FORMATTED-TIME").is_some());
+        assert!(lookup_function("TEST-FORMATTED-DATETIME").is_some());
+
+        let fcd = lookup_function("FORMATTED-CURRENT-DATE").unwrap();
+        assert_eq!(fcd.min_args, 1);
+        assert_eq!(fcd.max_args, Some(1));
+        assert_eq!(fcd.category, FunctionCategory::DateTime);
+
+        let sfft = lookup_function("SECONDS-FROM-FORMATTED-TIME").unwrap();
+        assert_eq!(sfft.result_type, FunctionResultType::Numeric);
+    }
+
+    #[test]
     fn test_total_function_count() {
-        // We should have 64+ functions registered now
+        // We should have 71+ functions registered now (64 + 7 ISO 8601)
         assert!(
-            INTRINSIC_FUNCTIONS.len() >= 64,
-            "Expected at least 64 registered functions, got {}",
+            INTRINSIC_FUNCTIONS.len() >= 71,
+            "Expected at least 71 registered functions, got {}",
             INTRINSIC_FUNCTIONS.len()
         );
     }

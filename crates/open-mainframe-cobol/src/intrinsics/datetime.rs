@@ -336,6 +336,268 @@ pub fn is_valid_date(year: i32, month: i32, day: i32) -> bool {
     day <= days_in_month(year, month)
 }
 
+// ============================================================================
+// ISO 8601 FORMATTED Date/Time Functions (Epic 74)
+// ============================================================================
+
+/// FUNCTION FORMATTED-CURRENT-DATE implementation.
+///
+/// Returns the current date/time formatted according to the given ISO 8601
+/// format string (e.g. "YYYY-MM-DDThh:mm:ss").
+pub fn formatted_current_date(format: &str) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let secs = now.as_secs();
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+
+    let hours = (time_of_day / 3600) as i32;
+    let minutes = ((time_of_day % 3600) / 60) as i32;
+    let seconds = (time_of_day % 60) as i32;
+
+    let total_days = days as i32 + 719528;
+    let (year, month, day) = days_to_ymd_simple(total_days);
+
+    apply_datetime_format(format, year, month, day, hours, minutes, seconds)
+}
+
+/// FUNCTION FORMATTED-DATE implementation.
+///
+/// Converts an integer date to a formatted ISO 8601 date string.
+pub fn formatted_date(format: &str, integer_date: IntegerDate) -> String {
+    let (year, month, day) = days_to_ymd(integer_date);
+    apply_datetime_format(format, year, month, day, 0, 0, 0)
+}
+
+/// FUNCTION FORMATTED-TIME implementation.
+///
+/// Converts seconds past midnight to a formatted ISO 8601 time string.
+pub fn formatted_time(format: &str, seconds_past: f64) -> String {
+    let total_secs = seconds_past as i32;
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    apply_datetime_format(format, 0, 0, 0, hours, minutes, seconds)
+}
+
+/// FUNCTION FORMATTED-DATETIME implementation.
+///
+/// Combines an integer date and seconds past midnight into a formatted
+/// ISO 8601 datetime string.
+pub fn formatted_datetime(format: &str, integer_date: IntegerDate, seconds_past: f64) -> String {
+    let (year, month, day) = days_to_ymd(integer_date);
+    let total_secs = seconds_past as i32;
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    apply_datetime_format(format, year, month, day, hours, minutes, seconds)
+}
+
+/// FUNCTION INTEGER-OF-FORMATTED-DATE implementation.
+///
+/// Parses an ISO 8601 date string and returns the integer date.
+pub fn integer_of_formatted_date(format: &str, date_str: &str) -> IntegerDate {
+    let (year, month, day) = parse_formatted_date(format, date_str);
+    ymd_to_days(year, month, day)
+}
+
+/// FUNCTION SECONDS-FROM-FORMATTED-TIME implementation.
+///
+/// Parses an ISO 8601 time string and returns seconds past midnight.
+pub fn seconds_from_formatted_time(format: &str, time_str: &str) -> f64 {
+    let (hours, minutes, seconds) = parse_formatted_time(format, time_str);
+    hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds as f64
+}
+
+/// FUNCTION TEST-FORMATTED-DATETIME implementation.
+///
+/// Tests if a datetime string matches the given format and represents a valid date/time.
+/// Returns 0 if valid, non-zero (position of first invalid component) if not.
+pub fn test_formatted_datetime(format: &str, datetime_str: &str) -> i32 {
+    // Check length consistency
+    if datetime_str.len() != format.len() {
+        return 1;
+    }
+
+    // Try to parse based on format
+    let mut year = 0i32;
+    let mut month = 0i32;
+    let mut day = 0i32;
+    let mut hours = 0i32;
+    let mut minutes = 0i32;
+    let mut seconds = 0i32;
+    let mut has_date = false;
+    let mut has_time = false;
+
+    let fmt_chars: Vec<char> = format.chars().collect();
+    let str_chars: Vec<char> = datetime_str.chars().collect();
+    let mut i = 0;
+
+    while i < fmt_chars.len() {
+        match fmt_chars[i] {
+            'Y' if i + 3 < fmt_chars.len() && fmt_chars[i..i + 4].iter().all(|&c| c == 'Y') => {
+                has_date = true;
+                if let Ok(y) = datetime_str[i..i + 4].parse::<i32>() {
+                    year = y;
+                } else {
+                    return (i + 1) as i32;
+                }
+                i += 4;
+            }
+            'M' if i + 1 < fmt_chars.len() && fmt_chars[i + 1] == 'M' && !has_time => {
+                if let Ok(m) = datetime_str[i..i + 2].parse::<i32>() {
+                    month = m;
+                } else {
+                    return (i + 1) as i32;
+                }
+                i += 2;
+            }
+            'D' if i + 1 < fmt_chars.len() && fmt_chars[i + 1] == 'D' => {
+                if let Ok(d) = datetime_str[i..i + 2].parse::<i32>() {
+                    day = d;
+                } else {
+                    return (i + 1) as i32;
+                }
+                i += 2;
+            }
+            'h' if i + 1 < fmt_chars.len() && fmt_chars[i + 1] == 'h' => {
+                has_time = true;
+                if let Ok(h) = datetime_str[i..i + 2].parse::<i32>() {
+                    hours = h;
+                } else {
+                    return (i + 1) as i32;
+                }
+                i += 2;
+            }
+            'm' if i + 1 < fmt_chars.len() && fmt_chars[i + 1] == 'm' => {
+                if let Ok(m) = datetime_str[i..i + 2].parse::<i32>() {
+                    minutes = m;
+                } else {
+                    return (i + 1) as i32;
+                }
+                i += 2;
+            }
+            's' if i + 1 < fmt_chars.len() && fmt_chars[i + 1] == 's' => {
+                if let Ok(s) = datetime_str[i..i + 2].parse::<i32>() {
+                    seconds = s;
+                } else {
+                    return (i + 1) as i32;
+                }
+                i += 2;
+            }
+            _ => {
+                // Literal character — must match exactly
+                if str_chars[i] != fmt_chars[i] {
+                    return (i + 1) as i32;
+                }
+                i += 1;
+            }
+        }
+    }
+
+    // Validate date if present
+    if has_date {
+        if year < 1601 || year > 9999 {
+            return 1;
+        }
+        if month < 1 || month > 12 {
+            return format.find("MM").map(|p| p + 1).unwrap_or(5) as i32;
+        }
+        if day < 1 || day > days_in_month(year, month) {
+            return format.find("DD").map(|p| p + 1).unwrap_or(8) as i32;
+        }
+    }
+
+    // Validate time if present
+    if has_time {
+        if hours < 0 || hours > 23 {
+            return format.find("hh").map(|p| p + 1).unwrap_or(1) as i32;
+        }
+        if minutes < 0 || minutes > 59 {
+            return format.find("mm").map(|p| p + 1).unwrap_or(1) as i32;
+        }
+        if seconds < 0 || seconds > 59 {
+            return format.find("ss").map(|p| p + 1).unwrap_or(1) as i32;
+        }
+    }
+
+    0 // Valid
+}
+
+/// Apply a format string to date/time components.
+fn apply_datetime_format(
+    format: &str,
+    year: i32,
+    month: i32,
+    day: i32,
+    hours: i32,
+    minutes: i32,
+    seconds: i32,
+) -> String {
+    let mut result = format.to_string();
+    result = result.replace("YYYY", &format!("{:04}", year));
+    result = result.replace("MM", &format!("{:02}", month));
+    result = result.replace("DD", &format!("{:02}", day));
+    result = result.replace("hh", &format!("{:02}", hours));
+    result = result.replace("mm", &format!("{:02}", minutes));
+    result = result.replace("ss", &format!("{:02}", seconds));
+    result
+}
+
+/// Parse a formatted date string according to a format.
+fn parse_formatted_date(format: &str, date_str: &str) -> (i32, i32, i32) {
+    let mut year = 1;
+    let mut month = 1;
+    let mut day = 1;
+
+    if let Some(pos) = format.find("YYYY") {
+        if pos + 4 <= date_str.len() {
+            year = date_str[pos..pos + 4].parse().unwrap_or(1);
+        }
+    }
+    if let Some(pos) = format.find("MM") {
+        if pos + 2 <= date_str.len() {
+            month = date_str[pos..pos + 2].parse().unwrap_or(1);
+        }
+    }
+    if let Some(pos) = format.find("DD") {
+        if pos + 2 <= date_str.len() {
+            day = date_str[pos..pos + 2].parse().unwrap_or(1);
+        }
+    }
+
+    (year, month, day)
+}
+
+/// Parse a formatted time string according to a format.
+fn parse_formatted_time(format: &str, time_str: &str) -> (i32, i32, i32) {
+    let mut hours = 0;
+    let mut minutes = 0;
+    let mut seconds = 0;
+
+    if let Some(pos) = format.find("hh") {
+        if pos + 2 <= time_str.len() {
+            hours = time_str[pos..pos + 2].parse().unwrap_or(0);
+        }
+    }
+    if let Some(pos) = format.find("mm") {
+        if pos + 2 <= time_str.len() {
+            minutes = time_str[pos..pos + 2].parse().unwrap_or(0);
+        }
+    }
+    if let Some(pos) = format.find("ss") {
+        if pos + 2 <= time_str.len() {
+            seconds = time_str[pos..pos + 2].parse().unwrap_or(0);
+        }
+    }
+
+    (hours, minutes, seconds)
+}
+
 /// Calculate age in years.
 pub fn age_in_years(birth_date: CobolDate, current_date: CobolDate) -> i32 {
     let birth_year = birth_date / 10000;
@@ -491,5 +753,73 @@ mod tests {
         assert_eq!(test_day_yyyyddd(2026366), 5); // Invalid: 2026 not leap
         assert_eq!(test_day_yyyyddd(2024366), 0); // Valid: 2024 is leap
         assert_eq!(test_day_yyyyddd(2026000), 5); // Invalid day 0
+    }
+
+    // ── ISO 8601 FORMATTED function tests ─────────────────────────
+
+    #[test]
+    fn test_formatted_current_date() {
+        let result = formatted_current_date("YYYY-MM-DDThh:mm:ss");
+        assert_eq!(result.len(), 19);
+        assert!(result.starts_with("20")); // 21st century
+        assert_eq!(&result[4..5], "-");
+        assert_eq!(&result[7..8], "-");
+        assert_eq!(&result[10..11], "T");
+    }
+
+    #[test]
+    fn test_formatted_date() {
+        let int_date = integer_of_date(20260216);
+        let result = formatted_date("YYYY-MM-DD", int_date);
+        assert_eq!(result, "2026-02-16");
+    }
+
+    #[test]
+    fn test_formatted_time() {
+        let result = formatted_time("hh:mm:ss", 43200.0); // noon
+        assert_eq!(result, "12:00:00");
+
+        let result2 = formatted_time("hh:mm:ss", 45045.0); // 12:30:45
+        assert_eq!(result2, "12:30:45");
+    }
+
+    #[test]
+    fn test_formatted_datetime() {
+        let int_date = integer_of_date(20260216);
+        let result = formatted_datetime("YYYY-MM-DDThh:mm:ss", int_date, 43200.0);
+        assert_eq!(result, "2026-02-16T12:00:00");
+    }
+
+    #[test]
+    fn test_integer_of_formatted_date() {
+        let int_date = integer_of_formatted_date("YYYY-MM-DD", "2026-02-16");
+        let back = date_of_integer(int_date);
+        assert_eq!(back, 20260216);
+    }
+
+    #[test]
+    fn test_seconds_from_formatted_time() {
+        let secs = seconds_from_formatted_time("hh:mm:ss", "12:30:45");
+        assert_eq!(secs, 45045.0);
+
+        let secs2 = seconds_from_formatted_time("hh:mm:ss", "00:00:00");
+        assert_eq!(secs2, 0.0);
+    }
+
+    #[test]
+    fn test_validate_formatted_datetime_valid() {
+        assert_eq!(super::test_formatted_datetime("YYYY-MM-DD", "2026-02-16"), 0);
+        assert_eq!(super::test_formatted_datetime("hh:mm:ss", "12:30:45"), 0);
+        assert_eq!(super::test_formatted_datetime("YYYY-MM-DDThh:mm:ss", "2026-02-16T12:30:45"), 0);
+    }
+
+    #[test]
+    fn test_validate_formatted_datetime_invalid() {
+        // Invalid month (February 30)
+        assert_ne!(super::test_formatted_datetime("YYYY-MM-DD", "2026-02-30"), 0);
+        // Length mismatch
+        assert_ne!(super::test_formatted_datetime("YYYY-MM-DD", "2026-2-16"), 0);
+        // Invalid separator
+        assert_ne!(super::test_formatted_datetime("YYYY-MM-DD", "2026/02/16"), 0);
     }
 }
