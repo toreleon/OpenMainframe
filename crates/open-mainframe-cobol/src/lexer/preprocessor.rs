@@ -9,7 +9,7 @@
 //! - Circular inclusion detection
 
 use crate::error::CobolError;
-use crate::lexer::copybook::{apply_replacements, CopybookConfig, CopybookResolver, Replacement};
+use crate::lexer::copybook::{apply_replacements, CopybookConfig, CopybookResolver, Replacement, ReplacementMode};
 use crate::lexer::source::SourceFormat;
 
 /// Result type for preprocessor operations.
@@ -213,6 +213,7 @@ impl Preprocessor {
         let mut current_from = String::new();
         let mut current_to = String::new();
         let mut collecting_to = false;
+        let mut current_mode = ReplacementMode::Full;
 
         for part in text.split_whitespace() {
             if part.eq_ignore_ascii_case("BY") {
@@ -220,17 +221,44 @@ impl Preprocessor {
                 continue;
             }
 
+            // Check for LEADING/TRAILING before a new pattern
+            if !collecting_to && current_from.is_empty() {
+                if part.eq_ignore_ascii_case("LEADING") {
+                    current_mode = ReplacementMode::Leading;
+                    continue;
+                } else if part.eq_ignore_ascii_case("TRAILING") {
+                    current_mode = ReplacementMode::Trailing;
+                    continue;
+                }
+            }
+
             if collecting_to {
-                // Check if this starts a new pattern
-                if part.starts_with("==") && !current_to.is_empty() {
+                // Check if this starts a new pattern or LEADING/TRAILING
+                let is_new_pattern = part.starts_with("==") && !current_to.is_empty();
+                let is_mode_keyword = (part.eq_ignore_ascii_case("LEADING")
+                    || part.eq_ignore_ascii_case("TRAILING"))
+                    && !current_to.is_empty();
+
+                if is_new_pattern || is_mode_keyword {
                     // Finish current replacement
                     if !current_from.is_empty() {
-                        replacements.push(Replacement::new(
+                        replacements.push(Replacement::with_mode(
                             Self::clean_delimiters(&current_from),
                             Self::clean_delimiters(&current_to),
+                            current_mode,
                         ));
                     }
-                    current_from = part.to_string();
+                    current_mode = ReplacementMode::Full;
+                    if is_mode_keyword {
+                        if part.eq_ignore_ascii_case("LEADING") {
+                            current_mode = ReplacementMode::Leading;
+                        } else {
+                            current_mode = ReplacementMode::Trailing;
+                        }
+                        current_from.clear();
+                    } else {
+                        current_from = part.to_string();
+                    }
                     current_to.clear();
                     collecting_to = false;
                 } else {
@@ -249,9 +277,10 @@ impl Preprocessor {
 
         // Handle last replacement
         if !current_from.is_empty() {
-            replacements.push(Replacement::new(
+            replacements.push(Replacement::with_mode(
                 Self::clean_delimiters(&current_from),
                 Self::clean_delimiters(&current_to),
+                current_mode,
             ));
         }
 

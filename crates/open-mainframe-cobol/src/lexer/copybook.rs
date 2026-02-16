@@ -194,6 +194,17 @@ impl CopybookResolver {
     }
 }
 
+/// Replacement mode for COPY REPLACING.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplacementMode {
+    /// Full word replacement (default).
+    Full,
+    /// LEADING — match and replace prefix of each token.
+    Leading,
+    /// TRAILING — match and replace suffix of each token.
+    Trailing,
+}
+
 /// A REPLACING clause specification.
 #[derive(Debug, Clone)]
 pub struct Replacement {
@@ -201,14 +212,26 @@ pub struct Replacement {
     pub from: String,
     /// The replacement text.
     pub to: String,
+    /// Replacement mode (Full, Leading, or Trailing).
+    pub mode: ReplacementMode,
 }
 
 impl Replacement {
-    /// Create a new replacement.
+    /// Create a new full-word replacement.
     pub fn new(from: impl Into<String>, to: impl Into<String>) -> Self {
         Self {
             from: from.into(),
             to: to.into(),
+            mode: ReplacementMode::Full,
+        }
+    }
+
+    /// Create a new replacement with a specific mode.
+    pub fn with_mode(from: impl Into<String>, to: impl Into<String>, mode: ReplacementMode) -> Self {
+        Self {
+            from: from.into(),
+            to: to.into(),
+            mode,
         }
     }
 }
@@ -216,13 +239,11 @@ impl Replacement {
 /// Apply REPLACING substitutions to text.
 ///
 /// Handles the COBOL REPLACING syntax where patterns are delimited by ==.
+/// Supports Full, Leading, and Trailing replacement modes.
 pub fn apply_replacements(text: &str, replacements: &[Replacement]) -> String {
     let mut result = text.to_string();
 
     for replacement in replacements {
-        // Handle both forms:
-        // 1. ==:PREFIX:== BY ==WS-==
-        // 2. Simple word replacement
         let from = replacement
             .from
             .trim_start_matches("==")
@@ -232,7 +253,39 @@ pub fn apply_replacements(text: &str, replacements: &[Replacement]) -> String {
             .trim_start_matches("==")
             .trim_end_matches("==");
 
-        result = result.replace(from, to);
+        match replacement.mode {
+            ReplacementMode::Full => {
+                result = result.replace(from, to);
+            }
+            ReplacementMode::Leading => {
+                // Apply LEADING replacement to each whitespace-delimited token
+                result = result
+                    .split_whitespace()
+                    .map(|token| {
+                        if token.to_uppercase().starts_with(&from.to_uppercase()) {
+                            format!("{}{}", to, &token[from.len()..])
+                        } else {
+                            token.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+            }
+            ReplacementMode::Trailing => {
+                // Apply TRAILING replacement to each whitespace-delimited token
+                result = result
+                    .split_whitespace()
+                    .map(|token| {
+                        if token.to_uppercase().ends_with(&from.to_uppercase()) {
+                            format!("{}{}", &token[..token.len() - from.len()], to)
+                        } else {
+                            token.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+            }
+        }
     }
 
     result
@@ -249,8 +302,18 @@ pub fn parse_replacing_clause(text: &str) -> Vec<Replacement> {
     let mut i = 0;
 
     while i < parts.len() {
+        // Check for LEADING or TRAILING mode
+        let mut mode = ReplacementMode::Full;
+        if parts[i].eq_ignore_ascii_case("LEADING") {
+            mode = ReplacementMode::Leading;
+            i += 1;
+        } else if parts[i].eq_ignore_ascii_case("TRAILING") {
+            mode = ReplacementMode::Trailing;
+            i += 1;
+        }
+
         // Look for pattern
-        if parts[i].starts_with("==") || parts[i].starts_with(":") {
+        if i < parts.len() && (parts[i].starts_with("==") || parts[i].starts_with(":")) {
             // Collect the "from" pattern
             let mut from = String::new();
             while i < parts.len() && !parts[i].eq_ignore_ascii_case("BY") {
@@ -266,22 +329,30 @@ pub fn parse_replacing_clause(text: &str) -> Vec<Replacement> {
                 i += 1;
             }
 
-            // Collect the "to" pattern
+            // Collect the "to" pattern — the first token after BY is the replacement
             let mut to = String::new();
-            while i < parts.len()
-                && !parts[i].starts_with("==")
-                && !parts[i].starts_with(":")
-                && !parts[i].eq_ignore_ascii_case("REPLACING")
-            {
+            let mut got_first_to = false;
+            while i < parts.len() {
+                // After collecting the first to-token, stop at the next pattern start
+                if got_first_to
+                    && (parts[i].starts_with("==")
+                        || parts[i].starts_with(":")
+                        || parts[i].eq_ignore_ascii_case("REPLACING")
+                        || parts[i].eq_ignore_ascii_case("LEADING")
+                        || parts[i].eq_ignore_ascii_case("TRAILING"))
+                {
+                    break;
+                }
                 if !to.is_empty() {
                     to.push(' ');
                 }
                 to.push_str(parts[i]);
                 i += 1;
+                got_first_to = true;
             }
 
             if !from.is_empty() {
-                replacements.push(Replacement::new(from, to));
+                replacements.push(Replacement::with_mode(from, to, mode));
             }
         } else {
             i += 1;
@@ -374,5 +445,37 @@ mod tests {
         assert!(!replacements.is_empty());
         // Verify first replacement captures the pattern
         assert!(replacements[0].from.contains(":PREFIX:"));
+    }
+
+    #[test]
+    fn test_leading_replacement() {
+        let text = ":TAG:-FIELD-A :TAG:-FIELD-B OTHER-FIELD";
+        let replacements = vec![Replacement::with_mode(":TAG:", "WS", ReplacementMode::Leading)];
+        let result = apply_replacements(text, &replacements);
+        assert_eq!(result, "WS-FIELD-A WS-FIELD-B OTHER-FIELD");
+    }
+
+    #[test]
+    fn test_trailing_replacement() {
+        let text = "RECORD-OLD FIELD-OLD UNCHANGED";
+        let replacements = vec![Replacement::with_mode("-OLD", "-NEW", ReplacementMode::Trailing)];
+        let result = apply_replacements(text, &replacements);
+        assert_eq!(result, "RECORD-NEW FIELD-NEW UNCHANGED");
+    }
+
+    #[test]
+    fn test_parse_replacing_leading() {
+        let clause = "LEADING ==:TAG:== BY ==WS-==";
+        let replacements = parse_replacing_clause(clause);
+        assert_eq!(replacements.len(), 1);
+        assert_eq!(replacements[0].mode, ReplacementMode::Leading);
+    }
+
+    #[test]
+    fn test_parse_replacing_trailing() {
+        let clause = "TRAILING ==-OLD== BY ==-NEW==";
+        let replacements = parse_replacing_clause(clause);
+        assert_eq!(replacements.len(), 1);
+        assert_eq!(replacements[0].mode, ReplacementMode::Trailing);
     }
 }
