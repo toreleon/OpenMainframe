@@ -468,6 +468,16 @@ pub enum SimpleStatement {
     },
     /// PERFORM paragraph
     Perform { target: String, times: Option<u32> },
+    /// PERFORM paragraph-1 THRU paragraph-2
+    PerformThru {
+        from: String,
+        thru: String,
+        times: Option<u32>,
+    },
+    /// EXIT PARAGRAPH: exit the current paragraph.
+    ExitParagraph,
+    /// EXIT SECTION: exit the current section.
+    ExitSection,
     /// STOP RUN
     StopRun { return_code: Option<i32> },
     /// EVALUATE statement
@@ -797,6 +807,23 @@ pub enum SimpleCompareOp {
     GreaterOrEqual,
 }
 
+/// Control flow signal returned by statement execution.
+///
+/// Used to implement unstructured control flow (GO TO, EXIT PARAGRAPH, etc.)
+/// without rewriting the entire interpreter. Statements return `Continue` for
+/// normal sequential flow, or a signal that the caller must handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlFlow {
+    /// Normal: continue with the next statement.
+    Continue,
+    /// GO TO: jump to the named paragraph.
+    GoTo(String),
+    /// EXIT PARAGRAPH: exit the current paragraph.
+    ExitParagraph,
+    /// EXIT SECTION: exit the current section.
+    ExitSection,
+}
+
 /// Simple program representation.
 #[derive(Debug, Clone)]
 pub struct SimpleProgram {
@@ -808,6 +835,8 @@ pub struct SimpleProgram {
     pub statements: Vec<SimpleStatement>,
     /// Named paragraphs.
     pub paragraphs: HashMap<String, Vec<SimpleStatement>>,
+    /// Ordered list of paragraph names (for PERFORM THRU and fall-through).
+    pub paragraph_order: Vec<String>,
     /// Level-88 condition names: condition_name -> (parent_field, value).
     pub condition_names: HashMap<String, (String, String)>,
     /// Group item layouts: group_name -> list of sub-fields with offsets.
@@ -944,32 +973,97 @@ pub fn execute(program: &SimpleProgram, env: &mut Environment) -> Result<i32> {
     }
 
     // Execute main statements
-    execute_statements(&program.statements, program, env)?;
+    let flow = execute_statements(&program.statements, program, env)?;
+
+    // Handle top-level GO TO: execute paragraphs with fall-through
+    if let ControlFlow::GoTo(label) = flow {
+        execute_from_paragraph(&label, program, env)?;
+    }
 
     Ok(env.return_code())
 }
 
-/// Execute a list of statements.
-pub fn execute_statements(
-    statements: &[SimpleStatement],
+/// Execute paragraphs starting from the given label, with fall-through.
+///
+/// This implements the COBOL paragraph fall-through model: after a GO TO
+/// transfers control to a paragraph, execution continues sequentially
+/// through subsequent paragraphs until STOP RUN or GOBACK.
+fn execute_from_paragraph(
+    start_label: &str,
     program: &SimpleProgram,
     env: &mut Environment,
 ) -> Result<()> {
-    for stmt in statements {
-        if env.is_stopped() || env.is_goback() {
-            break;
+    let start_upper = start_label.to_uppercase();
+
+    // Find the starting paragraph in the ordered list
+    if let Some(start_idx) = program.paragraph_order.iter()
+        .position(|p| p.eq_ignore_ascii_case(&start_upper))
+    {
+        let mut idx = start_idx;
+        while idx < program.paragraph_order.len() {
+            if env.is_stopped() || env.is_goback() {
+                break;
+            }
+            let para_name = &program.paragraph_order[idx];
+            if let Some(para) = program.paragraphs.get(&para_name.to_uppercase()) {
+                let flow = execute_statements(para, program, env)?;
+                match flow {
+                    ControlFlow::Continue => {}
+                    ControlFlow::ExitParagraph => {}
+                    ControlFlow::ExitSection => break,
+                    ControlFlow::GoTo(ref label) => {
+                        // Recursive GO TO: find new target and continue
+                        let goto_upper = label.to_uppercase();
+                        if let Some(goto_idx) = program.paragraph_order.iter()
+                            .position(|p| p.eq_ignore_ascii_case(&goto_upper))
+                        {
+                            idx = goto_idx;
+                            continue;
+                        }
+                        // If not found in ordered list, try direct execution
+                        if let Some(target_para) = program.paragraphs.get(&goto_upper) {
+                            execute_statements(target_para, program, env)?;
+                        }
+                        break;
+                    }
+                }
+            }
+            idx += 1;
         }
-        execute_statement(stmt, program, env)?;
+    } else {
+        // Not in ordered list — try HashMap
+        if let Some(para) = program.paragraphs.get(&start_upper) {
+            execute_statements(para, program, env)?;
+        }
     }
     Ok(())
 }
 
-/// Execute a single statement.
+/// Execute a list of statements, returning any control flow signal.
+pub fn execute_statements(
+    statements: &[SimpleStatement],
+    program: &SimpleProgram,
+    env: &mut Environment,
+) -> Result<ControlFlow> {
+    for stmt in statements {
+        if env.is_stopped() || env.is_goback() {
+            break;
+        }
+        let flow = execute_statement(stmt, program, env)?;
+        match flow {
+            ControlFlow::Continue => {}
+            other => return Ok(other),
+        }
+    }
+    Ok(ControlFlow::Continue)
+}
+
+/// Execute a single statement, returning control flow.
 fn execute_statement(
     stmt: &SimpleStatement,
     program: &SimpleProgram,
     env: &mut Environment,
-) -> Result<()> {
+) -> Result<ControlFlow> {
     // Track call depth to detect infinite recursion
     thread_local! {
         static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -994,7 +1088,7 @@ fn execute_statement_impl(
     stmt: &SimpleStatement,
     program: &SimpleProgram,
     env: &mut Environment,
-) -> Result<()> {
+) -> Result<ControlFlow> {
     match stmt {
         SimpleStatement::Display {
             items,
@@ -1131,10 +1225,15 @@ fn execute_statement_impl(
             then_branch,
             else_branch,
         } => {
-            if eval_condition(condition, env, program)? {
-                execute_statements(then_branch, program, env)?;
+            let flow = if eval_condition(condition, env, program)? {
+                execute_statements(then_branch, program, env)?
             } else if let Some(else_stmts) = else_branch {
-                execute_statements(else_stmts, program, env)?;
+                execute_statements(else_stmts, program, env)?
+            } else {
+                ControlFlow::Continue
+            };
+            if flow != ControlFlow::Continue {
+                return Ok(flow);
             }
         }
 
@@ -1145,9 +1244,92 @@ fn execute_statement_impl(
                     break;
                 }
                 if let Some(para) = program.paragraphs.get(&target.to_uppercase()) {
-                    execute_statements(para, program, env)?;
+                    let flow = execute_statements(para, program, env)?;
+                    match flow {
+                        ControlFlow::Continue | ControlFlow::ExitParagraph => {}
+                        ControlFlow::GoTo(_) => {
+                            // GO TO within a simple PERFORM: propagate upward
+                            return Ok(flow);
+                        }
+                        ControlFlow::ExitSection => break,
+                    }
                 }
             }
+        }
+
+        SimpleStatement::PerformThru { from, thru, times } => {
+            let iterations = times.unwrap_or(1);
+            let from_upper = from.to_uppercase();
+            let thru_upper = thru.to_uppercase();
+
+            // Find paragraph range in ordered list
+            let start_idx = program.paragraph_order.iter()
+                .position(|p| p.eq_ignore_ascii_case(&from_upper));
+            let end_idx = program.paragraph_order.iter()
+                .position(|p| p.eq_ignore_ascii_case(&thru_upper));
+
+            if let (Some(start), Some(end)) = (start_idx, end_idx) {
+                let range_end = end.max(start);
+                for _ in 0..iterations {
+                    if env.is_stopped() || env.is_goback() {
+                        break;
+                    }
+                    let mut idx = start;
+                    while idx <= range_end {
+                        if env.is_stopped() || env.is_goback() {
+                            break;
+                        }
+                        let para_name = &program.paragraph_order[idx];
+                        if let Some(para) = program.paragraphs.get(&para_name.to_uppercase()) {
+                            let flow = execute_statements(para, program, env)?;
+                            match flow {
+                                ControlFlow::Continue => {}
+                                ControlFlow::ExitParagraph => {
+                                    // Skip to next paragraph in range
+                                }
+                                ControlFlow::ExitSection => {
+                                    // Exit the entire PERFORM THRU
+                                    break;
+                                }
+                                ControlFlow::GoTo(ref label) => {
+                                    // GO TO within PERFORM THRU: jump to target
+                                    // if target is within the range, continue from there
+                                    let goto_upper = label.to_uppercase();
+                                    if let Some(goto_idx) = program.paragraph_order.iter()
+                                        .position(|p| p.eq_ignore_ascii_case(&goto_upper))
+                                    {
+                                        if goto_idx >= start && goto_idx <= range_end {
+                                            idx = goto_idx;
+                                            continue;
+                                        }
+                                    }
+                                    // Target outside range: propagate
+                                    return Ok(flow);
+                                }
+                            }
+                        }
+                        idx += 1;
+                    }
+                }
+            }
+            // If paragraphs not found in order, try HashMap fallback for from only
+            else if start_idx.is_none() {
+                if let Some(para) = program.paragraphs.get(&from_upper) {
+                    let iterations = times.unwrap_or(1);
+                    for _ in 0..iterations {
+                        if env.is_stopped() || env.is_goback() { break; }
+                        execute_statements(para, program, env)?;
+                    }
+                }
+            }
+        }
+
+        SimpleStatement::ExitParagraph => {
+            return Ok(ControlFlow::ExitParagraph);
+        }
+
+        SimpleStatement::ExitSection => {
+            return Ok(ControlFlow::ExitSection);
         }
 
         SimpleStatement::StopRun { return_code } => {
@@ -1183,7 +1365,10 @@ fn execute_statement_impl(
                 };
 
                 if matched {
-                    execute_statements(&when_clause.statements, program, env)?;
+                    let flow = execute_statements(&when_clause.statements, program, env)?;
+                    if flow != ControlFlow::Continue {
+                        return Ok(flow);
+                    }
                     break;
                 }
             }
@@ -1250,29 +1435,35 @@ fn execute_statement_impl(
 
             // After CICS READ/RECEIVE INTO: decompose group items into sub-fields
             if command == "READ" || command == "RECEIVE" {
-                if let Some(into_expr) = options.iter()
+                if let Some(SimpleExpr::Variable(var_name)) = options.iter()
                     .find(|(name, _)| name == "INTO")
                     .and_then(|(_, expr)| expr.as_ref())
                 {
-                    if let SimpleExpr::Variable(var_name) = into_expr {
-                        if let Some(val) = env.get(var_name) {
-                            let data = val.to_display_string();
-                            if std::env::var("OPEN_MAINFRAME_DEBUG_CMP").is_ok() {
-                                eprintln!("[DECOMPOSE] {} INTO {} len={}", command, var_name, data.len());
-                            }
-                            decompose_group(var_name, &data, program, env)?;
+                    if let Some(val) = env.get(var_name) {
+                        let data = val.to_display_string();
+                        if std::env::var("OPEN_MAINFRAME_DEBUG_CMP").is_ok() {
+                            eprintln!("[DECOMPOSE] {} INTO {} len={}", command, var_name, data.len());
                         }
+                        decompose_group(var_name, &data, program, env)?;
                     }
                 }
             }
         }
 
         SimpleStatement::GoTo { target } => {
-            // GO TO requires special flow control - for now, try PERFORM-like semantics
-            if let Some(para) = program.paragraphs.get(&target.to_uppercase()) {
-                execute_statements(para, program, env)?;
-                env.stop(); // GO TO means transfer, stop current flow
-            }
+            // Check if this GO TO has been ALTERed
+            let alter_key = format!("__ALTER__{}", target.to_uppercase());
+            let effective_target = if let Some(val) = env.get(&alter_key) {
+                let altered = val.to_display_string().trim().to_uppercase();
+                if altered.is_empty() {
+                    target.to_uppercase()
+                } else {
+                    altered
+                }
+            } else {
+                target.to_uppercase()
+            };
+            return Ok(ControlFlow::GoTo(effective_target));
         }
 
         SimpleStatement::Initialize { targets } => {
@@ -2110,7 +2301,7 @@ fn execute_statement_impl(
         }
     }
 
-    Ok(())
+    Ok(ControlFlow::Continue)
 }
 
 /// Convert CobolValue to NumericValue.
@@ -2503,6 +2694,7 @@ mod tests {
                 },
             ],
             paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
         };
 
         execute(&program, &mut env).unwrap();
@@ -2565,6 +2757,7 @@ mod tests {
                 }]),
             }],
             paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
         };
 
         execute(&program, &mut env).unwrap();
@@ -2605,6 +2798,7 @@ mod tests {
                 to: vec!["X".to_string()],
             }],
             paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
         };
 
         execute(&program, &mut env).unwrap();
@@ -2638,6 +2832,7 @@ mod tests {
                 },
             ],
             paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
         };
 
         let rc = execute(&program, &mut env).unwrap();
@@ -2746,6 +2941,7 @@ mod tests {
                 },
             ],
             paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
         };
 
         execute(&program, &mut env).unwrap();
@@ -2798,6 +2994,7 @@ mod tests {
             declarative_handlers: HashMap::new(),
             statements,
             paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
         }
     }
 
@@ -2818,6 +3015,7 @@ mod tests {
             declarative_handlers: HashMap::new(),
             statements,
             paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
         }
     }
 
@@ -3332,6 +3530,7 @@ mod tests {
                 },
             ],
             paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
         };
 
         let main_prog = SimpleProgram {
@@ -3350,6 +3549,7 @@ mod tests {
                 },
             ],
             paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
         };
 
         execute(&main_prog, &mut env).unwrap();
@@ -3372,5 +3572,530 @@ mod tests {
 
         // Cancelling non-existent program returns false
         assert!(!registry.cancel("NO-SUCH"));
+    }
+
+    // ================================================================
+    // Epic 501 — True GO TO and Paragraph Flow Control
+    // ================================================================
+
+    /// Helper: create a MOVE literal -> variable statement.
+    fn move_lit(val: &str, target: &str) -> SimpleStatement {
+        SimpleStatement::Move {
+            from: SimpleExpr::String(val.to_string()),
+            to: vec![SimpleExpr::Variable(target.to_string())],
+        }
+    }
+
+    fn num_meta() -> DataItemMeta {
+        DataItemMeta {
+            size: 5,
+            decimals: 0,
+            is_numeric: true,
+            picture: Some("9(5)".to_string()),
+        }
+    }
+
+    /// Story 501.1: GO TO as unstructured jump.
+    /// Given paragraph A contains GO TO C, when executed during PERFORM A THRU D,
+    /// then control jumps to paragraph C (skipping B), and execution continues through D.
+    #[test]
+    fn test_goto_within_perform_thru_skips_paragraphs() {
+        // Paragraphs: A (GO TO C), B (MOVE "B" -> RESULT), C (MOVE "C" -> RESULT), D (MOVE "D" -> RESULT)
+        // RESULT tracks which paragraphs executed. Only C and D should run.
+        let mut paragraphs = HashMap::new();
+        paragraphs.insert(
+            "PARA-A".to_string(),
+            vec![SimpleStatement::GoTo {
+                target: "PARA-C".to_string(),
+            }],
+        );
+        paragraphs.insert(
+            "PARA-B".to_string(),
+            vec![move_lit("B", "WS-B")],
+        );
+        paragraphs.insert(
+            "PARA-C".to_string(),
+            vec![move_lit("C", "WS-C")],
+        );
+        paragraphs.insert(
+            "PARA-D".to_string(),
+            vec![move_lit("D", "WS-D")],
+        );
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![
+                ("WS-B".to_string(), alpha_meta(1)),
+                ("WS-C".to_string(), alpha_meta(1)),
+                ("WS-D".to_string(), alpha_meta(1)),
+            ],
+            statements: vec![SimpleStatement::PerformThru {
+                from: "PARA-A".to_string(),
+                thru: "PARA-D".to_string(),
+                times: None,
+            }],
+            paragraphs,
+            paragraph_order: vec![
+                "PARA-A".to_string(),
+                "PARA-B".to_string(),
+                "PARA-C".to_string(),
+                "PARA-D".to_string(),
+            ],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        let mut env = create_test_env();
+        execute(&program, &mut env).unwrap();
+        // B should be skipped, C and D should execute
+        assert_eq!(
+            env.get("WS-B").unwrap().to_display_string().trim(),
+            "",
+            "Paragraph B should be skipped by GO TO C"
+        );
+        assert_eq!(
+            env.get("WS-C").unwrap().to_display_string().trim(),
+            "C",
+            "Paragraph C should execute after GO TO"
+        );
+        assert_eq!(
+            env.get("WS-D").unwrap().to_display_string().trim(),
+            "D",
+            "Paragraph D should execute (fall-through)"
+        );
+    }
+
+    /// Story 501.1: GO TO outside of PERFORM transfers control without returning.
+    /// Given GO TO C outside of PERFORM, control transfers to paragraph C
+    /// and does not return to the GO TO location.
+    #[test]
+    fn test_goto_outside_perform_no_return() {
+        let mut paragraphs = HashMap::new();
+        paragraphs.insert(
+            "PARA-A".to_string(),
+            vec![move_lit("A", "WS-A")],
+        );
+        paragraphs.insert(
+            "PARA-B".to_string(),
+            vec![move_lit("B", "WS-B")],
+        );
+        paragraphs.insert(
+            "PARA-C".to_string(),
+            vec![move_lit("C", "WS-C")],
+        );
+        paragraphs.insert(
+            "PARA-D".to_string(),
+            vec![move_lit("D", "WS-D")],
+        );
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![
+                ("WS-BEFORE".to_string(), alpha_meta(6)),
+                ("WS-AFTER".to_string(), alpha_meta(5)),
+                ("WS-A".to_string(), alpha_meta(1)),
+                ("WS-B".to_string(), alpha_meta(1)),
+                ("WS-C".to_string(), alpha_meta(1)),
+                ("WS-D".to_string(), alpha_meta(1)),
+            ],
+            statements: vec![
+                move_lit("BEFORE", "WS-BEFORE"),
+                SimpleStatement::GoTo {
+                    target: "PARA-C".to_string(),
+                },
+                // This should NOT execute — GO TO transfers control
+                move_lit("AFTER", "WS-AFTER"),
+            ],
+            paragraphs,
+            paragraph_order: vec![
+                "PARA-A".to_string(),
+                "PARA-B".to_string(),
+                "PARA-C".to_string(),
+                "PARA-D".to_string(),
+            ],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        let mut env = create_test_env();
+        execute(&program, &mut env).unwrap();
+        assert_eq!(
+            env.get("WS-BEFORE").unwrap().to_display_string().trim(),
+            "BEFORE",
+            "Statement before GO TO should execute"
+        );
+        assert_eq!(
+            env.get("WS-AFTER").unwrap().to_display_string().trim(),
+            "",
+            "Statement after GO TO should NOT execute"
+        );
+        assert_eq!(
+            env.get("WS-A").unwrap().to_display_string().trim(),
+            "",
+            "Paragraph A should not execute"
+        );
+        assert_eq!(
+            env.get("WS-B").unwrap().to_display_string().trim(),
+            "",
+            "Paragraph B should not execute"
+        );
+        assert_eq!(
+            env.get("WS-C").unwrap().to_display_string().trim(),
+            "C",
+            "Paragraph C should execute (GO TO target)"
+        );
+        assert_eq!(
+            env.get("WS-D").unwrap().to_display_string().trim(),
+            "D",
+            "Paragraph D should execute (fall-through)"
+        );
+    }
+
+    /// Story 501.2: PERFORM THRU executes paragraphs sequentially.
+    /// Given PERFORM INIT-PARA THRU INIT-EXIT, all paragraphs from
+    /// INIT-PARA to INIT-EXIT are executed sequentially.
+    #[test]
+    fn test_perform_thru_sequential_execution() {
+        // Use a counter variable to track execution order
+        let mut paragraphs = HashMap::new();
+        paragraphs.insert(
+            "INIT-PARA".to_string(),
+            vec![move_lit("1", "WS-INIT")],
+        );
+        paragraphs.insert(
+            "PROCESS-PARA".to_string(),
+            vec![move_lit("2", "WS-PROC")],
+        );
+        paragraphs.insert(
+            "INIT-EXIT".to_string(),
+            vec![move_lit("3", "WS-EXIT")],
+        );
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![
+                ("WS-INIT".to_string(), alpha_meta(1)),
+                ("WS-PROC".to_string(), alpha_meta(1)),
+                ("WS-EXIT".to_string(), alpha_meta(1)),
+            ],
+            statements: vec![SimpleStatement::PerformThru {
+                from: "INIT-PARA".to_string(),
+                thru: "INIT-EXIT".to_string(),
+                times: None,
+            }],
+            paragraphs,
+            paragraph_order: vec![
+                "INIT-PARA".to_string(),
+                "PROCESS-PARA".to_string(),
+                "INIT-EXIT".to_string(),
+            ],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        let mut env = create_test_env();
+        execute(&program, &mut env).unwrap();
+        assert_eq!(env.get("WS-INIT").unwrap().to_display_string().trim(), "1");
+        assert_eq!(env.get("WS-PROC").unwrap().to_display_string().trim(), "2");
+        assert_eq!(env.get("WS-EXIT").unwrap().to_display_string().trim(), "3");
+    }
+
+    /// Story 501.2: EXIT PARAGRAPH within a PERFORM range exits the current
+    /// paragraph and continues with the next one.
+    #[test]
+    fn test_exit_paragraph_in_perform_thru() {
+        let mut paragraphs = HashMap::new();
+        paragraphs.insert(
+            "PARA-A".to_string(),
+            vec![
+                move_lit("A-BEFORE", "WS-A"),
+                SimpleStatement::ExitParagraph,
+                // This should NOT execute
+                move_lit("A-AFTER", "WS-A"),
+            ],
+        );
+        paragraphs.insert(
+            "PARA-B".to_string(),
+            vec![move_lit("B", "WS-B")],
+        );
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![
+                ("WS-A".to_string(), alpha_meta(10)),
+                ("WS-B".to_string(), alpha_meta(1)),
+            ],
+            statements: vec![SimpleStatement::PerformThru {
+                from: "PARA-A".to_string(),
+                thru: "PARA-B".to_string(),
+                times: None,
+            }],
+            paragraphs,
+            paragraph_order: vec!["PARA-A".to_string(), "PARA-B".to_string()],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        let mut env = create_test_env();
+        execute(&program, &mut env).unwrap();
+        assert_eq!(
+            env.get("WS-A").unwrap().to_display_string().trim(),
+            "A-BEFORE",
+            "Statement before EXIT PARAGRAPH should execute; A-AFTER should not overwrite"
+        );
+        assert_eq!(
+            env.get("WS-B").unwrap().to_display_string().trim(),
+            "B",
+            "Next paragraph should still execute after EXIT PARAGRAPH"
+        );
+    }
+
+    /// Story 501.3: ALTER changes GO TO target dynamically.
+    /// Given ALTER DISPATCH-PARA TO PROCEED TO NEW-TARGET, when DISPATCH-PARA
+    /// (which contains GO TO) executes, control transfers to NEW-TARGET.
+    #[test]
+    fn test_alter_changes_goto_target() {
+        let mut paragraphs = HashMap::new();
+        // DISPATCH-PARA has a GO TO ORIGINAL-TARGET
+        paragraphs.insert(
+            "DISPATCH-PARA".to_string(),
+            vec![SimpleStatement::GoTo {
+                target: "ORIGINAL-TARGET".to_string(),
+            }],
+        );
+        paragraphs.insert(
+            "ORIGINAL-TARGET".to_string(),
+            vec![move_lit("ORIGINAL", "WS-RESULT")],
+        );
+        paragraphs.insert(
+            "NEW-TARGET".to_string(),
+            vec![move_lit("NEW", "WS-RESULT")],
+        );
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![("WS-RESULT".to_string(), alpha_meta(10))],
+            statements: vec![
+                // ALTER DISPATCH-PARA TO PROCEED TO NEW-TARGET
+                SimpleStatement::Alter {
+                    source: "DISPATCH-PARA".to_string(),
+                    target: "NEW-TARGET".to_string(),
+                },
+                // PERFORM DISPATCH-PARA THRU NEW-TARGET
+                SimpleStatement::PerformThru {
+                    from: "DISPATCH-PARA".to_string(),
+                    thru: "NEW-TARGET".to_string(),
+                    times: None,
+                },
+            ],
+            paragraphs,
+            paragraph_order: vec![
+                "DISPATCH-PARA".to_string(),
+                "ORIGINAL-TARGET".to_string(),
+                "NEW-TARGET".to_string(),
+            ],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        let mut env = create_test_env();
+        execute(&program, &mut env).unwrap();
+        // ALTER redirects GO TO from ORIGINAL-TARGET to NEW-TARGET,
+        // so ORIGINAL-TARGET is skipped, only NEW-TARGET executes
+        assert_eq!(
+            env.get("WS-RESULT").unwrap().to_display_string().trim(),
+            "NEW",
+            "ALTER should redirect GO TO to NEW-TARGET"
+        );
+    }
+
+    /// Story 501.2: EXIT SECTION within a PERFORM THRU stops the whole range.
+    #[test]
+    fn test_exit_section_stops_perform_thru() {
+        let mut paragraphs = HashMap::new();
+        paragraphs.insert(
+            "PARA-A".to_string(),
+            vec![
+                move_lit("A", "WS-A"),
+                SimpleStatement::ExitSection,
+            ],
+        );
+        paragraphs.insert(
+            "PARA-B".to_string(),
+            vec![move_lit("B", "WS-B")],
+        );
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![
+                ("WS-A".to_string(), alpha_meta(1)),
+                ("WS-B".to_string(), alpha_meta(1)),
+            ],
+            statements: vec![SimpleStatement::PerformThru {
+                from: "PARA-A".to_string(),
+                thru: "PARA-B".to_string(),
+                times: None,
+            }],
+            paragraphs,
+            paragraph_order: vec!["PARA-A".to_string(), "PARA-B".to_string()],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        let mut env = create_test_env();
+        execute(&program, &mut env).unwrap();
+        assert_eq!(
+            env.get("WS-A").unwrap().to_display_string().trim(),
+            "A",
+            "PARA-A should execute before EXIT SECTION"
+        );
+        assert_eq!(
+            env.get("WS-B").unwrap().to_display_string().trim(),
+            "",
+            "PARA-B should NOT execute after EXIT SECTION"
+        );
+    }
+
+    /// Story 501.1: GO TO with fall-through continues paragraphs after target.
+    #[test]
+    fn test_goto_fall_through() {
+        let mut paragraphs = HashMap::new();
+        paragraphs.insert(
+            "PARA-A".to_string(),
+            vec![move_lit("A", "WS-A")],
+        );
+        paragraphs.insert(
+            "PARA-B".to_string(),
+            vec![move_lit("B", "WS-B")],
+        );
+        paragraphs.insert(
+            "PARA-C".to_string(),
+            vec![move_lit("C", "WS-C")],
+        );
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![
+                ("WS-A".to_string(), alpha_meta(1)),
+                ("WS-B".to_string(), alpha_meta(1)),
+                ("WS-C".to_string(), alpha_meta(1)),
+            ],
+            // Top-level GO TO PARA-B: should fall through B, C
+            statements: vec![SimpleStatement::GoTo {
+                target: "PARA-B".to_string(),
+            }],
+            paragraphs,
+            paragraph_order: vec![
+                "PARA-A".to_string(),
+                "PARA-B".to_string(),
+                "PARA-C".to_string(),
+            ],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        let mut env = create_test_env();
+        execute(&program, &mut env).unwrap();
+        assert_eq!(
+            env.get("WS-A").unwrap().to_display_string().trim(),
+            "",
+            "PARA-A should be skipped"
+        );
+        assert_eq!(
+            env.get("WS-B").unwrap().to_display_string().trim(),
+            "B",
+            "PARA-B should execute (GO TO target)"
+        );
+        assert_eq!(
+            env.get("WS-C").unwrap().to_display_string().trim(),
+            "C",
+            "PARA-C should execute (fall-through)"
+        );
+    }
+
+    /// Story 501.2: PERFORM THRU with TIMES clause repeats the range.
+    #[test]
+    fn test_perform_thru_with_times() {
+        // Use a numeric counter that gets incremented in each paragraph
+        let mut paragraphs = HashMap::new();
+        paragraphs.insert(
+            "PARA-A".to_string(),
+            vec![SimpleStatement::Add {
+                values: vec![SimpleExpr::Integer(1)],
+                to: vec!["WS-COUNT".to_string()],
+            }],
+        );
+        paragraphs.insert(
+            "PARA-B".to_string(),
+            vec![SimpleStatement::Add {
+                values: vec![SimpleExpr::Integer(1)],
+                to: vec!["WS-COUNT".to_string()],
+            }],
+        );
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![("WS-COUNT".to_string(), num_meta())],
+            statements: vec![SimpleStatement::PerformThru {
+                from: "PARA-A".to_string(),
+                thru: "PARA-B".to_string(),
+                times: Some(3),
+            }],
+            paragraphs,
+            paragraph_order: vec!["PARA-A".to_string(), "PARA-B".to_string()],
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        let mut env = create_test_env();
+        execute(&program, &mut env).unwrap();
+        // 3 iterations * 2 paragraphs = 6 increments
+        let count = env.get("WS-COUNT").unwrap().to_display_string().trim().to_string();
+        assert_eq!(count, "6", "Should execute 6 times (3 iterations x 2 paragraphs)");
+    }
+
+    /// ControlFlow enum variant tests.
+    #[test]
+    fn test_controlflow_enum() {
+        // Test PartialEq
+        assert_eq!(ControlFlow::Continue, ControlFlow::Continue);
+        assert_eq!(
+            ControlFlow::GoTo("X".to_string()),
+            ControlFlow::GoTo("X".to_string())
+        );
+        assert_ne!(ControlFlow::Continue, ControlFlow::ExitParagraph);
+        assert_ne!(ControlFlow::ExitParagraph, ControlFlow::ExitSection);
     }
 }

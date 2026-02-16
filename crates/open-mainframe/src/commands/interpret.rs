@@ -506,6 +506,7 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
     // Convert statements
     let mut statements = Vec::new();
     let mut paragraphs = HashMap::new();
+    let mut paragraph_order: Vec<String> = Vec::new();
 
     // Initialize group variables that have FILLER default values FIRST.
     // This composes the initial string from FILLER VALUEs and MOVEs it into
@@ -574,6 +575,7 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
                     } else {
                         paragraphs.insert(para.name.to_uppercase(), para_stmts);
                     }
+                    paragraph_order.push(para.name.to_uppercase());
                 }
             }
             ProcedureBody::Sections(sections) => {
@@ -593,6 +595,7 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
                         } else {
                             paragraphs.insert(para.name.to_uppercase(), para_stmts);
                         }
+                        paragraph_order.push(para.name.to_uppercase());
                     }
                 }
             }
@@ -629,6 +632,7 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
         data_items,
         statements,
         paragraphs,
+        paragraph_order,
         condition_names,
         group_layouts,
         contained_programs,
@@ -1131,7 +1135,17 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
                 }
                 None
             });
-            Ok(Some(SimpleStatement::Perform { target, times }))
+
+            // PERFORM ... THRU ...
+            if let Some(ref thru_target) = p.thru {
+                Ok(Some(SimpleStatement::PerformThru {
+                    from: target,
+                    thru: thru_target.clone(),
+                    times,
+                }))
+            } else {
+                Ok(Some(SimpleStatement::Perform { target, times }))
+            }
         }
 
         Statement::StopRun(s) => {
@@ -1161,7 +1175,19 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
         }
 
         Statement::Continue(_) => Ok(None),
-        Statement::Exit(_) => Ok(None),
+        Statement::Exit(e) => {
+            if e.program {
+                // EXIT PROGRAM is equivalent to GOBACK
+                Ok(Some(SimpleStatement::GoBack { return_code: None }))
+            } else if e.perform_cycle {
+                // EXIT PERFORM (CYCLE) — exit the current inline perform loop iteration
+                // Approximate as EXIT PARAGRAPH for now
+                Ok(Some(SimpleStatement::ExitParagraph))
+            } else {
+                // Plain EXIT — acts as no-op / EXIT PARAGRAPH
+                Ok(Some(SimpleStatement::ExitParagraph))
+            }
+        }
         Statement::Cancel(c) => {
             // CANCEL removes programs from the registry
             if let Some(first_prog) = c.programs.first() {
