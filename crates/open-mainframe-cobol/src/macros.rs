@@ -363,6 +363,11 @@ macro_rules! for_all_keywords {
                 Validating      => "VALIDATING",
                 Attribute       => "ATTRIBUTE",
                 Type            => "TYPE",
+                Declaratives    => "DECLARATIVES",
+                EndDeclaratives => "END-DECLARATIVES",
+                Use             => "USE",
+                Error           => "ERROR",
+                Standard        => "STANDARD",
             }
             @alias {
                 // Contextual variants constructed by the parser, NOT in the

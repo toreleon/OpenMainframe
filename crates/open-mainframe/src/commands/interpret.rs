@@ -540,6 +540,21 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
         contained_programs.push(convert_program(contained)?);
     }
 
+    // Convert declarative handlers: map file names to section names
+    let mut declarative_handlers = HashMap::new();
+    if let Some(ref procedure) = program.procedure {
+        for decl in &procedure.declaratives {
+            let key = match &decl.use_clause.target {
+                open_mainframe_cobol::ast::UseTarget::File(name) => name.to_uppercase(),
+                open_mainframe_cobol::ast::UseTarget::Input => "INPUT".to_string(),
+                open_mainframe_cobol::ast::UseTarget::Output => "OUTPUT".to_string(),
+                open_mainframe_cobol::ast::UseTarget::InputOutput => "I-O".to_string(),
+                open_mainframe_cobol::ast::UseTarget::Extend => "EXTEND".to_string(),
+            };
+            declarative_handlers.insert(key, decl.name.to_uppercase());
+        }
+    }
+
     Ok(SimpleProgram {
         name,
         data_items,
@@ -550,6 +565,7 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
         contained_programs,
         is_initial: program.identification.program_id.is_initial,
         is_common: program.identification.program_id.is_common,
+        declarative_handlers,
     })
 }
 

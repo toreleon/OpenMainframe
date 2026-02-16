@@ -622,6 +622,8 @@ pub struct SimpleProgram {
     pub is_initial: bool,
     /// Whether this program has the COMMON attribute (callable by siblings).
     pub is_common: bool,
+    /// Declarative error handlers: file-name (or "INPUT"/"OUTPUT") -> paragraph name.
+    pub declarative_handlers: HashMap<String, String>,
 }
 
 /// A sub-field within a group item, with its offset and size.
@@ -2127,6 +2129,7 @@ mod tests {
             contained_programs: Vec::new(),
             is_initial: false,
             is_common: false,
+            declarative_handlers: HashMap::new(),
             statements: vec![
                 SimpleStatement::Move {
                     from: SimpleExpr::Integer(10),
@@ -2184,6 +2187,7 @@ mod tests {
             contained_programs: Vec::new(),
             is_initial: false,
             is_common: false,
+            declarative_handlers: HashMap::new(),
             statements: vec![SimpleStatement::If {
                 condition: SimpleCondition::Compare {
                     left: SimpleExpr::Variable("X".to_string()),
@@ -2232,6 +2236,7 @@ mod tests {
             contained_programs: Vec::new(),
             is_initial: false,
             is_common: false,
+            declarative_handlers: HashMap::new(),
             statements: vec![SimpleStatement::Add {
                 values: vec![SimpleExpr::Integer(5), SimpleExpr::Integer(3)],
                 to: vec!["X".to_string()],
@@ -2257,6 +2262,7 @@ mod tests {
             contained_programs: Vec::new(),
             is_initial: false,
             is_common: false,
+            declarative_handlers: HashMap::new(),
             statements: vec![
                 SimpleStatement::StopRun {
                     return_code: Some(4),
@@ -2361,6 +2367,7 @@ mod tests {
             contained_programs: Vec::new(),
             is_initial: false,
             is_common: false,
+            declarative_handlers: HashMap::new(),
             statements: vec![
                 // Step 1: Initialize group from FILLER defaults
                 SimpleStatement::Move {

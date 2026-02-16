@@ -179,10 +179,49 @@ pub struct ProcedureDivision {
     pub using: Vec<UsingParameter>,
     /// RETURNING clause.
     pub returning: Option<QualifiedName>,
+    /// DECLARATIVES section (optional).
+    pub declaratives: Vec<DeclarativeSection>,
     /// Sections and paragraphs.
     pub body: ProcedureBody,
     /// Source span.
     pub span: Span,
+}
+
+/// A declarative section (USE AFTER ERROR/EXCEPTION).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeclarativeSection {
+    /// Section name.
+    pub name: String,
+    /// USE clause.
+    pub use_clause: UseClause,
+    /// Paragraphs in this declarative section.
+    pub paragraphs: Vec<Paragraph>,
+    /// Source span.
+    pub span: Span,
+}
+
+/// USE AFTER ERROR/EXCEPTION clause.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseClause {
+    /// Target file or open mode.
+    pub target: UseTarget,
+    /// Source span.
+    pub span: Span,
+}
+
+/// Target of a USE clause.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UseTarget {
+    /// A specific file name.
+    File(String),
+    /// All INPUT files.
+    Input,
+    /// All OUTPUT files.
+    Output,
+    /// All I-O files.
+    InputOutput,
+    /// All EXTEND files.
+    Extend,
 }
 
 /// USING clause parameter.

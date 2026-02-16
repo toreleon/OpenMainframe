@@ -309,6 +309,13 @@ impl SemanticAnalyzer {
     // ========================================================================
 
     fn validate_procedure(&mut self, procedure: &ProcedureDivision) {
+        // Validate declarative sections
+        for decl in &procedure.declaratives {
+            for para in &decl.paragraphs {
+                self.validate_statements(&para.statements);
+            }
+        }
+
         match &procedure.body {
             ProcedureBody::Sections(sections) => {
                 for section in sections {

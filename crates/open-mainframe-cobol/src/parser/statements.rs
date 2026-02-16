@@ -94,6 +94,13 @@ impl super::Parser {
 
         self.expect(TokenKind::Period)?;
 
+        // Parse optional DECLARATIVES section
+        let declaratives = if self.check_keyword(Keyword::Declaratives) {
+            self.parse_declaratives()?
+        } else {
+            Vec::new()
+        };
+
         // Parse procedure body
         let body = self.parse_procedure_body()?;
 
@@ -102,9 +109,115 @@ impl super::Parser {
         Ok(ProcedureDivision {
             using,
             returning,
+            declaratives,
             body,
             span: start.extend(end),
         })
+    }
+
+    fn parse_declaratives(&mut self) -> Result<Vec<DeclarativeSection>> {
+        let mut sections = Vec::new();
+
+        // DECLARATIVES.
+        self.expect_keyword(Keyword::Declaratives)?;
+        self.expect(TokenKind::Period)?;
+
+        // Parse declarative sections until END DECLARATIVES
+        while !self.is_at_end()
+            && !self.check_keyword(Keyword::EndDeclaratives)
+        {
+            // section-name SECTION.
+            let sec_start = self.current_span();
+            let name = self.expect_identifier()?;
+            self.expect_keyword(Keyword::Section)?;
+            self.expect(TokenKind::Period)?;
+
+            // USE AFTER [STANDARD] {ERROR|EXCEPTION} PROCEDURE ON {file-name|INPUT|OUTPUT|I-O|EXTEND}
+            let use_start = self.current_span();
+            self.expect_keyword(Keyword::Use)?;
+
+            // Optional AFTER
+            if self.check_keyword(Keyword::After) {
+                self.advance();
+            }
+            // Optional STANDARD
+            if self.check_keyword(Keyword::Standard) {
+                self.advance();
+            }
+            // ERROR or EXCEPTION
+            if self.check_keyword(Keyword::Error) || self.check_keyword(Keyword::OnException) {
+                self.advance();
+            }
+            // Optional PROCEDURE
+            if self.check_keyword(Keyword::Procedure) {
+                self.advance();
+            }
+            // ON
+            if self.check_keyword(Keyword::On) {
+                self.advance();
+            }
+
+            // Target: file-name or INPUT/OUTPUT/I-O/EXTEND
+            let target = if self.check_keyword(Keyword::Input) {
+                self.advance();
+                UseTarget::Input
+            } else if self.check_keyword(Keyword::Output) {
+                self.advance();
+                UseTarget::Output
+            } else if self.check_keyword(Keyword::Io) {
+                self.advance();
+                UseTarget::InputOutput
+            } else if self.check_keyword(Keyword::Extend) {
+                self.advance();
+                UseTarget::Extend
+            } else {
+                let file_name = self.expect_identifier()?;
+                UseTarget::File(file_name)
+            };
+
+            let use_end = self.previous_span();
+            self.skip_if(TokenKind::Period);
+
+            let use_clause = UseClause {
+                target,
+                span: use_start.extend(use_end),
+            };
+
+            // Parse paragraphs within this declarative section
+            let mut paragraphs = Vec::new();
+            while !self.is_at_end()
+                && !self.check_keyword(Keyword::EndDeclaratives)
+                && !(self.check_identifier() && self.peek_keyword(Keyword::Section))
+            {
+                if self.check_identifier() && self.peek(TokenKind::Period) {
+                    paragraphs.push(self.parse_paragraph()?);
+                } else if self.check(TokenKind::Period) {
+                    self.advance(); // skip stray periods
+                } else {
+                    break;
+                }
+            }
+
+            let sec_end = self.previous_span();
+            sections.push(DeclarativeSection {
+                name,
+                use_clause,
+                paragraphs,
+                span: sec_start.extend(sec_end),
+            });
+        }
+
+        // END DECLARATIVES.
+        if self.check_keyword(Keyword::EndDeclaratives) {
+            self.advance();
+            self.skip_if(TokenKind::Period);
+        } else if self.check_keyword(Keyword::End) && self.peek_keyword(Keyword::Declaratives) {
+            self.advance(); // END
+            self.advance(); // DECLARATIVES
+            self.skip_if(TokenKind::Period);
+        }
+
+        Ok(sections)
     }
 
     fn parse_procedure_body(&mut self) -> Result<ProcedureBody> {
