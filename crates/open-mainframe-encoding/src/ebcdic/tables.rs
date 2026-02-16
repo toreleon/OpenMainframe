@@ -8,10 +8,16 @@
 pub struct CodePage {
     /// Name of the code page (e.g., "CP037", "CP1047")
     pub name: &'static str,
-    /// EBCDIC to ASCII translation table (256 entries)
+    /// CCSID (Coded Character Set Identifier) number
+    pub ccsid: u16,
+    /// EBCDIC to ASCII/Latin-1 translation table (256 entries)
     pub ebcdic_to_ascii: &'static [u8; 256],
-    /// ASCII to EBCDIC translation table (256 entries)
+    /// ASCII/Latin-1 to EBCDIC translation table (256 entries)
     pub ascii_to_ebcdic: &'static [u8; 256],
+    /// Special character mappings for EBCDIC positions that map to
+    /// Unicode characters outside U+0000-U+00FF (e.g., Euro sign €).
+    /// Each entry is (ebcdic_byte, unicode_char).
+    pub special_chars: &'static [(u8, char)],
 }
 
 /// IBM Code Page 037 - US/Canada EBCDIC
@@ -20,8 +26,10 @@ pub struct CodePage {
 /// mainframe installations.
 pub const CP037: CodePage = CodePage {
     name: "CP037",
+    ccsid: 37,
     ebcdic_to_ascii: &EBCDIC_037_TO_ASCII,
     ascii_to_ebcdic: &ASCII_TO_EBCDIC_037,
+    special_chars: &[],
 };
 
 /// IBM Code Page 1047 - Latin-1/Open Systems
@@ -30,8 +38,10 @@ pub const CP037: CodePage = CodePage {
 /// on z/OS and for open systems compatibility.
 pub const CP1047: CodePage = CodePage {
     name: "CP1047",
+    ccsid: 1047,
     ebcdic_to_ascii: &EBCDIC_1047_TO_ASCII,
     ascii_to_ebcdic: &ASCII_TO_EBCDIC_1047,
+    special_chars: &[],
 };
 
 /// IBM Code Page 500 - International EBCDIC
@@ -40,8 +50,10 @@ pub const CP1047: CodePage = CodePage {
 /// in mainframe environments.
 pub const CP500: CodePage = CodePage {
     name: "CP500",
+    ccsid: 500,
     ebcdic_to_ascii: &EBCDIC_500_TO_ASCII,
     ascii_to_ebcdic: &ASCII_TO_EBCDIC_500,
+    special_chars: &[],
 };
 
 // =============================================================================

@@ -10,7 +10,7 @@ pub enum EncodingError {
     #[error("Invalid code page: {0}")]
     #[diagnostic(
         code(encoding::invalid_code_page),
-        help("Supported code pages are: CP037, CP1047, CP500")
+        help("Use CodePageRegistry::all() to list supported code pages")
     )]
     InvalidCodePage(String),
 

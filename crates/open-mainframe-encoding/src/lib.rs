@@ -5,7 +5,7 @@
 //!
 //! # Features
 //!
-//! - **EBCDIC Conversion**: Support for IBM code pages CP037, CP1047, CP500
+//! - **EBCDIC Conversion**: 21 IBM code pages (CP037, CP500, CP1047, national, Euro-enabled)
 //! - **Packed Decimal**: COMP-3 BCD encoding with 18-digit precision
 //! - **Zoned Decimal**: DISPLAY format numeric encoding
 //! - **Binary Integer**: COMP/COMP-4 big-endian integer encoding
@@ -40,7 +40,11 @@ pub use decimal::{
     decode_binary, encode_binary, pack_decimal, unpack_decimal, unzone_decimal, zone_decimal,
     BinaryInteger, PackedDecimal, Sign, ZonedDecimal,
 };
-pub use ebcdic::{CodePage, CP037, CP1047, CP500};
+pub use ebcdic::{
+    CodePage, CodePageRegistry, CP037, CP1047, CP1140, CP1141, CP1142, CP1143, CP1144, CP1145,
+    CP1146, CP1147, CP1148, CP1149, CP273, CP277, CP278, CP280, CP284, CP285, CP297, CP500,
+    CP871,
+};
 pub use error::EncodingError;
 
 /// Result type for encoding operations.
