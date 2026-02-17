@@ -4,6 +4,7 @@ import { CopilotSidebar } from "@copilotkit/react-ui";
 import { useRenderToolCall } from "@copilotkit/react-core";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useWorkspaceTabs } from "@/hooks/useWorkspaceTabs";
+import { useInterruptHandler } from "@/hooks/useInterruptHandler";
 import { Header } from "@/components/layout/Header";
 import { FileTreePanel } from "@/components/layout/FileTreePanel";
 import { WorkspacePanel } from "@/components/layout/WorkspacePanel";
@@ -22,6 +23,9 @@ export default function Home() {
     const name = path.split("/").pop() || path;
     openTab({ type: "code", label: name, path });
   };
+
+  // HITL — render LangGraph interrupt() approvals inline in chat
+  useInterruptHandler();
 
   // Generative UI — render tool calls inline in chat
   useRenderToolCall({

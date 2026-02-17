@@ -132,3 +132,11 @@
   - src/components/layout/WorkspacePanel.tsx (updated — wired AssessmentDashboard + JobTimeline)
   - src/app/page.tsx (updated — useRenderToolCall for 8 tools: assess_scan, assess_file, compile_cobol, check_cobol, lex_cobol, parse_jcl, run_jcl, interpret_cobol)
 - Notes: All 5 generative UI card types created for CopilotKit chat rendering. useRenderToolCall registered for all backend tools — shows ProgressCard during inProgress, tool-specific card on completion. AssessmentDashboard supports drill-down from issues/programs to CodeViewer. JobTimeline provides clickable step-by-step visualization with expandable SYSOUT. ApprovalCard supports approve/reject buttons with grayed-out state after decision (wired in Batch 10).
+
+## Batch 10: Human-in-the-Loop Polish (E-1000)
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - src/hooks/useInterruptHandler.ts (NEW — useLangGraphInterrupt wrapper with InterruptApprovalCard)
+  - src/app/page.tsx (updated — useInterruptHandler() wired for HITL approval rendering)
+- Notes: Uses CopilotKit's useLangGraphInterrupt hook to declaratively handle LangGraph interrupt() events from the Python agent. When the execute or dataset node calls interrupt({ action, file, description }), the InterruptApprovalCard renders inline in the chat with Approve/Reject buttons. On decision, resolve() sends JSON { approved, reason } back to the agent to resume execution. Card grays out (opacity-60) and shows "Approved" or "Rejected" status after the user decides. Matches the interrupt payload format from execute.py (run_jcl, interpret_cobol) and dataset.py (IDCAMS DELETE).
