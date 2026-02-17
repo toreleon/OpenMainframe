@@ -30,6 +30,8 @@ mod fields;
 mod parser;
 mod engine;
 mod filter;
+pub mod ifthen;
+pub mod outfil;
 mod reformat;
 
 pub use error::SortError;
@@ -37,4 +39,6 @@ pub use fields::{DataType, SortField, SortOrder, SortSpec};
 pub use parser::parse_control_statements;
 pub use engine::SortEngine;
 pub use filter::{Condition, FilterSpec, CompareOp};
+pub use ifthen::{IfThenSpec, IfThenClause, WhenCondition, IfThenAction, OverlayField, OverlayData};
+pub use outfil::{OutfilSpec, OutfilDescriptor, SplitMode};
 pub use reformat::{OutrecField, OutrecSpec};
