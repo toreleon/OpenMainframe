@@ -12,6 +12,8 @@
 //! - LISTCAT - List catalog entries
 //! - PRINT - Display dataset contents
 //! - REPRO - Copy datasets
+//! - DEFINE ALTERNATEINDEX - Create VSAM alternate indexes
+//! - DEFINE PATH - Connect AIX to base cluster
 //! - VERIFY - Verify VSAM integrity
 //!
 //! # Example
@@ -115,6 +117,15 @@ impl Idcams {
             } => self.repro(indataset, outdataset, fromkey.as_deref(), tokey.as_deref()),
 
             IdcamsCommand::Verify { dataset } => self.verify(dataset),
+
+            IdcamsCommand::DefineAix {
+                name,
+                relate,
+                keys,
+                unique_key,
+            } => self.define_aix(name, relate, keys, *unique_key),
+
+            IdcamsCommand::DefinePath { name, pathentry } => self.define_path(name, pathentry),
         }
     }
 
@@ -452,6 +463,54 @@ impl Idcams {
         Ok(())
     }
 
+    /// DEFINE ALTERNATEINDEX command.
+    fn define_aix(
+        &mut self,
+        name: &str,
+        relate: &str,
+        keys: &(u16, u16),
+        unique_key: bool,
+    ) -> Result<(), DatasetError> {
+        self.output
+            .push_str(&format!("IDC0001I DEFINE ALTERNATEINDEX - {}\n", name));
+
+        // Store AIX definition as a metadata file
+        let path = self.name_to_path(name).with_extension("aix");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let unique_str = if unique_key { "UNIQUEKEY" } else { "NONUNIQUEKEY" };
+        let metadata = format!(
+            "AIX={}\nRELATE={}\nKEYS={} {}\n{}\n",
+            name, relate, keys.0, keys.1, unique_str
+        );
+        std::fs::write(&path, metadata)?;
+
+        self.output
+            .push_str(&format!("IDC0002I ALTERNATEINDEX {} DEFINED\n", name));
+        Ok(())
+    }
+
+    /// DEFINE PATH command.
+    fn define_path(&mut self, name: &str, pathentry: &str) -> Result<(), DatasetError> {
+        self.output
+            .push_str(&format!("IDC0001I DEFINE PATH - {}\n", name));
+
+        // Store PATH definition as a metadata file
+        let path = self.name_to_path(name).with_extension("path");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let metadata = format!("PATH={}\nPATHENTRY={}\n", name, pathentry);
+        std::fs::write(&path, metadata)?;
+
+        self.output
+            .push_str(&format!("IDC0002I PATH {} DEFINED\n", name));
+        Ok(())
+    }
+
     /// Convert dataset name to file path.
     fn name_to_path(&self, name: &str) -> PathBuf {
         let mut path = self.base_dir.clone();
@@ -597,6 +656,55 @@ mod tests {
         assert!(result.is_success());
         assert!(result.output.contains("MY.GDG"));
         assert!(result.output.contains("TYPE: GDG"));
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_define_aix() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut idcams = Idcams::new(&dir);
+
+        // First create the base cluster
+        idcams
+            .execute("DEFINE CLUSTER (NAME(MY.BASE) KEYS(10 0) RECORDSIZE(100 200))")
+            .unwrap();
+
+        // Define an alternate index
+        let result = idcams
+            .execute("DEFINE ALTERNATEINDEX (NAME(MY.AIX) RELATE(MY.BASE) KEYS(20 10) UNIQUEKEY)")
+            .unwrap();
+
+        assert!(result.is_success());
+        assert!(result.output.contains("ALTERNATEINDEX MY.AIX DEFINED"));
+
+        // Verify AIX metadata file was created
+        let aix_path = dir.join("MY/AIX.aix");
+        assert!(aix_path.exists());
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_define_path() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut idcams = Idcams::new(&dir);
+
+        // Define a path
+        let result = idcams
+            .execute("DEFINE PATH (NAME(MY.PATH) PATHENTRY(MY.AIX))")
+            .unwrap();
+
+        assert!(result.is_success());
+        assert!(result.output.contains("PATH MY.PATH DEFINED"));
+
+        // Verify PATH metadata file was created
+        let path_file = dir.join("MY/PATH.path");
+        assert!(path_file.exists());
 
         cleanup(&dir);
     }

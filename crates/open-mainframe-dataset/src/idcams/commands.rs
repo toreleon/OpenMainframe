@@ -90,6 +90,26 @@ pub enum IdcamsCommand {
         /// Dataset name.
         dataset: String,
     },
+
+    /// DEFINE ALTERNATEINDEX - Create a VSAM alternate index.
+    DefineAix {
+        /// AIX name.
+        name: String,
+        /// Base cluster name (RELATE).
+        relate: String,
+        /// Key specification (length, offset) for the alternate key.
+        keys: (u16, u16),
+        /// Whether alternate keys must be unique.
+        unique_key: bool,
+    },
+
+    /// DEFINE PATH - Connect an AIX to its base cluster.
+    DefinePath {
+        /// Path name.
+        name: String,
+        /// AIX entry name (PATHENTRY).
+        pathentry: String,
+    },
 }
 
 /// Result of executing IDCAMS commands.

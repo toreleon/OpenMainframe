@@ -24,12 +24,14 @@
 //! cluster.create()?;
 //! ```
 
+mod aix;
 mod btree;
 mod cluster;
 mod esds;
 mod ksds;
 mod rrds;
 
+pub use aix::{AixDefinition, AlternateIndex, VsamPath};
 pub use btree::{BPlusTree, DEFAULT_ORDER};
 pub use cluster::{ClusterParams, KeySpec, VsamCluster, VsamType};
 pub use esds::{Esds, EsdsResult};

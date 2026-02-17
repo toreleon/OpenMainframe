@@ -79,6 +79,17 @@ fn parse_single_command(input: &str) -> Result<Option<IdcamsCommand>, DatasetErr
 
 /// Parse DEFINE command.
 fn parse_define(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    // Check specific types first to avoid substring false matches.
+    // "DEFINE ALTERNATEINDEX" must be checked before "CLUSTER" because
+    // RELATE(MY.CLUSTER) contains "CLUSTER" as a substring.
+    // "DEFINE PATH" must be checked before "AIX" because
+    // PATHENTRY(MY.AIX) contains "AIX" as a substring.
+    if input.contains("ALTERNATEINDEX") || input.starts_with("DEFINE AIX") {
+        return parse_define_aix(input);
+    }
+    if input.starts_with("DEFINE PATH") {
+        return parse_define_path(input);
+    }
     if input.contains("CLUSTER") {
         return parse_define_cluster(input);
     }
@@ -136,6 +147,39 @@ fn parse_define_gdg(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> 
         scratch,
         empty,
     }))
+}
+
+/// Parse DEFINE ALTERNATEINDEX command.
+fn parse_define_aix(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    let name = extract_param(input, "NAME")
+        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE ALTERNATEINDEX requires NAME".to_string()))?;
+
+    let relate = extract_param(input, "RELATE")
+        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE ALTERNATEINDEX requires RELATE".to_string()))?;
+
+    let keys = extract_param(input, "KEYS")
+        .and_then(|s| parse_keys(&s))
+        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE ALTERNATEINDEX requires KEYS".to_string()))?;
+
+    let unique_key = input.contains("UNIQUEKEY") || input.contains("UNIQUE");
+
+    Ok(Some(IdcamsCommand::DefineAix {
+        name,
+        relate,
+        keys,
+        unique_key,
+    }))
+}
+
+/// Parse DEFINE PATH command.
+fn parse_define_path(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    let name = extract_param(input, "NAME")
+        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE PATH requires NAME".to_string()))?;
+
+    let pathentry = extract_param(input, "PATHENTRY")
+        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE PATH requires PATHENTRY".to_string()))?;
+
+    Ok(Some(IdcamsCommand::DefinePath { name, pathentry }))
 }
 
 /// Parse DELETE command.
@@ -443,6 +487,65 @@ mod tests {
                 assert_eq!(*keys, Some((10, 0)));
             }
             _ => panic!("Expected DefineCluster"),
+        }
+    }
+
+    #[test]
+    fn test_parse_define_aix() {
+        let input = "DEFINE ALTERNATEINDEX (NAME(MY.AIX) RELATE(MY.CLUSTER) KEYS(20 10) UNIQUEKEY)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::DefineAix {
+                name,
+                relate,
+                keys,
+                unique_key,
+            } => {
+                assert_eq!(name, "MY.AIX");
+                assert_eq!(relate, "MY.CLUSTER");
+                assert_eq!(*keys, (20, 10));
+                assert!(*unique_key);
+            }
+            _ => panic!("Expected DefineAix"),
+        }
+    }
+
+    #[test]
+    fn test_parse_define_aix_nonunique() {
+        let input = "DEFINE AIX (NAME(MY.AIX2) RELATE(MY.BASE) KEYS(30 5))";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::DefineAix {
+                name,
+                relate,
+                keys,
+                unique_key,
+            } => {
+                assert_eq!(name, "MY.AIX2");
+                assert_eq!(relate, "MY.BASE");
+                assert_eq!(*keys, (30, 5));
+                assert!(!*unique_key);
+            }
+            _ => panic!("Expected DefineAix"),
+        }
+    }
+
+    #[test]
+    fn test_parse_define_path() {
+        let input = "DEFINE PATH (NAME(MY.PATH) PATHENTRY(MY.AIX))";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::DefinePath { name, pathentry } => {
+                assert_eq!(name, "MY.PATH");
+                assert_eq!(pathentry, "MY.AIX");
+            }
+            _ => panic!("Expected DefinePath"),
         }
     }
 
