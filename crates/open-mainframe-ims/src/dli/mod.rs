@@ -10,9 +10,11 @@
 //! - REPL (Replace)
 
 mod ssa;
+mod extract;
 pub mod store;
 
-pub use ssa::{Ssa, SsaQualification, SsaOperator, CommandCode};
+pub use ssa::{Ssa, SsaQualification, SsaOperator, CommandCode, BooleanConnector, QualificationClause};
+pub use self::extract::SegmentExtractor;
 
 use crate::{ImsResult, ImsError, StatusCode};
 use crate::psb::ProgramCommBlock;
