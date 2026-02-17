@@ -7,6 +7,35 @@ use crate::runtime::{RuntimeHostVariable, RuntimeStatement, Sqlca, SqlRow, SqlTr
 use crate::Db2Result;
 use std::collections::HashMap;
 
+/// Cursor scroll sensitivity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollSensitivity {
+    /// Insensitive — result set is a snapshot at OPEN time
+    #[default]
+    Insensitive,
+    /// Sensitive — result set reflects concurrent changes
+    Sensitive,
+    /// Asensitive — implementation-defined behavior
+    Asensitive,
+}
+
+/// FETCH direction for scrollable cursors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchDirection {
+    /// FETCH NEXT (default, also used for non-scrollable cursors)
+    Next,
+    /// FETCH PRIOR — move backwards one row
+    Prior,
+    /// FETCH FIRST — position at the first row
+    First,
+    /// FETCH LAST — position at the last row
+    Last,
+    /// FETCH ABSOLUTE n — position at the nth row
+    Absolute(i64),
+    /// FETCH RELATIVE n — move n rows from current position
+    Relative(i64),
+}
+
 /// Cursor declaration options.
 #[derive(Debug, Clone, Default)]
 pub struct CursorOptions {
@@ -16,6 +45,10 @@ pub struct CursorOptions {
     pub for_update: Option<Vec<String>>,
     /// FOR READ ONLY
     pub read_only: bool,
+    /// SCROLL — cursor supports bidirectional navigation
+    pub scrollable: bool,
+    /// Scroll sensitivity mode
+    pub sensitivity: ScrollSensitivity,
 }
 
 /// Cursor state.
@@ -88,6 +121,23 @@ impl Cursor {
     pub fn for_read_only(mut self) -> Self {
         self.options.read_only = true;
         self
+    }
+
+    /// Enable SCROLL for bidirectional navigation.
+    pub fn with_scroll(mut self) -> Self {
+        self.options.scrollable = true;
+        self
+    }
+
+    /// Set scroll sensitivity mode.
+    pub fn with_sensitivity(mut self, sensitivity: ScrollSensitivity) -> Self {
+        self.options.sensitivity = sensitivity;
+        self
+    }
+
+    /// Check if cursor is scrollable.
+    pub fn is_scrollable(&self) -> bool {
+        self.options.scrollable
     }
 
     /// Get cursor name.
@@ -265,20 +315,130 @@ impl CursorManager {
         Ok(HashMap::new())
     }
 
-    /// Fetch a row in mock mode.
-    fn fetch_mock_row(&mut self, cursor_name: &str) -> Db2Result<HashMap<String, SqlValue>> {
-        let name = cursor_name.to_uppercase();
-        let cursor = self.cursors.get_mut(&name).unwrap();
+    /// Fetch from a scrollable cursor with directional navigation.
+    pub fn fetch_direction(
+        &mut self,
+        cursor_name: &str,
+        direction: FetchDirection,
+    ) -> Db2Result<HashMap<String, SqlValue>> {
+        self.sqlca.reset();
 
-        if cursor.position >= cursor.rows.len() {
-            // No more rows
-            self.sqlca.set_not_found();
-            cursor.last_fetched_row = None;
-            cursor.last_fetched_rowid = None;
+        let name = cursor_name.to_uppercase();
+
+        // Check if cursor exists
+        let cursor = match self.cursors.get(&name) {
+            Some(c) => c,
+            None => {
+                self.sqlca.set_error(-504, "Cursor not declared");
+                return Ok(HashMap::new());
+            }
+        };
+
+        // Check if open
+        if cursor.state != CursorState::Open {
+            self.sqlca.set_error(Sqlca::CURSOR_NOT_OPEN, "Cursor not open");
             return Ok(HashMap::new());
         }
 
-        let row = &cursor.rows[cursor.position];
+        // Non-NEXT directions require a scrollable cursor
+        if !matches!(direction, FetchDirection::Next) && !cursor.options.scrollable {
+            self.sqlca.set_error(-243, "FETCH direction requires SCROLL cursor");
+            return Ok(HashMap::new());
+        }
+
+        if self.mock_mode {
+            return self.fetch_mock_row_directed(&name, direction);
+        }
+
+        Ok(HashMap::new())
+    }
+
+    /// Fetch a row in mock mode (forward-only NEXT).
+    fn fetch_mock_row(&mut self, cursor_name: &str) -> Db2Result<HashMap<String, SqlValue>> {
+        self.fetch_mock_row_directed(cursor_name, FetchDirection::Next)
+    }
+
+    /// Fetch a row in mock mode with directional navigation.
+    fn fetch_mock_row_directed(
+        &mut self,
+        cursor_name: &str,
+        direction: FetchDirection,
+    ) -> Db2Result<HashMap<String, SqlValue>> {
+        let name = cursor_name.to_uppercase();
+        let cursor = self.cursors.get_mut(&name).unwrap();
+        let row_count = cursor.rows.len();
+
+        // Resolve target position (0-based index).  `position` tracks the
+        // *next* forward-fetch slot: 0 means "before first row", so the
+        // first row is at index 0 when position==0 and we do NEXT.
+        let target: Option<usize> = match direction {
+            FetchDirection::Next => {
+                if cursor.position < row_count {
+                    Some(cursor.position)
+                } else {
+                    None
+                }
+            }
+            FetchDirection::Prior => {
+                // position points at the row *after* the last fetched one.
+                // So "prior" means two back from current position.
+                if cursor.position >= 2 {
+                    Some(cursor.position - 2)
+                } else {
+                    None
+                }
+            }
+            FetchDirection::First => {
+                if row_count > 0 { Some(0) } else { None }
+            }
+            FetchDirection::Last => {
+                if row_count > 0 { Some(row_count - 1) } else { None }
+            }
+            FetchDirection::Absolute(n) => {
+                if n > 0 && (n as usize) <= row_count {
+                    Some((n - 1) as usize)
+                } else if n < 0 {
+                    // Negative absolute: count from end
+                    let from_end = (-n) as usize;
+                    if from_end <= row_count {
+                        Some(row_count - from_end)
+                    } else {
+                        None
+                    }
+                } else {
+                    None // n == 0 → before first row
+                }
+            }
+            FetchDirection::Relative(n) => {
+                // Current logical row is position-1 (last fetched).
+                // Relative(1) == NEXT, Relative(-1) == PRIOR.
+                let current = cursor.position as i64; // 0 = before first
+                let target_1based = current + n; // 1-based target
+                if target_1based >= 1 && (target_1based as usize) <= row_count {
+                    Some((target_1based - 1) as usize)
+                } else {
+                    None
+                }
+            }
+        };
+
+        let idx = match target {
+            Some(i) => i,
+            None => {
+                self.sqlca.set_not_found();
+                // Don't update position for PRIOR/FIRST/LAST/ABSOLUTE/RELATIVE out-of-range
+                if matches!(direction, FetchDirection::Next) {
+                    // Keep position past end for NEXT
+                }
+                let cursor = self.cursors.get_mut(&name).unwrap();
+                cursor.last_fetched_row = None;
+                cursor.last_fetched_rowid = None;
+                return Ok(HashMap::new());
+            }
+        };
+
+        let cursor = self.cursors.get_mut(&name).unwrap();
+        let row = &cursor.rows[idx];
         let mut result = HashMap::new();
 
         // Get output host variables
@@ -298,8 +458,8 @@ impl CursorManager {
 
         // Save for positioned update/delete
         cursor.last_fetched_row = Some(row.clone());
-        cursor.last_fetched_rowid = Some(cursor.position as i64);
-        cursor.position += 1;
+        cursor.last_fetched_rowid = Some(idx as i64);
+        cursor.position = idx + 1; // position after the fetched row
 
         self.sqlca.set_success();
         self.sqlca.set_rows_affected(1);
@@ -803,5 +963,204 @@ mod tests {
         assert!(manager.get_cursor("mycursor").is_some());
         assert!(manager.get_cursor("MYCURSOR").is_some());
         assert!(manager.get_cursor("MyCursor").is_some());
+    }
+
+    // --- Epic 303: Scrollable Cursors ---
+
+    fn create_scrollable_cursor() -> Cursor {
+        Cursor::new(
+            "SC1",
+            "SELECT ID, NAME FROM EMPLOYEE",
+            vec![
+                RuntimeHostVariable {
+                    name: "WS-ID".to_string(),
+                    indicator: None,
+                    usage: HostVariableUsage::Output,
+                },
+                RuntimeHostVariable {
+                    name: "WS-NAME".to_string(),
+                    indicator: None,
+                    usage: HostVariableUsage::Output,
+                },
+            ],
+        )
+        .with_scroll()
+    }
+
+    #[test]
+    fn test_scrollable_cursor_builder() {
+        let cursor = create_scrollable_cursor();
+        assert!(cursor.is_scrollable());
+
+        let cursor2 = Cursor::new("C2", "SELECT * FROM T", vec![])
+            .with_scroll()
+            .with_sensitivity(ScrollSensitivity::Sensitive);
+        assert!(cursor2.is_scrollable());
+    }
+
+    #[test]
+    fn test_fetch_first() {
+        let mut manager = CursorManager::new();
+        let cursor = create_scrollable_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("SC1", &input).unwrap();
+        manager.set_mock_results("SC1", create_test_rows());
+
+        // FETCH FIRST
+        let result = manager.fetch_direction("SC1", FetchDirection::First).unwrap();
+        assert!(manager.sqlca().is_success());
+        assert_eq!(result.get("WS-ID").unwrap().as_integer(), Some(1));
+    }
+
+    #[test]
+    fn test_fetch_last() {
+        let mut manager = CursorManager::new();
+        let cursor = create_scrollable_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("SC1", &input).unwrap();
+        manager.set_mock_results("SC1", create_test_rows());
+
+        // FETCH LAST
+        let result = manager.fetch_direction("SC1", FetchDirection::Last).unwrap();
+        assert!(manager.sqlca().is_success());
+        assert_eq!(result.get("WS-ID").unwrap().as_integer(), Some(3));
+    }
+
+    #[test]
+    fn test_fetch_prior() {
+        let mut manager = CursorManager::new();
+        let cursor = create_scrollable_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("SC1", &input).unwrap();
+        manager.set_mock_results("SC1", create_test_rows());
+
+        // FETCH LAST then PRIOR
+        manager.fetch_direction("SC1", FetchDirection::Last).unwrap();
+        let result = manager.fetch_direction("SC1", FetchDirection::Prior).unwrap();
+        assert!(manager.sqlca().is_success());
+        assert_eq!(result.get("WS-ID").unwrap().as_integer(), Some(2));
+    }
+
+    #[test]
+    fn test_fetch_absolute() {
+        let mut manager = CursorManager::new();
+        let cursor = create_scrollable_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("SC1", &input).unwrap();
+        manager.set_mock_results("SC1", create_test_rows());
+
+        // FETCH ABSOLUTE 2 (1-based)
+        let result = manager.fetch_direction("SC1", FetchDirection::Absolute(2)).unwrap();
+        assert!(manager.sqlca().is_success());
+        assert_eq!(result.get("WS-ID").unwrap().as_integer(), Some(2));
+
+        // FETCH ABSOLUTE -1 (last row)
+        let result = manager.fetch_direction("SC1", FetchDirection::Absolute(-1)).unwrap();
+        assert!(manager.sqlca().is_success());
+        assert_eq!(result.get("WS-ID").unwrap().as_integer(), Some(3));
+    }
+
+    #[test]
+    fn test_fetch_relative() {
+        let mut manager = CursorManager::new();
+        let cursor = create_scrollable_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("SC1", &input).unwrap();
+        manager.set_mock_results("SC1", create_test_rows());
+
+        // Position at row 2
+        manager.fetch_direction("SC1", FetchDirection::Absolute(2)).unwrap();
+
+        // RELATIVE 1 → row 3
+        let result = manager.fetch_direction("SC1", FetchDirection::Relative(1)).unwrap();
+        assert!(manager.sqlca().is_success());
+        assert_eq!(result.get("WS-ID").unwrap().as_integer(), Some(3));
+
+        // RELATIVE -2 → row 1
+        let result = manager.fetch_direction("SC1", FetchDirection::Relative(-2)).unwrap();
+        assert!(manager.sqlca().is_success());
+        assert_eq!(result.get("WS-ID").unwrap().as_integer(), Some(1));
+    }
+
+    #[test]
+    fn test_fetch_direction_requires_scroll() {
+        let mut manager = CursorManager::new();
+        // Non-scrollable cursor
+        let cursor = Cursor::new("NOSCRLL", "SELECT * FROM T", vec![]);
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("NOSCRLL", &input).unwrap();
+        manager.set_mock_results("NOSCRLL", create_test_rows());
+
+        // NEXT should work (always allowed)
+        let result = manager.fetch_direction("NOSCRLL", FetchDirection::Next).unwrap();
+        assert!(manager.sqlca().is_success());
+
+        // PRIOR should fail on non-scrollable
+        let _result = manager.fetch_direction("NOSCRLL", FetchDirection::Prior).unwrap();
+        assert!(manager.sqlca().is_error());
+        assert_eq!(manager.sqlca().sqlcode(), -243);
+
+        // But ignore the result check since we got an error
+        drop(result);
+    }
+
+    #[test]
+    fn test_fetch_out_of_range() {
+        let mut manager = CursorManager::new();
+        let cursor = create_scrollable_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("SC1", &input).unwrap();
+        manager.set_mock_results("SC1", create_test_rows());
+
+        // ABSOLUTE 99 → not found
+        let result = manager.fetch_direction("SC1", FetchDirection::Absolute(99)).unwrap();
+        assert!(manager.sqlca().is_not_found());
+        assert!(result.is_empty());
+
+        // ABSOLUTE 0 → before first, not found
+        let result = manager.fetch_direction("SC1", FetchDirection::Absolute(0)).unwrap();
+        assert!(manager.sqlca().is_not_found());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_scroll_next_then_prior_then_next() {
+        let mut manager = CursorManager::new();
+        let cursor = create_scrollable_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("SC1", &input).unwrap();
+        manager.set_mock_results("SC1", create_test_rows());
+
+        // NEXT → row 1
+        let r1 = manager.fetch_direction("SC1", FetchDirection::Next).unwrap();
+        assert_eq!(r1.get("WS-ID").unwrap().as_integer(), Some(1));
+
+        // NEXT → row 2
+        let r2 = manager.fetch_direction("SC1", FetchDirection::Next).unwrap();
+        assert_eq!(r2.get("WS-ID").unwrap().as_integer(), Some(2));
+
+        // PRIOR → back to row 1
+        let r3 = manager.fetch_direction("SC1", FetchDirection::Prior).unwrap();
+        assert_eq!(r3.get("WS-ID").unwrap().as_integer(), Some(1));
+
+        // NEXT → row 2 again
+        let r4 = manager.fetch_direction("SC1", FetchDirection::Next).unwrap();
+        assert_eq!(r4.get("WS-ID").unwrap().as_integer(), Some(2));
     }
 }

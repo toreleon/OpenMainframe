@@ -12,7 +12,7 @@ mod translate;
 mod types;
 
 pub use connection::{Db2Connection, Db2ConnectionConfig};
-pub use cursor::{Cursor, CursorManager, CursorOptions, CursorState};
+pub use cursor::{Cursor, CursorManager, CursorOptions, CursorState, FetchDirection, ScrollSensitivity};
 pub use executor::{
     cobol_format_decimal, cobol_format_value, cobol_pad_string, map_row_to_host_variables,
     sql_value_to_display, DescribeColumn, ExecutorMode, PreparedDynamic, RuntimeHostVariable,

@@ -74,6 +74,12 @@ pub enum SqlStatementType {
     ExecuteImmediate,
     /// DESCRIBE — populate SQLDA with result column info
     Describe,
+    /// SAVEPOINT — create a savepoint within a transaction
+    Savepoint,
+    /// RELEASE SAVEPOINT — release (discard) a savepoint
+    ReleaseSavepoint,
+    /// ROLLBACK TO SAVEPOINT — undo work back to a savepoint
+    RollbackToSavepoint,
     /// Other/unknown
     Other,
 }
@@ -100,7 +106,24 @@ impl SqlStatementType {
             "FETCH" => SqlStatementType::Fetch,
             "CLOSE" => SqlStatementType::Close,
             "COMMIT" => SqlStatementType::Commit,
-            "ROLLBACK" => SqlStatementType::Rollback,
+            "ROLLBACK" => {
+                // ROLLBACK TO SAVEPOINT vs plain ROLLBACK
+                let words: Vec<&str> = upper.split_whitespace().collect();
+                if words.len() >= 3 && words[1] == "TO" && words[2] == "SAVEPOINT" {
+                    SqlStatementType::RollbackToSavepoint
+                } else {
+                    SqlStatementType::Rollback
+                }
+            }
+            "SAVEPOINT" => SqlStatementType::Savepoint,
+            "RELEASE" => {
+                let words: Vec<&str> = upper.split_whitespace().collect();
+                if words.len() >= 2 && words[1] == "SAVEPOINT" {
+                    SqlStatementType::ReleaseSavepoint
+                } else {
+                    SqlStatementType::Other
+                }
+            }
             "INCLUDE" => SqlStatementType::Include,
             "WHENEVER" => SqlStatementType::Whenever,
             "PREPARE" => SqlStatementType::Prepare,
@@ -501,6 +524,9 @@ impl SqlPreprocessor {
             SqlStatementType::Execute => "SQLEXECP",
             SqlStatementType::ExecuteImmediate => "SQLEXECI",
             SqlStatementType::Describe => "SQLDESCR",
+            SqlStatementType::Savepoint => "SQLSVPT",
+            SqlStatementType::ReleaseSavepoint => "SQLRLSP",
+            SqlStatementType::RollbackToSavepoint => "SQLRBSP",
             _ => "SQLEXEC",
         };
 
@@ -872,6 +898,83 @@ mod tests {
         // Text after second SQLFETCH should NOT contain the check
         let after_second = &after_first[second_fetch_offset..];
         assert!(!after_second.contains("IF SQLCODE = 100 GO TO EOF-PARA"));
+    }
+
+    // --- Epic 303/304: Scrollable Cursors + Savepoint Type Detection ---
+
+    #[test]
+    fn test_savepoint_type_detection() {
+        assert_eq!(
+            SqlStatementType::from_sql("SAVEPOINT SP1 ON ROLLBACK RETAIN CURSORS"),
+            SqlStatementType::Savepoint
+        );
+        assert_eq!(
+            SqlStatementType::from_sql("RELEASE SAVEPOINT SP1"),
+            SqlStatementType::ReleaseSavepoint
+        );
+        assert_eq!(
+            SqlStatementType::from_sql("ROLLBACK TO SAVEPOINT SP1"),
+            SqlStatementType::RollbackToSavepoint
+        );
+        // Plain ROLLBACK is still Rollback
+        assert_eq!(
+            SqlStatementType::from_sql("ROLLBACK"),
+            SqlStatementType::Rollback
+        );
+    }
+
+    #[test]
+    fn test_savepoint_generates_sqlsvpt_call() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             SAVEPOINT SP1 ON ROLLBACK RETAIN CURSORS
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.sql_statements.len(), 1);
+        assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::Savepoint);
+        assert!(result.cobol_source.contains("CALL \"SQLSVPT\""));
+    }
+
+    #[test]
+    fn test_rollback_to_savepoint_generates_sqlrbsp_call() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             ROLLBACK TO SAVEPOINT SP1
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.sql_statements.len(), 1);
+        assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::RollbackToSavepoint);
+        assert!(result.cobol_source.contains("CALL \"SQLRBSP\""));
+    }
+
+    #[test]
+    fn test_release_savepoint_generates_sqlrlsp_call() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             RELEASE SAVEPOINT SP1
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.sql_statements.len(), 1);
+        assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::ReleaseSavepoint);
+        assert!(result.cobol_source.contains("CALL \"SQLRLSP\""));
     }
 
     #[test]

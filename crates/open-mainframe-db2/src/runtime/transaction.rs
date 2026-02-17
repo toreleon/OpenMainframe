@@ -51,6 +51,8 @@ pub struct TransactionManager {
     mock_mode: bool,
     /// Number of statements in current transaction
     statement_count: usize,
+    /// Active savepoints (stack — most recent last)
+    savepoints: Vec<String>,
 }
 
 impl TransactionManager {
@@ -62,6 +64,7 @@ impl TransactionManager {
             sqlca: Sqlca::new(),
             mock_mode: true,
             statement_count: 0,
+            savepoints: Vec::new(),
         }
     }
 
@@ -73,6 +76,7 @@ impl TransactionManager {
             sqlca: Sqlca::new(),
             mock_mode: true,
             statement_count: 0,
+            savepoints: Vec::new(),
         }
     }
 
@@ -143,6 +147,7 @@ impl TransactionManager {
             // Reset for next transaction
             self.state = TransactionState::Inactive;
             self.statement_count = 0;
+            self.savepoints.clear();
             return Ok(());
         }
 
@@ -158,6 +163,7 @@ impl TransactionManager {
 
             self.state = TransactionState::Inactive;
             self.statement_count = 0;
+            self.savepoints.clear();
         }
 
         Ok(())
@@ -186,6 +192,7 @@ impl TransactionManager {
             // Reset for next transaction
             self.state = TransactionState::Inactive;
             self.statement_count = 0;
+            self.savepoints.clear();
             return Ok(());
         }
 
@@ -201,9 +208,78 @@ impl TransactionManager {
 
             self.state = TransactionState::Inactive;
             self.statement_count = 0;
+            self.savepoints.clear();
         }
 
         Ok(())
+    }
+
+    /// Create a savepoint within the current transaction.
+    pub fn savepoint(&mut self, name: &str) -> Db2Result<()> {
+        self.sqlca.reset();
+
+        // Must have an active transaction
+        if self.state != TransactionState::Active {
+            self.state = TransactionState::Active;
+        }
+
+        let sp_name = name.to_uppercase();
+
+        // Check for duplicate savepoint — DB2 replaces it
+        self.savepoints.retain(|s| s != &sp_name);
+        self.savepoints.push(sp_name);
+
+        self.sqlca.set_success();
+        Ok(())
+    }
+
+    /// Release (discard) a savepoint and all savepoints created after it.
+    pub fn release_savepoint(&mut self, name: &str) -> Db2Result<()> {
+        self.sqlca.reset();
+
+        let sp_name = name.to_uppercase();
+
+        if let Some(pos) = self.savepoints.iter().position(|s| s == &sp_name) {
+            // Remove this savepoint and all after it
+            self.savepoints.truncate(pos);
+            self.sqlca.set_success();
+        } else {
+            self.sqlca.set_error(-880, "Savepoint does not exist");
+        }
+
+        Ok(())
+    }
+
+    /// Rollback to a savepoint (undo work after the savepoint, keep savepoint).
+    pub fn rollback_to_savepoint(
+        &mut self,
+        name: &str,
+        cursor_manager: Option<&mut CursorManager>,
+    ) -> Db2Result<()> {
+        self.sqlca.reset();
+
+        let sp_name = name.to_uppercase();
+
+        if let Some(pos) = self.savepoints.iter().position(|s| s == &sp_name) {
+            // Remove savepoints created after this one (but keep the named one)
+            self.savepoints.truncate(pos + 1);
+
+            // Close cursors opened after the savepoint (simplified: close non-WITH-HOLD)
+            if let Some(cm) = cursor_manager {
+                cm.on_commit(); // closes non-WITH-HOLD cursors
+            }
+
+            self.sqlca.set_success();
+        } else {
+            self.sqlca.set_error(-880, "Savepoint does not exist");
+        }
+
+        Ok(())
+    }
+
+    /// Get the list of active savepoints.
+    pub fn savepoints(&self) -> &[String] {
+        &self.savepoints
     }
 
     /// Handle implicit commit (on normal program end).
@@ -371,5 +447,134 @@ mod tests {
 
         // Should still be active (no implicit commit)
         assert_eq!(tm.state(), TransactionState::Active);
+    }
+
+    // --- Epic 304: Savepoint Support ---
+
+    #[test]
+    fn test_savepoint_create() {
+        let mut tm = TransactionManager::new();
+        tm.begin().unwrap();
+        tm.record_statement();
+
+        tm.savepoint("SP1").unwrap();
+        assert!(tm.sqlca().is_success());
+        assert_eq!(tm.savepoints(), &["SP1"]);
+    }
+
+    #[test]
+    fn test_savepoint_multiple() {
+        let mut tm = TransactionManager::new();
+        tm.begin().unwrap();
+
+        tm.savepoint("SP1").unwrap();
+        tm.savepoint("SP2").unwrap();
+        tm.savepoint("SP3").unwrap();
+
+        assert_eq!(tm.savepoints(), &["SP1", "SP2", "SP3"]);
+    }
+
+    #[test]
+    fn test_savepoint_duplicate_replaces() {
+        let mut tm = TransactionManager::new();
+        tm.begin().unwrap();
+
+        tm.savepoint("SP1").unwrap();
+        tm.savepoint("SP2").unwrap();
+        tm.savepoint("SP1").unwrap(); // re-create SP1
+
+        // SP1 should now be at the end (replaced)
+        assert_eq!(tm.savepoints(), &["SP2", "SP1"]);
+    }
+
+    #[test]
+    fn test_release_savepoint() {
+        let mut tm = TransactionManager::new();
+        tm.begin().unwrap();
+
+        tm.savepoint("SP1").unwrap();
+        tm.savepoint("SP2").unwrap();
+        tm.savepoint("SP3").unwrap();
+
+        // Release SP2 removes SP2 and everything after it
+        tm.release_savepoint("SP2").unwrap();
+        assert!(tm.sqlca().is_success());
+        assert_eq!(tm.savepoints(), &["SP1"]);
+    }
+
+    #[test]
+    fn test_release_savepoint_not_found() {
+        let mut tm = TransactionManager::new();
+        tm.begin().unwrap();
+
+        tm.release_savepoint("NOSUCH").unwrap();
+        assert!(tm.sqlca().is_error());
+        assert_eq!(tm.sqlca().sqlcode(), -880);
+    }
+
+    #[test]
+    fn test_rollback_to_savepoint() {
+        let mut tm = TransactionManager::new();
+        tm.begin().unwrap();
+
+        tm.savepoint("SP1").unwrap();
+        tm.record_statement();
+        tm.savepoint("SP2").unwrap();
+        tm.record_statement();
+
+        // Rollback to SP1 removes SP2 but keeps SP1
+        tm.rollback_to_savepoint("SP1", None).unwrap();
+        assert!(tm.sqlca().is_success());
+        assert_eq!(tm.savepoints(), &["SP1"]);
+
+        // Transaction should still be active
+        assert_eq!(tm.state(), TransactionState::Active);
+    }
+
+    #[test]
+    fn test_rollback_to_savepoint_not_found() {
+        let mut tm = TransactionManager::new();
+        tm.begin().unwrap();
+
+        tm.rollback_to_savepoint("NOSUCH", None).unwrap();
+        assert!(tm.sqlca().is_error());
+        assert_eq!(tm.sqlca().sqlcode(), -880);
+    }
+
+    #[test]
+    fn test_commit_clears_savepoints() {
+        let mut tm = TransactionManager::new();
+        tm.begin().unwrap();
+
+        tm.savepoint("SP1").unwrap();
+        tm.savepoint("SP2").unwrap();
+
+        tm.commit(None).unwrap();
+        assert!(tm.savepoints().is_empty());
+    }
+
+    #[test]
+    fn test_rollback_clears_savepoints() {
+        let mut tm = TransactionManager::new();
+        tm.begin().unwrap();
+
+        tm.savepoint("SP1").unwrap();
+        tm.savepoint("SP2").unwrap();
+
+        tm.rollback(None).unwrap();
+        assert!(tm.savepoints().is_empty());
+    }
+
+    #[test]
+    fn test_savepoint_case_insensitive() {
+        let mut tm = TransactionManager::new();
+        tm.begin().unwrap();
+
+        tm.savepoint("mysp").unwrap();
+        assert_eq!(tm.savepoints(), &["MYSP"]);
+
+        tm.release_savepoint("MYSP").unwrap();
+        assert!(tm.sqlca().is_success());
+        assert!(tm.savepoints().is_empty());
     }
 }
