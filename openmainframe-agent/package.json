@@ -1,0 +1,31 @@
+{
+  "name": "openmainframe-agent",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:agent\"",
+    "dev:frontend": "next dev --port 3000",
+    "dev:agent": "cd agent && uvicorn main:app --host 0.0.0.0 --port 8123 --reload",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@copilotkit/react-core": "^1.8.0",
+    "@copilotkit/react-ui": "^1.8.0",
+    "@copilotkit/runtime": "^1.8.0",
+    "next": "15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.0"
+  }
+}

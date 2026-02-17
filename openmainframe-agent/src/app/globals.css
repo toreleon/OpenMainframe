@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import "@copilotkit/react-ui/styles.css";
+
+:root {
+  --om-bg: #1e1e2e;
+  --om-surface: #282a36;
+  --om-border: #44475a;
+  --om-text: #f8f8f2;
+  --om-muted: #6272a4;
+  --om-accent: #8be9fd;
+  --om-success: #50fa7b;
+  --om-warning: #f1fa8c;
+  --om-error: #ff5555;
+  --om-info: #bd93f9;
+}
+
+body {
+  background-color: var(--om-bg);
+  color: var(--om-text);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* CopilotKit sidebar dark theme overrides */
+.copilotKitSidebar {
+  --copilot-kit-background-color: var(--om-surface);
+  --copilot-kit-secondary-color: var(--om-border);
+  --copilot-kit-primary-color: var(--om-accent);
+}
