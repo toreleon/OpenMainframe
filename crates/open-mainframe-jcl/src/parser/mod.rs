@@ -3482,4 +3482,224 @@ mod tests {
         assert_eq!(job.output_stmts[1].name, "OUT2");
         assert_eq!(job.output_stmts[1].copies, Some(5));
     }
+
+    // ======================================================================
+    // Epic 109: Parser Test Suite Expansion (Story 109.2)
+    // ======================================================================
+
+    /// Story 109.2: Multi-step jobs parse correctly.
+    #[test]
+    fn test_parse_multi_step_job() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=PROG1
+//SYSOUT   DD SYSOUT=*
+//STEP2    EXEC PGM=PROG2
+//INPUT    DD DSN=MY.DATA,DISP=SHR
+//STEP3    EXEC PGM=PROG3,PARM='ABC'
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].name, Some("STEP1".to_string()));
+        assert_eq!(steps[1].name, Some("STEP2".to_string()));
+        assert_eq!(steps[2].name, Some("STEP3".to_string()));
+        assert_eq!(steps[2].params.parm, Some("ABC".to_string()));
+    }
+
+    /// Story 109.2: Continuation lines work for long DD parameters.
+    #[test]
+    fn test_parse_continuation_lines() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=TEST
+//OUT      DD DSN=LONG.DATASET.NAME,DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(TRK,(100,50)),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=27920)
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "LONG.DATASET.NAME");
+            let disp = def.disp.as_ref().unwrap();
+            assert!(matches!(disp.status, DispStatus::New));
+            assert!(matches!(disp.normal, Some(DispAction::Catlg)));
+            let dcb = def.dcb.as_ref().unwrap();
+            assert_eq!(dcb.recfm, Some(RecordFormat::FixedBlocked));
+            assert_eq!(dcb.lrecl, Some(80));
+            assert_eq!(dcb.blksize, Some(27920));
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 109.2: All DISP status combinations parse.
+    #[test]
+    fn test_parse_all_disp_combinations() {
+        // Test each DISP status: NEW, OLD, SHR, MOD
+        for (disp_str, expected) in [
+            ("(NEW,CATLG)", DispStatus::New),
+            ("(OLD,KEEP)", DispStatus::Old),
+            ("SHR", DispStatus::Shr),
+            ("(MOD,CATLG)", DispStatus::Mod),
+        ] {
+            let jcl = format!(
+                "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=TEST\n//DD1      DD DSN=MY.DS,DISP={}\n//",
+                disp_str
+            );
+            let job = parse(&jcl).unwrap();
+            let dd = &job.steps()[0].dd_statements[0];
+            if let DdDefinition::Dataset(ref def) = dd.definition {
+                assert_eq!(def.disp.as_ref().unwrap().status, expected,
+                    "DISP={} should produce {:?}", disp_str, expected);
+            } else {
+                panic!("Expected Dataset for DISP={}", disp_str);
+            }
+        }
+    }
+
+    /// Story 109.2: DCB variants (RECFM=F, V, VB, U).
+    #[test]
+    fn test_parse_dcb_recfm_variants() {
+        for (recfm_str, expected) in [
+            ("F", RecordFormat::Fixed),
+            ("FB", RecordFormat::FixedBlocked),
+            ("V", RecordFormat::Variable),
+            ("VB", RecordFormat::VariableBlocked),
+            ("U", RecordFormat::Undefined),
+        ] {
+            let jcl = format!(
+                "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=T\n//DD1      DD DSN=MY.DS,DISP=SHR,DCB=(RECFM={},LRECL=80)\n//",
+                recfm_str
+            );
+            let job = parse(&jcl).unwrap();
+            let dd = &job.steps()[0].dd_statements[0];
+            if let DdDefinition::Dataset(ref def) = dd.definition {
+                let dcb = def.dcb.as_ref().expect("DCB should be parsed");
+                assert_eq!(dcb.recfm, Some(expected), "RECFM={}", recfm_str);
+            } else {
+                panic!("Expected Dataset for RECFM={}", recfm_str);
+            }
+        }
+    }
+
+    /// Story 109.2: SPACE with various units (TRK, CYL, block size).
+    #[test]
+    fn test_parse_space_units() {
+        // TRK
+        let jcl = "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=T\n//DD1      DD DSN=MY.DS,DISP=(NEW,CATLG),SPACE=(TRK,(10,5))\n//";
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            let space = def.space.as_ref().expect("SPACE should be parsed");
+            assert_eq!(space.unit, SpaceUnit::Trk);
+            assert_eq!(space.primary, 10);
+            assert_eq!(space.secondary, Some(5));
+        } else {
+            panic!("Expected Dataset");
+        }
+
+        // CYL
+        let jcl = "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=T\n//DD1      DD DSN=MY.DS,DISP=(NEW,CATLG),SPACE=(CYL,(5,2))\n//";
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            let space = def.space.as_ref().unwrap();
+            assert_eq!(space.unit, SpaceUnit::Cyl);
+            assert_eq!(space.primary, 5);
+        } else {
+            panic!("Expected Dataset");
+        }
+    }
+
+    /// Story 109.2: Inline data DD parsed as Inline definition.
+    #[test]
+    fn test_parse_inline_data_default_delim() {
+        let jcl = "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=T\n//SYSIN    DD *\n  SORT FIELDS=(1,10,CH,A)\n/*\n//";
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        assert_eq!(dd.name, "SYSIN");
+        // Parser creates an Inline definition; data lines are consumed by the lexer
+        assert!(matches!(dd.definition, DdDefinition::Inline(_)),
+            "Expected Inline definition, got {:?}", dd.definition);
+    }
+
+    /// Story 109.2: SYSOUT with writer and form.
+    #[test]
+    fn test_parse_sysout_star() {
+        let jcl = "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=T\n//PRINT    DD SYSOUT=A\n//";
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Sysout(ref def) = dd.definition {
+            assert_eq!(def.class, 'A');
+        } else {
+            panic!("Expected Sysout");
+        }
+    }
+
+    /// Story 109.2: DUMMY DD parsing.
+    #[test]
+    fn test_parse_dummy_dd() {
+        let jcl = "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=T\n//NULL     DD DUMMY\n//";
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        assert_eq!(dd.name, "NULL");
+        assert!(matches!(dd.definition, DdDefinition::Dummy));
+    }
+
+    /// Story 109.2: Comment handling — comments are ignored.
+    #[test]
+    fn test_parse_with_comments() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//*  THIS IS A COMMENT
+//STEP1    EXEC PGM=IEFBR14
+//*  ANOTHER COMMENT
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].name, Some("STEP1".to_string()));
+    }
+
+    /// Story 109.2: Null statement (//) terminates job.
+    #[test]
+    fn test_parse_null_statement() {
+        let jcl = "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=TEST\n//";
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.steps().len(), 1);
+    }
+
+    /// Story 109.2: Error case — empty input.
+    #[test]
+    fn test_parse_empty_input_error() {
+        let result = parse("");
+        assert!(result.is_err());
+    }
+
+    /// Story 109.2: Error case — missing JOB statement.
+    #[test]
+    fn test_parse_missing_job_error() {
+        let jcl = "//STEP1    EXEC PGM=IEFBR14\n//";
+        let result = parse(jcl);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("JOB"), "Error should mention JOB: {}", err);
+    }
+
+    /// Story 109.2: SPACE with directory blocks (for PDS).
+    #[test]
+    fn test_parse_space_with_directory() {
+        let jcl = "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=T\n//DD1      DD DSN=MY.PDS,DISP=(NEW,CATLG),SPACE=(TRK,(10,5,2))\n//";
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            let space = def.space.as_ref().unwrap();
+            assert_eq!(space.primary, 10);
+            assert_eq!(space.secondary, Some(5));
+            assert_eq!(space.directory, Some(2));
+        } else {
+            panic!("Expected Dataset");
+        }
+    }
 }

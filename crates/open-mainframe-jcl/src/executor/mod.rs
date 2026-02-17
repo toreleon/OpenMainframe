@@ -2,6 +2,8 @@
 //!
 //! Executes JCL jobs by running compiled COBOL programs.
 
+pub mod utility;
+
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -9,6 +11,7 @@ use std::process::{Command, Stdio};
 
 use crate::ast::*;
 use crate::error::JclError;
+use utility::UtilityRegistry;
 
 /// Result of executing a job step.
 #[derive(Debug, Clone)]
@@ -71,6 +74,8 @@ pub struct JobExecutor {
     dd_files: HashMap<String, PathBuf>,
     /// Passed datasets between steps.
     passed_datasets: HashMap<String, PathBuf>,
+    /// Registry of built-in utility programs.
+    utility_registry: UtilityRegistry,
 }
 
 impl JobExecutor {
@@ -85,7 +90,18 @@ impl JobExecutor {
             config,
             dd_files: HashMap::new(),
             passed_datasets: HashMap::new(),
+            utility_registry: UtilityRegistry::new(),
         }
+    }
+
+    /// Get a reference to the utility registry.
+    pub fn utility_registry(&self) -> &UtilityRegistry {
+        &self.utility_registry
+    }
+
+    /// Get a mutable reference to the utility registry for registering custom utilities.
+    pub fn utility_registry_mut(&mut self) -> &mut UtilityRegistry {
+        &mut self.utility_registry
     }
 
     /// Execute a JCL job.
@@ -499,23 +515,22 @@ impl JobExecutor {
 
     /// Execute a program.
     fn execute_program(&mut self, step: &Step, pgm: &str) -> Result<StepResult, JclError> {
-        // Handle built-in system utilities
+        // Handle SORT utilities specially (they need step-level access)
         match pgm {
-            "IEFBR14" => {
-                // No-op program - just return success
-                return Ok(StepResult {
-                    name: step.name.clone(),
-                    return_code: 0,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    success: true,
-                });
-            }
             "SORT" | "DFSORT" | "ICEMAN" => {
-                // Sort utility - handle internally
                 return self.execute_sort(step);
             }
             _ => {}
+        }
+
+        // Check the utility registry for built-in programs (IEFBR14, IEBGENER, IDCAMS, etc.)
+        if self.utility_registry.contains(pgm) {
+            let result = self.utility_registry.lookup(pgm).unwrap().execute(
+                step.name.as_deref(),
+                &self.dd_files,
+                step.params.parm.as_deref(),
+            )?;
+            return Ok(result);
         }
 
         // Find the program executable
@@ -653,20 +668,12 @@ impl JobExecutor {
             }
         }
 
-        // Check if it's a well-known system utility
-        match pgm {
-            "IEFBR14" => {
-                // No-op program - just return success
-                // We'll handle this specially in execute_program
-                Ok(PathBuf::from("IEFBR14"))
-            }
-            _ => Err(JclError::ExecutionFailed {
-                message: format!(
-                    "Program {} not found. Searched: {:?}",
-                    pgm, self.config.program_dir
-                ),
-            }),
-        }
+        Err(JclError::ExecutionFailed {
+            message: format!(
+                "Program {} not found. Searched: {:?}",
+                pgm, self.config.program_dir
+            ),
+        })
     }
 }
 
@@ -1009,5 +1016,283 @@ mod tests {
         }];
 
         assert!(executor.evaluate_condition(&condition, &results));
+    }
+
+    // ======================================================================
+    // Epic 108: Utility Registry Integration Tests
+    // ======================================================================
+
+    /// Story 108.1: Executor uses utility registry for IEFBR14.
+    #[test]
+    fn test_executor_utility_registry_iefbr14() {
+        let executor = JobExecutor::new();
+        assert!(executor.utility_registry().contains("IEFBR14"));
+        assert!(executor.utility_registry().contains("IEBGENER"));
+        assert!(executor.utility_registry().contains("IDCAMS"));
+    }
+
+    /// Story 108.2: Custom utility can be registered on executor.
+    #[test]
+    fn test_executor_register_custom_utility() {
+        use utility::UtilityProgram;
+
+        struct TestUtil;
+        impl UtilityProgram for TestUtil {
+            fn execute(
+                &self,
+                step_name: Option<&str>,
+                _dd_files: &HashMap<String, PathBuf>,
+                _parm: Option<&str>,
+            ) -> Result<StepResult, JclError> {
+                Ok(StepResult {
+                    name: step_name.map(|s| s.to_string()),
+                    return_code: 0,
+                    stdout: "CUSTOM\n".to_string(),
+                    stderr: String::new(),
+                    success: true,
+                })
+            }
+            fn name(&self) -> &str {
+                "TESTUTIL"
+            }
+        }
+
+        let mut executor = JobExecutor::new();
+        executor.utility_registry_mut().register(Box::new(TestUtil));
+        assert!(executor.utility_registry().contains("TESTUTIL"));
+    }
+
+    // ======================================================================
+    // Epic 109: Executor Test Suite Expansion (Story 109.3)
+    // ======================================================================
+
+    /// Story 109.3: COND bypass — step bypassed when condition is true.
+    #[test]
+    fn test_cond_bypass_skips_step() {
+        let executor = JobExecutor::new();
+        let mut step = Step::program(Some("STEP2".to_string()), "TEST");
+        step.params.cond = Some(vec![Condition {
+            code: 0,
+            operator: ConditionOperator::Eq,
+            step: Some("STEP1".to_string()),
+            procstep: None,
+        }]);
+
+        let prev = vec![StepResult {
+            name: Some("STEP1".to_string()),
+            return_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        }];
+
+        // COND=(0,EQ,STEP1) — "bypass if 0 EQ STEP1.RC", STEP1.RC=0, so 0==0 true => bypass
+        assert!(!executor.should_execute_step(&step, &prev));
+    }
+
+    /// Story 109.3: COND not met — step executes.
+    #[test]
+    fn test_cond_not_met_executes_step() {
+        let executor = JobExecutor::new();
+        let mut step = Step::program(Some("STEP2".to_string()), "TEST");
+        step.params.cond = Some(vec![Condition {
+            code: 0,
+            operator: ConditionOperator::Eq,
+            step: Some("STEP1".to_string()),
+            procstep: None,
+        }]);
+
+        let prev = vec![StepResult {
+            name: Some("STEP1".to_string()),
+            return_code: 4, // RC=4, COND=(0,EQ,STEP1) => 0==4 false => execute
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        }];
+
+        assert!(executor.should_execute_step(&step, &prev));
+    }
+
+    /// Story 109.3: Multiple COND conditions — any true => bypass.
+    #[test]
+    fn test_cond_multiple_any_true_bypasses() {
+        let executor = JobExecutor::new();
+        let mut step = Step::program(Some("STEP3".to_string()), "TEST");
+        step.params.cond = Some(vec![
+            Condition {
+                code: 8,
+                operator: ConditionOperator::Gt,
+                step: Some("STEP1".to_string()),
+                procstep: None,
+            },
+            Condition {
+                code: 0,
+                operator: ConditionOperator::Eq,
+                step: Some("STEP2".to_string()),
+                procstep: None,
+            },
+        ]);
+
+        let prev = vec![
+            StepResult {
+                name: Some("STEP1".to_string()),
+                return_code: 4,
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+            StepResult {
+                name: Some("STEP2".to_string()),
+                return_code: 0, // COND=(0,EQ,STEP2) => 0==0 true => bypass
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+        ];
+
+        assert!(!executor.should_execute_step(&step, &prev));
+    }
+
+    /// Story 109.3: Dataset creation with DISP=NEW creates parent dirs.
+    #[test]
+    fn test_resolve_dataset_new_creates_dirs() {
+        let temp_dir = std::env::temp_dir().join("jcl_exec_new_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        let dataset_dir = temp_dir.join("datasets");
+
+        let config = ExecutionConfig {
+            dataset_dir: dataset_dir.clone(),
+            work_dir: temp_dir.join("work"),
+            sysout_dir: temp_dir.join("sysout"),
+            ..Default::default()
+        };
+        let mut executor = JobExecutor::with_config(config);
+
+        let disp = Disposition {
+            status: DispStatus::New,
+            normal: Some(DispAction::Catlg),
+            abnormal: Some(DispAction::Delete),
+        };
+
+        let path = executor
+            .resolve_dataset("MY.NEW.DATA", &Some(disp))
+            .unwrap();
+        assert_eq!(path, dataset_dir.join("MY").join("NEW").join("DATA"));
+        // Parent directories should be created
+        assert!(dataset_dir.join("MY").join("NEW").exists());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Story 109.3: DD concatenation merges multiple datasets.
+    #[test]
+    fn test_concatenate_datasets() {
+        let temp_dir = std::env::temp_dir().join("jcl_concat_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        let dataset_dir = temp_dir.join("datasets");
+        fs::create_dir_all(&dataset_dir).unwrap();
+
+        // Create source files
+        fs::write(dataset_dir.join("FILE1"), "AAA\n").unwrap();
+        fs::write(dataset_dir.join("FILE2"), "BBB\n").unwrap();
+
+        let config = ExecutionConfig {
+            dataset_dir: dataset_dir.clone(),
+            work_dir: temp_dir.join("work"),
+            sysout_dir: temp_dir.join("sysout"),
+            ..Default::default()
+        };
+        let mut executor = JobExecutor::with_config(config);
+
+        let datasets = vec![
+            DatasetDef {
+                dsn: "FILE1".to_string(),
+                ..Default::default()
+            },
+            DatasetDef {
+                dsn: "FILE2".to_string(),
+                ..Default::default()
+            },
+        ];
+
+        let output_path = temp_dir.join("concat.out");
+        executor
+            .concatenate_datasets(&datasets, &output_path)
+            .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("AAA"));
+        assert!(content.contains("BBB"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Story 109.3: Inline data written to temp file.
+    #[test]
+    fn test_write_inline_data() {
+        let temp_dir = std::env::temp_dir().join("jcl_inline_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let executor = JobExecutor::new();
+        let path = temp_dir.join("inline.dat");
+        let data = vec![
+            "  SORT FIELDS=(1,10,CH,A)".to_string(),
+            "  OPTION COPY".to_string(),
+        ];
+        executor.write_inline_data(&path, &data).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("SORT FIELDS"));
+        assert!(content.contains("OPTION COPY"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Story 109.3: GDG negative generation reference.
+    #[test]
+    fn test_resolve_gdg_negative() {
+        let temp_dir = std::env::temp_dir().join("jcl_gdg_neg_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        let dataset_dir = temp_dir.join("datasets");
+
+        let gdg_dir = dataset_dir.join("MY").join("GDG");
+        fs::create_dir_all(&gdg_dir).unwrap();
+        fs::write(gdg_dir.join("G0001V00"), "gen1").unwrap();
+        fs::write(gdg_dir.join("G0002V00"), "gen2").unwrap();
+        fs::write(gdg_dir.join("G0003V00"), "gen3").unwrap();
+
+        let config = ExecutionConfig {
+            dataset_dir,
+            ..Default::default()
+        };
+        let executor = JobExecutor::with_config(config);
+
+        // -1 from max (3) = G0002V00
+        let resolved = executor.resolve_gdg("MY.GDG", -1).unwrap();
+        assert_eq!(resolved, "MY.GDG.G0002V00");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Story 109.3: Unknown program returns error.
+    #[test]
+    fn test_find_program_not_found() {
+        let temp_dir = std::env::temp_dir().join("jcl_notfound_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let config = ExecutionConfig {
+            program_dir: temp_dir.clone(),
+            ..Default::default()
+        };
+        let executor = JobExecutor::with_config(config);
+
+        let result = executor.find_program("NONEXISTENT");
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("NONEXISTENT"), "Error should mention program name: {}", msg);
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

@@ -27,8 +27,9 @@ pub mod parser;
 pub mod procedure;
 
 pub use ast::*;
-pub use error::JclError;
+pub use error::{JclError, SourceLocation};
 pub use executor::{run, run_with_config, ExecutionConfig, JobExecutor, JobResult, StepResult};
+pub use executor::utility::{UtilityProgram, UtilityRegistry};
 pub use lexer::{tokenize_operands, JclStatement, Lexer, Token};
 pub use open_mainframe_lang_core::{AstNode, Span};
 pub use parser::{parse, Parser};
