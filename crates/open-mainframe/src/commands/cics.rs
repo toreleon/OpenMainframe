@@ -379,6 +379,7 @@ pub fn run_session(
         color_theme,
         userid: None,
         initial_transid: None,
+        terminal_model: Default::default(),
     };
 
     let mut session = Session::new(config);
@@ -968,6 +969,7 @@ mod tests {
             color_theme: "classic".to_string(),
             userid: None,
             initial_transid: None,
+            terminal_model: Default::default(),
         };
         let session = Session::new(config);
         let terminal = test_terminal();

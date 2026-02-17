@@ -248,6 +248,7 @@ impl CicsBridge {
                 freekb,
                 alarm,
                 frset,
+                accum: false,
             };
             // Pass map_name/mapset_name via the data map as metadata for the
             // callback to resolve the actual BMS map definition.
