@@ -117,3 +117,18 @@
   - src/components/workspace/CodeViewer.tsx (COBOL/JCL syntax highlighting with line numbers)
   - src/app/page.tsx (updated — 3-column layout: Header + FileTree | Workspace + StatusBar + CopilotSidebar)
 - Notes: Three-column layout with dark theme using om-* color tokens. FileTreePanel shows source files with type icons (CB, JC, CP, BM, DA). CodeViewer provides word-level syntax highlighting for COBOL and JCL keywords, string literals, and numbers. COBOL column-7 comments and JCL //* comments rendered in italic muted style. Tabs support welcome, code, assessment, and execution types.
+
+## Batch 9b: UI Data Components (E-900 part 2)
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - src/components/workspace/AssessmentDashboard.tsx (metric cards, feature support matrix, issues list, programs table)
+  - src/components/workspace/JobTimeline.tsx (step timeline, expandable step details, summary)
+  - src/components/chat/AssessmentCard.tsx (inline assessment summary in chat)
+  - src/components/chat/CompilerOutputCard.tsx (compilation success/failure card)
+  - src/components/chat/ApprovalCard.tsx (HITL approve/reject with grayed-out decided state)
+  - src/components/chat/ProgressCard.tsx (operation in-progress with optional progress bar)
+  - src/components/chat/ExplanationCard.tsx (code explanation summary card)
+  - src/components/layout/WorkspacePanel.tsx (updated — wired AssessmentDashboard + JobTimeline)
+  - src/app/page.tsx (updated — useRenderToolCall for 8 tools: assess_scan, assess_file, compile_cobol, check_cobol, lex_cobol, parse_jcl, run_jcl, interpret_cobol)
+- Notes: All 5 generative UI card types created for CopilotKit chat rendering. useRenderToolCall registered for all backend tools — shows ProgressCard during inProgress, tool-specific card on completion. AssessmentDashboard supports drill-down from issues/programs to CodeViewer. JobTimeline provides clickable step-by-step visualization with expandable SYSOUT. ApprovalCard supports approve/reject buttons with grayed-out state after decision (wired in Batch 10).

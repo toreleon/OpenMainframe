@@ -1,9 +1,12 @@
 "use client";
 
 import type { WorkspaceTab } from "@/hooks/useWorkspaceTabs";
+import type { AssessmentReport, ExecutionResult } from "@/lib/types";
 import { TabManager } from "@/components/workspace/TabManager";
 import { CodeViewer } from "@/components/workspace/CodeViewer";
 import { WelcomeScreen } from "@/components/workspace/WelcomeScreen";
+import { AssessmentDashboard } from "@/components/workspace/AssessmentDashboard";
+import { JobTimeline } from "@/components/workspace/JobTimeline";
 
 interface WorkspacePanelProps {
   tabs: WorkspaceTab[];
@@ -11,6 +14,9 @@ interface WorkspacePanelProps {
   activeTabId: string;
   onTabSelect: (id: string) => void;
   onTabClose: (id: string) => void;
+  assessmentReport: AssessmentReport | null;
+  latestExecution: ExecutionResult | null;
+  onFileSelect: (path: string) => void;
 }
 
 export function WorkspacePanel({
@@ -19,6 +25,9 @@ export function WorkspacePanel({
   activeTabId,
   onTabSelect,
   onTabClose,
+  assessmentReport,
+  latestExecution,
+  onFileSelect,
 }: WorkspacePanelProps) {
   return (
     <div className="flex-1 flex flex-col min-w-0">
@@ -36,14 +45,23 @@ export function WorkspacePanel({
             scrollToLine={activeTab.scrollToLine}
           />
         )}
-        {activeTab.type === "assessment" && (
+        {activeTab.type === "assessment" && assessmentReport && (
+          <AssessmentDashboard
+            report={assessmentReport}
+            onFileSelect={onFileSelect}
+          />
+        )}
+        {activeTab.type === "assessment" && !assessmentReport && (
           <div className="p-6 text-om-muted text-sm">
-            Assessment dashboard — loaded in Batch 9b.
+            No assessment data available. Run an assessment first.
           </div>
         )}
-        {activeTab.type === "execution" && (
+        {activeTab.type === "execution" && latestExecution && (
+          <JobTimeline result={latestExecution} />
+        )}
+        {activeTab.type === "execution" && !latestExecution && (
           <div className="p-6 text-om-muted text-sm">
-            Execution timeline — loaded in Batch 9b.
+            No execution data available. Run a JCL job first.
           </div>
         )}
       </div>
