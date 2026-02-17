@@ -689,6 +689,75 @@ impl SqlExecutor {
     }
 }
 
+/// Resolve input host variables using indicator variables.
+///
+/// For each input host variable with an indicator, checks the indicator value:
+/// - indicator < 0 (typically -1): the host variable value is replaced with NULL
+/// - indicator = 0: value is used as-is
+/// - indicator > 0: value is used as-is (indicates original length for truncation)
+///
+/// This implements COBOL `EXEC SQL INSERT ... VALUES(:WS-NAME :WS-NAME-IND)` semantics.
+pub fn resolve_input_with_indicators(
+    host_variables: &[RuntimeHostVariable],
+    values: &HashMap<String, SqlValue>,
+) -> HashMap<String, SqlValue> {
+    let mut resolved = values.clone();
+
+    for var in host_variables {
+        if var.usage != HostVariableUsage::Input {
+            continue;
+        }
+        if let Some(ref ind_name) = var.indicator {
+            if let Some(ind_val) = values.get(ind_name) {
+                if let Some(ind_int) = ind_val.as_integer() {
+                    if ind_int < 0 {
+                        // Negative indicator → NULL
+                        resolved.insert(var.name.clone(), SqlValue::Null);
+                    }
+                }
+            }
+        }
+    }
+
+    resolved
+}
+
+/// Resolve output host variables with indicator variable assignments.
+///
+/// After a FETCH or SELECT INTO, sets indicator variables based on the result:
+/// - NULL value: indicator = -1, host variable unchanged
+/// - Non-NULL value: indicator = 0, host variable set
+/// - Truncated value: indicator = original length (positive)
+///
+/// This is already handled by `map_row_to_host_variables` but this function
+/// provides explicit indicator assignment for direct use.
+pub fn set_output_indicators(
+    host_variables: &[RuntimeHostVariable],
+    result: &HashMap<String, SqlValue>,
+) -> HashMap<String, SqlValue> {
+    let mut indicators = HashMap::new();
+
+    for var in host_variables {
+        if var.usage != HostVariableUsage::Output {
+            continue;
+        }
+        if let Some(ref ind_name) = var.indicator {
+            match result.get(&var.name) {
+                Some(SqlValue::Null) | None => {
+                    indicators.insert(ind_name.clone(), SqlValue::Integer(-1));
+                }
+                Some(_) => {
+                    indicators.insert(ind_name.clone(), SqlValue::Integer(0));
+                }
+            }
+        }
+    }
+
+    let mut combined = result.clone();
+    combined.extend(indicators);
+    combined
+}
+
 // -----------------------------------------------------------------------
 // Result-to-COBOL mapping utilities (Story 302.2)
 // -----------------------------------------------------------------------
@@ -1539,5 +1608,149 @@ mod tests {
         // → value correctly converted and stored
         let result = cobol_format_decimal(12345.67, 9, 2);
         assert_eq!(result, SqlValue::Integer(1234567));
+    }
+
+    // --- Epic 306: Indicator Variable Tests ---
+
+    #[test]
+    fn test_resolve_input_null_indicator() {
+        // When WS-NAME-IND = -1, WS-NAME should become NULL
+        let vars = vec![RuntimeHostVariable {
+            name: "WS-NAME".to_string(),
+            indicator: Some("WS-NAME-IND".to_string()),
+            usage: HostVariableUsage::Input,
+        }];
+
+        let mut values = HashMap::new();
+        values.insert("WS-NAME".to_string(), SqlValue::String("John".to_string()));
+        values.insert("WS-NAME-IND".to_string(), SqlValue::Integer(-1));
+
+        let resolved = resolve_input_with_indicators(&vars, &values);
+        assert!(resolved.get("WS-NAME").unwrap().is_null());
+    }
+
+    #[test]
+    fn test_resolve_input_zero_indicator_keeps_value() {
+        // When WS-NAME-IND = 0, WS-NAME should be unchanged
+        let vars = vec![RuntimeHostVariable {
+            name: "WS-NAME".to_string(),
+            indicator: Some("WS-NAME-IND".to_string()),
+            usage: HostVariableUsage::Input,
+        }];
+
+        let mut values = HashMap::new();
+        values.insert("WS-NAME".to_string(), SqlValue::String("John".to_string()));
+        values.insert("WS-NAME-IND".to_string(), SqlValue::Integer(0));
+
+        let resolved = resolve_input_with_indicators(&vars, &values);
+        assert_eq!(resolved.get("WS-NAME").unwrap().as_string(), Some("John"));
+    }
+
+    #[test]
+    fn test_resolve_input_no_indicator_keeps_value() {
+        // No indicator variable → value unchanged
+        let vars = vec![RuntimeHostVariable {
+            name: "WS-NAME".to_string(),
+            indicator: None,
+            usage: HostVariableUsage::Input,
+        }];
+
+        let mut values = HashMap::new();
+        values.insert("WS-NAME".to_string(), SqlValue::String("John".to_string()));
+
+        let resolved = resolve_input_with_indicators(&vars, &values);
+        assert_eq!(resolved.get("WS-NAME").unwrap().as_string(), Some("John"));
+    }
+
+    #[test]
+    fn test_resolve_input_multiple_vars() {
+        let vars = vec![
+            RuntimeHostVariable {
+                name: "WS-ID".to_string(),
+                indicator: None,
+                usage: HostVariableUsage::Input,
+            },
+            RuntimeHostVariable {
+                name: "WS-NAME".to_string(),
+                indicator: Some("WS-NAME-IND".to_string()),
+                usage: HostVariableUsage::Input,
+            },
+            RuntimeHostVariable {
+                name: "WS-DEPT".to_string(),
+                indicator: Some("WS-DEPT-IND".to_string()),
+                usage: HostVariableUsage::Input,
+            },
+        ];
+
+        let mut values = HashMap::new();
+        values.insert("WS-ID".to_string(), SqlValue::Integer(1));
+        values.insert("WS-NAME".to_string(), SqlValue::String("John".to_string()));
+        values.insert("WS-NAME-IND".to_string(), SqlValue::Integer(-1)); // NULL
+        values.insert("WS-DEPT".to_string(), SqlValue::String("D01".to_string()));
+        values.insert("WS-DEPT-IND".to_string(), SqlValue::Integer(0)); // not NULL
+
+        let resolved = resolve_input_with_indicators(&vars, &values);
+        assert_eq!(resolved.get("WS-ID").unwrap().as_integer(), Some(1));
+        assert!(resolved.get("WS-NAME").unwrap().is_null());
+        assert_eq!(resolved.get("WS-DEPT").unwrap().as_string(), Some("D01"));
+    }
+
+    #[test]
+    fn test_set_output_indicators_null() {
+        let vars = vec![RuntimeHostVariable {
+            name: "WS-NAME".to_string(),
+            indicator: Some("WS-NAME-IND".to_string()),
+            usage: HostVariableUsage::Output,
+        }];
+
+        let mut result = HashMap::new();
+        result.insert("WS-NAME".to_string(), SqlValue::Null);
+
+        let output = set_output_indicators(&vars, &result);
+        assert_eq!(output.get("WS-NAME-IND").unwrap().as_integer(), Some(-1));
+    }
+
+    #[test]
+    fn test_set_output_indicators_non_null() {
+        let vars = vec![RuntimeHostVariable {
+            name: "WS-NAME".to_string(),
+            indicator: Some("WS-NAME-IND".to_string()),
+            usage: HostVariableUsage::Output,
+        }];
+
+        let mut result = HashMap::new();
+        result.insert("WS-NAME".to_string(), SqlValue::String("Alice".to_string()));
+
+        let output = set_output_indicators(&vars, &result);
+        assert_eq!(output.get("WS-NAME-IND").unwrap().as_integer(), Some(0));
+        assert_eq!(output.get("WS-NAME").unwrap().as_string(), Some("Alice"));
+    }
+
+    #[test]
+    fn test_set_output_indicators_missing_value() {
+        let vars = vec![RuntimeHostVariable {
+            name: "WS-NAME".to_string(),
+            indicator: Some("WS-NAME-IND".to_string()),
+            usage: HostVariableUsage::Output,
+        }];
+
+        // Value not present in result → treated as NULL
+        let result = HashMap::new();
+        let output = set_output_indicators(&vars, &result);
+        assert_eq!(output.get("WS-NAME-IND").unwrap().as_integer(), Some(-1));
+    }
+
+    #[test]
+    fn test_output_ignores_input_vars() {
+        let vars = vec![RuntimeHostVariable {
+            name: "WS-ID".to_string(),
+            indicator: Some("WS-ID-IND".to_string()),
+            usage: HostVariableUsage::Input, // Input, not Output
+        }];
+
+        let result = HashMap::new();
+        let output = set_output_indicators(&vars, &result);
+        // Should NOT set WS-ID-IND since it's an input var
+        assert!(!output.contains_key("WS-ID-IND"));
     }
 }

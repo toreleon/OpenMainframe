@@ -15,8 +15,9 @@ pub use connection::{Db2Connection, Db2ConnectionConfig};
 pub use cursor::{Cursor, CursorManager, CursorOptions, CursorState, FetchDirection, ScrollSensitivity};
 pub use executor::{
     cobol_format_decimal, cobol_format_value, cobol_pad_string, map_row_to_host_variables,
-    sql_value_to_display, DescribeColumn, ExecutorMode, PreparedDynamic, RuntimeHostVariable,
-    RuntimeStatement, SqlExecutor, SqlRow, SqlValue,
+    resolve_input_with_indicators, set_output_indicators, sql_value_to_display, DescribeColumn,
+    ExecutorMode, PreparedDynamic, RuntimeHostVariable, RuntimeStatement, SqlExecutor, SqlRow,
+    SqlValue,
 };
 pub use sqlca::{Sqlca, SqlcaBuilder};
 pub use transaction::{TransactionConfig, TransactionManager, TransactionState};
