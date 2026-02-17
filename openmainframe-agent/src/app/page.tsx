@@ -5,6 +5,7 @@ import { useRenderToolCall } from "@copilotkit/react-core";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useWorkspaceTabs } from "@/hooks/useWorkspaceTabs";
 import { useInterruptHandler } from "@/hooks/useInterruptHandler";
+import { useProgressSync } from "@/hooks/useProgressSync";
 import { Header } from "@/components/layout/Header";
 import { FileTreePanel } from "@/components/layout/FileTreePanel";
 import { WorkspacePanel } from "@/components/layout/WorkspacePanel";
@@ -26,6 +27,9 @@ export default function Home() {
 
   // HITL — render LangGraph interrupt() approvals inline in chat
   useInterruptHandler();
+
+  // Auto-open workspace tabs when agent produces results
+  useProgressSync(state, openTab);
 
   // Generative UI — render tool calls inline in chat
   useRenderToolCall({

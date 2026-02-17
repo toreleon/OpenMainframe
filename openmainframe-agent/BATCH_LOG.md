@@ -140,3 +140,16 @@
   - src/hooks/useInterruptHandler.ts (NEW — useLangGraphInterrupt wrapper with InterruptApprovalCard)
   - src/app/page.tsx (updated — useInterruptHandler() wired for HITL approval rendering)
 - Notes: Uses CopilotKit's useLangGraphInterrupt hook to declaratively handle LangGraph interrupt() events from the Python agent. When the execute or dataset node calls interrupt({ action, file, description }), the InterruptApprovalCard renders inline in the chat with Approve/Reject buttons. On decision, resolve() sends JSON { approved, reason } back to the agent to resume execution. Card grays out (opacity-60) and shows "Approved" or "Rejected" status after the user decides. Matches the interrupt payload format from execute.py (run_jcl, interpret_cobol) and dataset.py (IDCAMS DELETE).
+
+## Batch 11: State Management (E-1100)
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - src/hooks/useAgentState.ts (updated — setProjectPath, hasAssessment, isOperating helpers)
+  - src/hooks/useProgressSync.ts (NEW — auto-opens assessment/execution tabs when results arrive)
+  - src/app/page.tsx (updated — wired useProgressSync for reactive tab management)
+  - agent/src/checkpointer.py (NEW — configurable checkpointer factory: MemorySaver or PostgreSQL)
+  - agent/src/agent.py (updated — uses get_checkpointer() instead of hardcoded MemorySaver)
+  - agent/pyproject.toml (updated — added [postgres] optional dependency group)
+  - agent/.env.example (updated — documented CHECKPOINTER and POSTGRES_URI env vars)
+- Notes: Full typed state sync via useCoAgent with derived helpers (setProjectPath, hasAssessment, isOperating). useProgressSync watches agent state changes and automatically opens Assessment/Execution workspace tabs when results arrive from the agent. Checkpointer is now environment-configurable: CHECKPOINTER=memory (default, in-process MemorySaver) or CHECKPOINTER=postgres (PostgresSaver via langgraph-checkpoint-postgres). PostgreSQL deps are in [postgres] optional group to keep base install lightweight.

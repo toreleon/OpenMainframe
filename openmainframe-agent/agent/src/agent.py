@@ -11,10 +11,10 @@ Batch 8: assess node — completes all 6 capability nodes.
 """
 
 from langgraph.graph import StateGraph
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode
 
 from .state import AgentState
+from .checkpointer import get_checkpointer
 from .nodes import (
     router_node, chat_node, assess_node, compile_node, execute_node,
     explain_node, dataset_node,
@@ -58,5 +58,6 @@ workflow.add_conditional_edges("tools", route_after_tools, {
     "chat": "chat",
 })
 
-# Compile graph with memory checkpointer (required for HITL interrupt persistence)
-graph = workflow.compile(checkpointer=MemorySaver())
+# Compile graph with checkpointer (required for HITL interrupt persistence)
+# Supports MemorySaver (default) or PostgreSQL via CHECKPOINTER env var
+graph = workflow.compile(checkpointer=get_checkpointer())
