@@ -19,6 +19,8 @@
 
 pub mod analyzer;
 pub mod ast_analyzer;
+pub mod callgraph;
+pub mod cics_inventory;
 pub mod metrics;
 pub mod report;
 pub mod compatibility;
@@ -26,6 +28,8 @@ pub mod scanner;
 
 pub use analyzer::{Analyzer, AnalysisResult};
 pub use ast_analyzer::AstAnalyzer;
+pub use callgraph::{CallGraph, CallEdge, CallType};
+pub use cics_inventory::{CicsInventory, CicsCommand, CicsCategory, SupportStatus};
 pub use metrics::{CodeMetrics, ComplexityLevel};
 pub use report::{Report, ReportFormat};
 pub use compatibility::{CompatibilityChecker, CompatibilityIssue};
