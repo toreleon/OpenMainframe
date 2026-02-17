@@ -23,7 +23,10 @@
 //! metrics.record_request("cobol", 150.0);
 //! ```
 
+pub mod batch_metrics;
 mod config;
+pub mod container;
+pub mod dashboards;
 mod health;
 pub mod instrumentation;
 pub mod k8s_manifest;
@@ -33,7 +36,12 @@ pub mod server;
 pub mod trace_context;
 mod tracing_setup;
 
+pub use batch_metrics::{BatchMetricsCollector, JobExecutionTracker, JobMetrics, StepMetrics};
 pub use config::{Config, DatabaseConfig, ObservabilityConfig, ServerConfig};
+pub use container::{generate_dockerfile, generate_dockerignore, DockerConfig};
+pub use dashboards::{
+    generate_alert_rules, generate_grafana_dashboard, AlertConfig, DashboardConfig,
+};
 pub use health::{HealthChecker, HealthStatus, ReadinessStatus};
 pub use instrumentation::{
     CicsInstrumentation, CobolInstrumentation, ImsInstrumentation, InstrumentedRuntime,
