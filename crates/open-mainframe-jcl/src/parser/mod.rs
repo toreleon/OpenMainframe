@@ -314,7 +314,7 @@ impl<'a> Parser<'a> {
         let def = self.parse_dataset_def(tokens)?;
         Ok(DdStatement {
             name: dd_name.to_string(),
-            definition: DdDefinition::Dataset(def),
+            definition: DdDefinition::Dataset(Box::new(def)),
             span,
         })
     }
@@ -396,6 +396,116 @@ impl<'a> Parser<'a> {
                             "REGION" => {
                                 if let Token::Number(n) = &tokens[idx] {
                                     params.region = Some(*n as u32);
+                                } else if let Token::Ident(v) = &tokens[idx] {
+                                    // Handle "0M", "4M", etc.
+                                    let digits: String = v.chars().take_while(|c| c.is_ascii_digit()).collect();
+                                    if let Ok(n) = digits.parse::<u32>() {
+                                        params.region = Some(n * 1024); // Convert M to KB
+                                    }
+                                }
+                            }
+                            // Epic 105: Extended JOB parameters
+                            "TIME" => {
+                                if let Token::LParen = &tokens[idx] {
+                                    idx += 1;
+                                    let mut mins = 0u32;
+                                    let mut secs = 0u32;
+                                    if let Token::Number(n) = &tokens[idx] {
+                                        mins = *n as u32;
+                                        idx += 1;
+                                    }
+                                    if idx < tokens.len() && matches!(tokens[idx], Token::Comma) {
+                                        idx += 1;
+                                        if idx < tokens.len() {
+                                            if let Token::Number(n) = &tokens[idx] {
+                                                secs = *n as u32;
+                                                idx += 1;
+                                            }
+                                        }
+                                    }
+                                    // Skip RParen
+                                    if idx < tokens.len() && matches!(tokens[idx], Token::RParen) {
+                                        idx += 1;
+                                    }
+                                    params.time = Some((mins, secs));
+                                    // Skip comma and continue
+                                    if idx < tokens.len() && matches!(tokens[idx], Token::Comma) {
+                                        idx += 1;
+                                    }
+                                    continue;
+                                } else if let Token::Number(n) = &tokens[idx] {
+                                    params.time = Some((*n as u32, 0));
+                                }
+                            }
+                            "MSGLEVEL" => {
+                                if let Token::LParen = &tokens[idx] {
+                                    idx += 1;
+                                    let mut stmt_lvl = 0u8;
+                                    let mut alloc_lvl = 0u8;
+                                    if let Token::Number(n) = &tokens[idx] {
+                                        stmt_lvl = *n as u8;
+                                        idx += 1;
+                                    }
+                                    if idx < tokens.len() && matches!(tokens[idx], Token::Comma) {
+                                        idx += 1;
+                                        if idx < tokens.len() {
+                                            if let Token::Number(n) = &tokens[idx] {
+                                                alloc_lvl = *n as u8;
+                                                idx += 1;
+                                            }
+                                        }
+                                    }
+                                    if idx < tokens.len() && matches!(tokens[idx], Token::RParen) {
+                                        idx += 1;
+                                    }
+                                    params.msglevel = Some((stmt_lvl, alloc_lvl));
+                                    if idx < tokens.len() && matches!(tokens[idx], Token::Comma) {
+                                        idx += 1;
+                                    }
+                                    continue;
+                                } else if let Token::Number(n) = &tokens[idx] {
+                                    params.msglevel = Some((*n as u8, 0));
+                                }
+                            }
+                            "TYPRUN" => {
+                                if let Token::Ident(v) = &tokens[idx] {
+                                    params.typrun = Some(match v.to_uppercase().as_str() {
+                                        "HOLD" => crate::ast::TypeRun::Hold,
+                                        "SCAN" => crate::ast::TypeRun::Scan,
+                                        "COPY" => crate::ast::TypeRun::Copy,
+                                        _ => crate::ast::TypeRun::Run,
+                                    });
+                                }
+                            }
+                            "MEMLIMIT" => {
+                                // MEMLIMIT can be "2G", "512M", etc.
+                                // Tokenizer may produce Number(2)+Ident("G") or Ident("2G")
+                                match &tokens[idx] {
+                                    Token::Ident(v) => {
+                                        params.memlimit = Some(v.clone());
+                                    }
+                                    Token::Number(n) => {
+                                        let mut val = n.to_string();
+                                        // Check if next token is a suffix like G, M, K
+                                        if idx + 1 < tokens.len() {
+                                            if let Token::Ident(suffix) = &tokens[idx + 1] {
+                                                val.push_str(suffix);
+                                                idx += 1;
+                                            }
+                                        }
+                                        params.memlimit = Some(val);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            "JOBRC" => {
+                                if let Token::Ident(v) = &tokens[idx] {
+                                    params.jobrc = Some(v.clone());
+                                }
+                            }
+                            "SCHENV" => {
+                                if let Token::Ident(v) = &tokens[idx] {
+                                    params.schenv = Some(v.clone());
                                 }
                             }
                             _ => {
@@ -896,14 +1006,41 @@ impl<'a> Parser<'a> {
                                 }
                             }
                             "COND" => {
-                                // Parse condition (simplified)
+                                let cond_result = self.parse_exec_cond(&tokens, &mut idx);
+                                params.cond = cond_result.0;
+                                params.cond_special = cond_result.1;
+                                continue;
+                            }
+                            "TIME" => {
                                 if let Token::LParen = &tokens[idx] {
-                                    // Skip condition parsing for now
-                                    while idx < tokens.len()
-                                        && !matches!(tokens[idx], Token::RParen)
-                                    {
+                                    idx += 1;
+                                    let mut mins = 0u32;
+                                    let mut secs = 0u32;
+                                    if idx < tokens.len() {
+                                        if let Token::Number(n) = &tokens[idx] {
+                                            mins = *n as u32;
+                                            idx += 1;
+                                        }
+                                    }
+                                    if idx < tokens.len() && matches!(tokens[idx], Token::Comma) {
+                                        idx += 1;
+                                        if idx < tokens.len() {
+                                            if let Token::Number(n) = &tokens[idx] {
+                                                secs = *n as u32;
+                                                idx += 1;
+                                            }
+                                        }
+                                    }
+                                    if idx < tokens.len() && matches!(tokens[idx], Token::RParen) {
                                         idx += 1;
                                     }
+                                    params.time = Some((mins, secs));
+                                    if idx < tokens.len() && matches!(tokens[idx], Token::Comma) {
+                                        idx += 1;
+                                    }
+                                    continue;
+                                } else if let Token::Number(n) = &tokens[idx] {
+                                    params.time = Some((*n as u32, 0));
                                 }
                             }
                             _ => {
@@ -1050,11 +1187,30 @@ impl<'a> Parser<'a> {
             return Ok(dd);
         }
 
+        // Check for PATH= (USS file)
+        let has_path = tokens.iter().enumerate().any(|(i, t)| {
+            if let Token::Ident(k) = t {
+                k == "PATH"
+                    && tokens.get(i + 1).map_or(false, |t2| matches!(t2, Token::Equals))
+            } else {
+                false
+            }
+        });
+
+        if has_path {
+            let def = self.parse_uss_file_def(&tokens)?;
+            return Ok(DdStatement {
+                name: dd_name,
+                definition: DdDefinition::UssFile(def),
+                span: dd_span,
+            });
+        }
+
         // Parse as dataset DD
         let def = self.parse_dataset_def(&tokens)?;
         Ok(DdStatement {
             name: dd_name,
-            definition: DdDefinition::Dataset(def),
+            definition: DdDefinition::Dataset(Box::new(def)),
             span: dd_span,
         })
     }
@@ -1081,6 +1237,165 @@ impl<'a> Parser<'a> {
             idx += 1;
         }
         Ok('*')
+    }
+
+    /// Parse EXEC COND parameter.
+    ///
+    /// Handles:
+    /// - `COND=(code,op)` — single condition
+    /// - `COND=((code,op),(code,op,step))` — multiple conditions
+    /// - `COND=((code,op),EVEN)` or `COND=((code,op),ONLY)`
+    /// - `COND=EVEN` / `COND=ONLY` — special modes without conditions
+    fn parse_exec_cond(
+        &self,
+        tokens: &[Token],
+        idx: &mut usize,
+    ) -> (Option<Vec<Condition>>, Option<CondSpecial>) {
+        let mut conditions = Vec::new();
+        let mut special = None;
+
+        // Check for simple EVEN/ONLY
+        if let Token::Ident(v) = &tokens[*idx] {
+            match v.to_uppercase().as_str() {
+                "EVEN" => {
+                    *idx += 1;
+                    return (None, Some(CondSpecial::Even));
+                }
+                "ONLY" => {
+                    *idx += 1;
+                    return (None, Some(CondSpecial::Only));
+                }
+                _ => {}
+            }
+        }
+
+        if !matches!(tokens[*idx], Token::LParen) {
+            *idx += 1;
+            return (None, None);
+        }
+        *idx += 1; // skip outer LParen
+
+        // Check if first token inside is another LParen (list of conditions)
+        // or a Number (single condition): COND=(4,LT) vs COND=((4,LT),(8,LT,STEP1))
+        let is_list = matches!(tokens.get(*idx), Some(Token::LParen));
+
+        if is_list {
+            // List of conditions and optional EVEN/ONLY
+            while *idx < tokens.len() {
+                if matches!(tokens[*idx], Token::RParen) {
+                    *idx += 1;
+                    break;
+                }
+                if matches!(tokens[*idx], Token::LParen) {
+                    if let Some(cond) = self.parse_single_cond(tokens, idx) {
+                        conditions.push(cond);
+                    }
+                } else if let Token::Ident(v) = &tokens[*idx] {
+                    match v.to_uppercase().as_str() {
+                        "EVEN" => special = Some(CondSpecial::Even),
+                        "ONLY" => special = Some(CondSpecial::Only),
+                        _ => {}
+                    }
+                    *idx += 1;
+                } else {
+                    *idx += 1;
+                }
+                // Skip comma
+                if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+                    *idx += 1;
+                }
+            }
+        } else {
+            // Single condition: COND=(4,LT) or COND=(4,LT,STEP1)
+            if let Some(cond) = self.parse_single_cond_inner(tokens, idx) {
+                conditions.push(cond);
+            }
+            // Skip closing RParen
+            if *idx < tokens.len() && matches!(tokens[*idx], Token::RParen) {
+                *idx += 1;
+            }
+        }
+
+        let conds = if conditions.is_empty() {
+            None
+        } else {
+            Some(conditions)
+        };
+        (conds, special)
+    }
+
+    /// Parse a single parenthesized condition: (code,op) or (code,op,step) or (code,op,step.procstep).
+    fn parse_single_cond(&self, tokens: &[Token], idx: &mut usize) -> Option<Condition> {
+        if !matches!(tokens.get(*idx), Some(Token::LParen)) {
+            return None;
+        }
+        *idx += 1; // skip LParen
+        let result = self.parse_single_cond_inner(tokens, idx);
+        // skip RParen
+        if *idx < tokens.len() && matches!(tokens[*idx], Token::RParen) {
+            *idx += 1;
+        }
+        result
+    }
+
+    /// Parse the interior of a single condition: code,op[,step[.procstep]].
+    fn parse_single_cond_inner(&self, tokens: &[Token], idx: &mut usize) -> Option<Condition> {
+        // code
+        let code = if let Some(Token::Number(n)) = tokens.get(*idx) {
+            *idx += 1;
+            *n as u32
+        } else {
+            return None;
+        };
+
+        // comma
+        if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+            *idx += 1;
+        }
+
+        // operator
+        let operator = if let Some(Token::Ident(op)) = tokens.get(*idx) {
+            let op = match op.to_uppercase().as_str() {
+                "GT" => ConditionOperator::Gt,
+                "GE" => ConditionOperator::Ge,
+                "EQ" => ConditionOperator::Eq,
+                "NE" => ConditionOperator::Ne,
+                "LT" => ConditionOperator::Lt,
+                "LE" => ConditionOperator::Le,
+                _ => return None,
+            };
+            *idx += 1;
+            op
+        } else {
+            return None;
+        };
+
+        let mut step = None;
+        let mut procstep = None;
+
+        // optional: comma + step name
+        if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+            *idx += 1;
+            if let Some(Token::Ident(s)) = tokens.get(*idx) {
+                step = Some(s.clone());
+                *idx += 1;
+                // optional: period + procstep
+                if *idx < tokens.len() && matches!(tokens[*idx], Token::Period) {
+                    *idx += 1;
+                    if let Some(Token::Ident(ps)) = tokens.get(*idx) {
+                        procstep = Some(ps.clone());
+                        *idx += 1;
+                    }
+                }
+            }
+        }
+
+        Some(Condition {
+            code,
+            operator,
+            step,
+            procstep,
+        })
     }
 
     /// Parse dataset definition.
@@ -1135,6 +1450,105 @@ impl<'a> Parser<'a> {
                             "AMP" => {
                                 def.amp = Some(self.parse_amp(tokens, &mut idx)?);
                                 continue;
+                            }
+                            // Epic 104: Extended DD parameters
+                            "STORCLAS" => {
+                                if let Token::Ident(v) = &tokens[idx] {
+                                    def.storclas = Some(v.clone());
+                                }
+                            }
+                            "DATACLAS" => {
+                                if let Token::Ident(v) = &tokens[idx] {
+                                    def.dataclas = Some(v.clone());
+                                }
+                            }
+                            "MGMTCLAS" => {
+                                if let Token::Ident(v) = &tokens[idx] {
+                                    def.mgmtclas = Some(v.clone());
+                                }
+                            }
+                            "EXPDT" => {
+                                match &tokens[idx] {
+                                    Token::Ident(v) => {
+                                        def.expdt = Some(v.clone());
+                                    }
+                                    Token::Number(n) => {
+                                        def.expdt = Some(n.to_string());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            "RETPD" => {
+                                match &tokens[idx] {
+                                    Token::Number(n) => {
+                                        def.retpd = Some(*n as u32);
+                                    }
+                                    Token::Ident(v) => {
+                                        if let Ok(n) = v.parse::<u32>() {
+                                            def.retpd = Some(n);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            "DSNTYPE" => {
+                                if let Token::Ident(v) = &tokens[idx] {
+                                    def.dsntype = Some(match v.to_uppercase().as_str() {
+                                        "PDS" => crate::ast::DsType::Pds,
+                                        "LIBRARY" => crate::ast::DsType::Library,
+                                        "LARGE" => crate::ast::DsType::Large,
+                                        "EXTREQ" => crate::ast::DsType::Extreq,
+                                        "EXTPREF" => crate::ast::DsType::Extpref,
+                                        "BASIC" => crate::ast::DsType::Basic,
+                                        "HFS" => crate::ast::DsType::Hfs,
+                                        "PIPE" => crate::ast::DsType::Pipe,
+                                        _ => crate::ast::DsType::Basic,
+                                    });
+                                }
+                            }
+                            "LIKE" => {
+                                def.like = Some(self.collect_dsn(tokens, &mut idx));
+                                continue;
+                            }
+                            "REFDD" => {
+                                if let Token::Ident(v) = &tokens[idx] {
+                                    def.refdd = Some(v.clone());
+                                }
+                            }
+                            "KEYLEN" => {
+                                match &tokens[idx] {
+                                    Token::Number(n) => {
+                                        def.keylen = Some(*n as u32);
+                                    }
+                                    Token::Ident(v) => {
+                                        if let Ok(n) = v.parse::<u32>() {
+                                            def.keylen = Some(n);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            "KEYOFF" => {
+                                match &tokens[idx] {
+                                    Token::Number(n) => {
+                                        def.keyoff = Some(*n as u32);
+                                    }
+                                    Token::Ident(v) => {
+                                        if let Ok(n) = v.parse::<u32>() {
+                                            def.keyoff = Some(n);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            "LABEL" => {
+                                def.label = Some(self.parse_label(tokens, &mut idx));
+                                continue;
+                            }
+                            "AVGREC" => {
+                                if let Token::Ident(v) = &tokens[idx] {
+                                    def.avgrec = Some(v.clone());
+                                }
                             }
                             _ => {}
                         }
@@ -1442,6 +1856,217 @@ impl<'a> Parser<'a> {
         }
 
         Ok(dcb)
+    }
+
+    /// Parse LABEL parameter: `LABEL=(seq,type[,password[,IN|OUT[,expdt]]])`
+    fn parse_label(&self, tokens: &[Token], idx: &mut usize) -> LabelDef {
+        let mut seq = 1u32;
+        let mut label_type = LabelType::Sl;
+        let mut password = None;
+        let mut in_out = None;
+        let mut expdt = None;
+
+        let has_parens = *idx < tokens.len() && matches!(tokens[*idx], Token::LParen);
+        if has_parens {
+            *idx += 1;
+        }
+
+        // Sequence number
+        if *idx < tokens.len() {
+            if let Token::Number(n) = &tokens[*idx] {
+                seq = *n as u32;
+                *idx += 1;
+            }
+        }
+
+        if has_parens {
+            // Comma + label type
+            if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+                *idx += 1;
+                if *idx < tokens.len() {
+                    if let Token::Ident(v) = &tokens[*idx] {
+                        label_type = match v.to_uppercase().as_str() {
+                            "SL" => LabelType::Sl,
+                            "NSL" => LabelType::Nsl,
+                            "NL" => LabelType::Nl,
+                            "SUL" => LabelType::Sul,
+                            "BLP" => LabelType::Blp,
+                            "AL" => LabelType::Al,
+                            "AUL" => LabelType::Aul,
+                            _ => LabelType::Sl,
+                        };
+                        *idx += 1;
+                    }
+                }
+            }
+
+            // Optional: comma + password
+            if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+                *idx += 1;
+                if *idx < tokens.len() {
+                    if let Token::Ident(v) | Token::String(v) = &tokens[*idx] {
+                        password = Some(v.clone());
+                        *idx += 1;
+                    }
+                }
+            }
+
+            // Optional: comma + IN/OUT
+            if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+                *idx += 1;
+                if *idx < tokens.len() {
+                    if let Token::Ident(v) = &tokens[*idx] {
+                        in_out = Some(v.clone());
+                        *idx += 1;
+                    }
+                }
+            }
+
+            // Optional: comma + expdt
+            if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+                *idx += 1;
+                if *idx < tokens.len() {
+                    if let Token::Ident(v) = &tokens[*idx] {
+                        expdt = Some(v.clone());
+                        *idx += 1;
+                    }
+                }
+            }
+
+            // Skip RParen
+            if *idx < tokens.len() && matches!(tokens[*idx], Token::RParen) {
+                *idx += 1;
+            }
+        }
+
+        LabelDef {
+            sequence: seq,
+            label_type,
+            password,
+            in_out,
+            expdt,
+        }
+    }
+
+    /// Parse a USS file DD statement (PATH=, PATHOPTS=, PATHMODE=, PATHDISP=).
+    fn parse_uss_file_def(&self, tokens: &[Token]) -> Result<UssFileDef, JclError> {
+        let mut path = String::new();
+        let mut pathopts = Vec::new();
+        let mut pathmode = Vec::new();
+        let mut pathdisp = None;
+        let mut idx = 0;
+
+        while idx < tokens.len() {
+            if let Token::Ident(key) = &tokens[idx] {
+                idx += 1;
+                if idx < tokens.len() && matches!(tokens[idx], Token::Equals) {
+                    idx += 1;
+                    if idx < tokens.len() {
+                        match key.as_str() {
+                            "PATH" => {
+                                // PATH may be a quoted string or an identifier
+                                match &tokens[idx] {
+                                    Token::String(s) => {
+                                        path = s.clone();
+                                        idx += 1;
+                                    }
+                                    Token::Ident(s) => {
+                                        // Collect path components joined by periods/slashes
+                                        path = s.clone();
+                                        idx += 1;
+                                    }
+                                    _ => { idx += 1; }
+                                }
+                                continue;
+                            }
+                            "PATHOPTS" => {
+                                pathopts = self.parse_paren_list(tokens, &mut idx);
+                                continue;
+                            }
+                            "PATHMODE" => {
+                                pathmode = self.parse_paren_list(tokens, &mut idx);
+                                continue;
+                            }
+                            "PATHDISP" => {
+                                pathdisp = Some(self.parse_pathdisp(tokens, &mut idx));
+                                continue;
+                            }
+                            _ => { idx += 1; }
+                        }
+                    }
+                }
+            } else {
+                idx += 1;
+            }
+            if idx < tokens.len() && matches!(tokens[idx], Token::Comma) {
+                idx += 1;
+            }
+        }
+
+        Ok(UssFileDef {
+            path,
+            pathopts,
+            pathmode,
+            pathdisp,
+        })
+    }
+
+    /// Parse a parenthesized list of identifiers: `(A,B,C)` or a single identifier.
+    fn parse_paren_list(&self, tokens: &[Token], idx: &mut usize) -> Vec<String> {
+        let mut items = Vec::new();
+        if *idx < tokens.len() && matches!(tokens[*idx], Token::LParen) {
+            *idx += 1;
+            while *idx < tokens.len() {
+                if matches!(tokens[*idx], Token::RParen) {
+                    *idx += 1;
+                    break;
+                }
+                if let Token::Ident(v) = &tokens[*idx] {
+                    items.push(v.clone());
+                }
+                *idx += 1;
+                if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+                    *idx += 1;
+                }
+            }
+        } else if let Some(Token::Ident(v)) = tokens.get(*idx) {
+            items.push(v.clone());
+            *idx += 1;
+        }
+        items
+    }
+
+    /// Parse PATHDISP: `(normal[,abnormal])` or `normal`.
+    fn parse_pathdisp(&self, tokens: &[Token], idx: &mut usize) -> (String, Option<String>) {
+        let mut normal = String::new();
+        let mut abnormal = None;
+
+        if *idx < tokens.len() && matches!(tokens[*idx], Token::LParen) {
+            *idx += 1;
+            if *idx < tokens.len() {
+                if let Token::Ident(v) = &tokens[*idx] {
+                    normal = v.clone();
+                    *idx += 1;
+                }
+            }
+            if *idx < tokens.len() && matches!(tokens[*idx], Token::Comma) {
+                *idx += 1;
+                if *idx < tokens.len() {
+                    if let Token::Ident(v) = &tokens[*idx] {
+                        abnormal = Some(v.clone());
+                        *idx += 1;
+                    }
+                }
+            }
+            if *idx < tokens.len() && matches!(tokens[*idx], Token::RParen) {
+                *idx += 1;
+            }
+        } else if let Some(Token::Ident(v)) = tokens.get(*idx) {
+            normal = v.clone();
+            *idx += 1;
+        }
+
+        (normal, abnormal)
     }
 
     /// Parse AMP (Access Method Parameters) for VSAM.
@@ -2228,6 +2853,288 @@ mod tests {
         } else {
             panic!("Expected Not, got {:?}", expr);
         }
+    }
+
+    // ======================================================================
+    // Epic 104: Extended DD Parameters
+    // ======================================================================
+
+    /// Story 104.1: SMS storage class (STORCLAS).
+    #[test]
+    fn test_parse_sms_classes() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=IEFBR14
+//OUT      DD DSN=MY.DATA,DISP=(NEW,CATLG,DELETE),
+//            STORCLAS=FAST,DATACLAS=BIGDATA,MGMTCLAS=ARCHIVE
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.storclas, Some("FAST".to_string()));
+            assert_eq!(def.dataclas, Some("BIGDATA".to_string()));
+            assert_eq!(def.mgmtclas, Some("ARCHIVE".to_string()));
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 104.2: LABEL parameter with sequence and type.
+    #[test]
+    fn test_parse_label() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=TAPEPROC
+//TAPE     DD DSN=MY.TAPE.DATA,DISP=SHR,LABEL=(2,SL)
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            let label = def.label.as_ref().expect("LABEL should be parsed");
+            assert_eq!(label.sequence, 2);
+            assert_eq!(label.label_type, LabelType::Sl);
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 104.2: EXPDT and RETPD parameters.
+    #[test]
+    fn test_parse_expdt_retpd() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=TEST
+//OUT1     DD DSN=MY.EXP.DATA,DISP=(NEW,CATLG),EXPDT=2025365
+//OUT2     DD DSN=MY.RET.DATA,DISP=(NEW,CATLG),RETPD=90
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        let dd1 = &steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd1.definition {
+            assert_eq!(def.expdt, Some("2025365".to_string()));
+        } else {
+            panic!("Expected Dataset definition for OUT1");
+        }
+        let dd2 = &steps[0].dd_statements[1];
+        if let DdDefinition::Dataset(ref def) = dd2.definition {
+            assert_eq!(def.retpd, Some(90));
+        } else {
+            panic!("Expected Dataset definition for OUT2");
+        }
+    }
+
+    /// Story 104.3: DSNTYPE, LIKE, REFDD parameters.
+    #[test]
+    fn test_parse_dsntype_like_refdd() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=TEST
+//OUT1     DD DSN=MY.NEW.PDS,DISP=(NEW,CATLG),DSNTYPE=LIBRARY
+//OUT2     DD DSN=MY.LIKE.DS,DISP=(NEW,CATLG),LIKE=MODEL.DS
+//OUT3     DD DSN=MY.REF.DS,DISP=(NEW,CATLG),REFDD=OUT1
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        let dd1 = &steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd1.definition {
+            assert_eq!(def.dsntype, Some(DsType::Library));
+        } else {
+            panic!("Expected Dataset for OUT1");
+        }
+        let dd2 = &steps[0].dd_statements[1];
+        if let DdDefinition::Dataset(ref def) = dd2.definition {
+            assert_eq!(def.like, Some("MODEL.DS".to_string()));
+        } else {
+            panic!("Expected Dataset for OUT2");
+        }
+        let dd3 = &steps[0].dd_statements[2];
+        if let DdDefinition::Dataset(ref def) = dd3.definition {
+            assert_eq!(def.refdd, Some("OUT1".to_string()));
+        } else {
+            panic!("Expected Dataset for OUT3");
+        }
+    }
+
+    /// Story 104.3: KEYLEN and KEYOFF for VSAM KSDS.
+    #[test]
+    fn test_parse_keylen_keyoff() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=VSAMPROC
+//KSDS     DD DSN=MY.KSDS.DATA,DISP=SHR,KEYLEN=20,KEYOFF=0
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.keylen, Some(20));
+            assert_eq!(def.keyoff, Some(0));
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 104.4: USS file definition with PATH=.
+    #[test]
+    fn test_parse_uss_path() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=BPXBATCH
+//STDOUT   DD PATH='/u/user/output.txt',PATHOPTS=(OWRONLY,OCREAT),
+//            PATHMODE=(SIRUSR,SIWUSR),PATHDISP=(KEEP,DELETE)
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::UssFile(ref def) = dd.definition {
+            assert_eq!(def.path, "/u/user/output.txt");
+            assert_eq!(def.pathopts, vec!["OWRONLY", "OCREAT"]);
+            assert_eq!(def.pathmode, vec!["SIRUSR", "SIWUSR"]);
+            let (norm, abn) = def.pathdisp.as_ref().expect("PATHDISP should be set");
+            assert_eq!(norm, "KEEP");
+            assert_eq!(abn.as_deref(), Some("DELETE"));
+        } else {
+            panic!("Expected UssFile definition, got {:?}", dd.definition);
+        }
+    }
+
+    // ======================================================================
+    // Epic 105: Extended JOB/EXEC Parameters
+    // ======================================================================
+
+    /// Story 105.1: JOB TIME parameter.
+    #[test]
+    fn test_parse_job_time() {
+        let jcl = r#"//MYJOB    JOB CLASS=A,TIME=(5,30)
+//STEP1    EXEC PGM=IEFBR14
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.params.time, Some((5, 30)));
+    }
+
+    /// Story 105.1: JOB MSGLEVEL parameter.
+    #[test]
+    fn test_parse_job_msglevel() {
+        let jcl = r#"//MYJOB    JOB CLASS=A,MSGLEVEL=(1,1)
+//STEP1    EXEC PGM=IEFBR14
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.params.msglevel, Some((1, 1)));
+    }
+
+    /// Story 105.1: JOB TYPRUN parameter.
+    #[test]
+    fn test_parse_job_typrun() {
+        let jcl = r#"//MYJOB    JOB CLASS=A,TYPRUN=SCAN
+//STEP1    EXEC PGM=IEFBR14
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.params.typrun, Some(TypeRun::Scan));
+    }
+
+    /// Story 105.1: JOB MEMLIMIT, JOBRC, SCHENV parameters.
+    #[test]
+    fn test_parse_job_extended_params() {
+        let jcl = r#"//MYJOB    JOB CLASS=A,MEMLIMIT=2G,SCHENV=PRODENV
+//STEP1    EXEC PGM=IEFBR14
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.params.memlimit, Some("2G".to_string()));
+        assert_eq!(job.params.schenv, Some("PRODENV".to_string()));
+    }
+
+    /// Story 105.2: EXEC COND single condition.
+    #[test]
+    fn test_parse_exec_cond_single() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=PROG1
+//STEP2    EXEC PGM=PROG2,COND=(4,LT)
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        let conds = steps[1].params.cond.as_ref().expect("COND should be parsed");
+        assert_eq!(conds.len(), 1);
+        assert_eq!(conds[0].code, 4);
+        assert_eq!(conds[0].operator, ConditionOperator::Lt);
+        assert!(conds[0].step.is_none());
+    }
+
+    /// Story 105.2: EXEC COND with step reference and multiple conditions.
+    #[test]
+    fn test_parse_exec_cond_multiple() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=PROG1
+//STEP2    EXEC PGM=PROG2,COND=((4,LT,STEP1),(0,NE))
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        let conds = steps[1].params.cond.as_ref().expect("COND should be parsed");
+        assert_eq!(conds.len(), 2);
+        assert_eq!(conds[0].code, 4);
+        assert_eq!(conds[0].operator, ConditionOperator::Lt);
+        assert_eq!(conds[0].step, Some("STEP1".to_string()));
+        assert_eq!(conds[1].code, 0);
+        assert_eq!(conds[1].operator, ConditionOperator::Ne);
+    }
+
+    /// Story 105.2: EXEC COND=EVEN and COND=ONLY.
+    #[test]
+    fn test_parse_exec_cond_even_only() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=PROG1
+//STEP2    EXEC PGM=PROG2,COND=EVEN
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        assert_eq!(steps[1].params.cond_special, Some(CondSpecial::Even));
+    }
+
+    /// Story 105.2: EXEC COND with EVEN alongside conditions.
+    #[test]
+    fn test_parse_exec_cond_with_even() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=PROG1
+//STEP2    EXEC PGM=PROG2,COND=((4,LT),EVEN)
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        let conds = steps[1].params.cond.as_ref().expect("COND should be parsed");
+        assert_eq!(conds.len(), 1);
+        assert_eq!(conds[0].code, 4);
+        assert_eq!(steps[1].params.cond_special, Some(CondSpecial::Even));
+    }
+
+    /// Story 105.2: EXEC COND with procstep reference.
+    #[test]
+    fn test_parse_exec_cond_procstep() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=PROG1
+//STEP2    EXEC PGM=PROG2,COND=((4,LT,STEP1.PROCSTEP1))
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        let conds = steps[1].params.cond.as_ref().expect("COND should be parsed");
+        assert_eq!(conds[0].step, Some("STEP1".to_string()));
+        assert_eq!(conds[0].procstep, Some("PROCSTEP1".to_string()));
+    }
+
+    /// Story 105.1: EXEC TIME parameter.
+    #[test]
+    fn test_parse_exec_time() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=PROG1,TIME=(2,30)
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        assert_eq!(steps[0].params.time, Some((2, 30)));
     }
 
     /// Story 103.2: Missing ENDIF produces error.

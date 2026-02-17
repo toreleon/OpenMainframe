@@ -774,11 +774,11 @@ fn parse_dd_from_operands(
 
     Ok(DdStatement {
         name: dd_name.to_string(),
-        definition: DdDefinition::Dataset(DatasetDef {
+        definition: DdDefinition::Dataset(Box::new(DatasetDef {
             dsn,
             disp,
             ..Default::default()
-        }),
+        })),
         span,
     })
 }

@@ -1320,6 +1320,7 @@ version = "0.1.0"
 dependencies = [
  "miette",
  "open-mainframe-encoding",
+ "open-mainframe-sort",
  "rust_decimal",
  "thiserror",
 ]

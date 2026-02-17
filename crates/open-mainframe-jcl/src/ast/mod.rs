@@ -159,8 +159,29 @@ pub struct JobParams {
     pub region: Option<u32>,
     /// Time limit (minutes, seconds).
     pub time: Option<(u32, u32)>,
+    /// TYPRUN — Job type (SCAN, HOLD, etc.).
+    pub typrun: Option<TypeRun>,
+    /// MEMLIMIT — Memory limit (e.g., "2G", "512M").
+    pub memlimit: Option<String>,
+    /// JOBRC — Job return code behavior.
+    pub jobrc: Option<String>,
+    /// SCHENV — Scheduling environment name.
+    pub schenv: Option<String>,
     /// Additional parameters.
     pub other: HashMap<String, String>,
+}
+
+/// TYPRUN parameter values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeRun {
+    /// Normal execution (default).
+    Run,
+    /// Hold the job without executing.
+    Hold,
+    /// Syntax check only (no execution).
+    Scan,
+    /// Copy job to internal reader.
+    Copy,
 }
 
 /// A job step (EXEC statement with associated DDs).
@@ -196,6 +217,8 @@ pub struct ExecParams {
     pub time: Option<(u32, u32)>,
     /// Condition codes for step execution.
     pub cond: Option<Vec<Condition>>,
+    /// Special COND mode (EVEN or ONLY).
+    pub cond_special: Option<CondSpecial>,
     /// PARM value passed to program.
     pub parm: Option<String>,
     /// Additional parameters.
@@ -211,6 +234,17 @@ pub struct Condition {
     pub operator: ConditionOperator,
     /// Step name (if comparing to specific step).
     pub step: Option<String>,
+    /// Procedure step name (for step.procstep qualification).
+    pub procstep: Option<String>,
+}
+
+/// Special COND execution modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CondSpecial {
+    /// Execute even if a previous step abended.
+    Even,
+    /// Execute only if a previous step abended.
+    Only,
 }
 
 /// Operators for COND parameter.
@@ -245,7 +279,7 @@ pub struct DdStatement {
 #[derive(Debug, Clone)]
 pub enum DdDefinition {
     /// Reference to a dataset (DSN=).
-    Dataset(DatasetDef),
+    Dataset(Box<DatasetDef>),
     /// Inline data (DD *).
     Inline(InlineDef),
     /// Concatenation of datasets.
@@ -254,6 +288,8 @@ pub enum DdDefinition {
     Dummy,
     /// Sysout (output class).
     Sysout(SysoutDef),
+    /// USS file (PATH=).
+    UssFile(UssFileDef),
 }
 
 /// Dataset definition parameters.
@@ -273,6 +309,101 @@ pub struct DatasetDef {
     pub dcb: Option<DcbParams>,
     /// Access Method Parameters (for VSAM).
     pub amp: Option<AmpParams>,
+    // -- Epic 104: Extended DD parameters --
+    /// SMS storage class (STORCLAS=).
+    pub storclas: Option<String>,
+    /// SMS data class (DATACLAS=).
+    pub dataclas: Option<String>,
+    /// SMS management class (MGMTCLAS=).
+    pub mgmtclas: Option<String>,
+    /// Tape label specification.
+    pub label: Option<LabelDef>,
+    /// Expiration date (EXPDT=yyyy/ddd or EXPDT=yyddd).
+    pub expdt: Option<String>,
+    /// Retention period in days (RETPD=nnn).
+    pub retpd: Option<u32>,
+    /// Dataset type (DSNTYPE=LIBRARY, PDS, etc.).
+    pub dsntype: Option<DsType>,
+    /// Model dataset name (LIKE=model.dsn).
+    pub like: Option<String>,
+    /// Reference DD name (REFDD=stepname.ddname).
+    pub refdd: Option<String>,
+    /// Key length for VSAM KSDS (KEYLEN=n).
+    pub keylen: Option<u32>,
+    /// Key offset for VSAM KSDS (KEYOFF=n).
+    pub keyoff: Option<u32>,
+    /// Average record count unit (AVGREC=U|K|M).
+    pub avgrec: Option<String>,
+}
+
+/// Tape label specification.
+#[derive(Debug, Clone)]
+pub struct LabelDef {
+    /// Data file sequence number on tape (1-based).
+    pub sequence: u32,
+    /// Label type.
+    pub label_type: LabelType,
+    /// Password protection indicator.
+    pub password: Option<String>,
+    /// IN/OUT indicator.
+    pub in_out: Option<String>,
+    /// Expiration date (from LABEL parameter).
+    pub expdt: Option<String>,
+}
+
+/// Tape label types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelType {
+    /// Standard labels (IBM default).
+    Sl,
+    /// Non-standard labels.
+    Nsl,
+    /// No labels.
+    Nl,
+    /// Standard user labels.
+    Sul,
+    /// Bypass label processing.
+    Blp,
+    /// ANSI labels.
+    Al,
+    /// ANSI user labels.
+    Aul,
+}
+
+/// Dataset type values for DSNTYPE parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DsType {
+    /// PDS (Partitioned Data Set).
+    Pds,
+    /// PDSE / LIBRARY.
+    Library,
+    /// Large format sequential.
+    Large,
+    /// Extended format sequential.
+    Extreq,
+    /// Extended preferred sequential.
+    Extpref,
+    /// Basic format.
+    Basic,
+    /// HFS (Hierarchical File System).
+    Hfs,
+    /// Pipe.
+    Pipe,
+}
+
+/// USS (Unix System Services) file definition.
+///
+/// Used when DD specifies PATH= instead of DSN=.
+#[derive(Debug, Clone)]
+pub struct UssFileDef {
+    /// USS file path (e.g., /u/user/file.txt).
+    pub path: String,
+    /// Path options (ORDONLY, ORDWR, OWRONLY, OCREAT, OEXCL, OTRUNC, OAPPEND).
+    pub pathopts: Vec<String>,
+    /// Path mode (SIRWXU, SIRUSR, SIWUSR, etc.).
+    pub pathmode: Vec<String>,
+    /// Path disposition: what to do on normal/abnormal termination.
+    pub pathdisp: Option<(String, Option<String>)>,
 }
 
 /// VSAM Access Method Parameters.
@@ -505,10 +636,10 @@ impl DdStatement {
     pub fn dataset(name: impl Into<String>, dsn: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            definition: DdDefinition::Dataset(DatasetDef {
+            definition: DdDefinition::Dataset(Box::new(DatasetDef {
                 dsn: dsn.into(),
                 ..Default::default()
-            }),
+            })),
             span: Span::dummy(),
         }
     }

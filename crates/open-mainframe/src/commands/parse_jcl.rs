@@ -146,6 +146,9 @@ pub fn run(input: PathBuf, format: OutputFormat) -> Result<()> {
                     open_mainframe_jcl::DdDefinition::Concatenation(defs) => {
                         format!("CONCAT ({} datasets)", defs.len())
                     }
+                    open_mainframe_jcl::DdDefinition::UssFile(def) => {
+                        format!("PATH={}", def.path)
+                    }
                 };
                 println!("    {}: {}", dd.name, dd_desc);
             }

@@ -330,6 +330,10 @@ impl JobExecutor {
                         PathBuf::from("/dev/null")
                     }
                 }
+                DdDefinition::UssFile(def) => {
+                    // USS file: use the path directly
+                    PathBuf::from(&def.path)
+                }
             };
 
             self.dd_files.insert(dd.name.clone(), path);
@@ -670,6 +674,7 @@ mod tests {
             code: 4,
             operator: ConditionOperator::Gt,
             step: None,
+            procstep: None,
         }]);
 
         // Previous step returned 0, condition is "bypass if 4 > 0" which is true
