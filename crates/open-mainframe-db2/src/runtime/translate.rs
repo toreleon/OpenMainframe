@@ -73,7 +73,88 @@ impl SqlTranslator {
         // Translate special registers
         result = self.translate_special_registers(&result);
 
+        // Translate MERGE INTO to INSERT ... ON CONFLICT
+        result = self.translate_merge(&result);
+
         result
+    }
+
+    /// Translate DB2 MERGE to PostgreSQL INSERT ... ON CONFLICT.
+    ///
+    /// DB2 syntax:
+    /// ```sql
+    /// MERGE INTO target AS t
+    /// USING source AS s ON t.key = s.key
+    /// WHEN MATCHED THEN UPDATE SET col1 = s.col1
+    /// WHEN NOT MATCHED THEN INSERT (col1) VALUES (s.col1)
+    /// ```
+    ///
+    /// PostgreSQL equivalent:
+    /// ```sql
+    /// INSERT INTO target (col1) VALUES (...)
+    /// ON CONFLICT (key) DO UPDATE SET col1 = EXCLUDED.col1
+    /// ```
+    ///
+    /// This is a simplified translation that rewrites the basic MERGE pattern.
+    /// Complex MERGE statements are passed through as-is for `EXECUTE IMMEDIATE`
+    /// or manual handling.
+    fn translate_merge(&self, sql: &str) -> String {
+        let upper = sql.to_uppercase();
+
+        if !upper.starts_with("MERGE") {
+            return sql.to_string();
+        }
+
+        // Extract target table
+        let target = match extract_between(&upper, "MERGE INTO ", " ") {
+            Some(t) => t,
+            None => return sql.to_string(),
+        };
+
+        // Extract ON condition to find the conflict key
+        let on_clause = match extract_between(&upper, " ON ", " WHEN") {
+            Some(c) => c,
+            None => return sql.to_string(),
+        };
+
+        // Try to extract the conflict column from ON clause (e.g., "T.KEY = S.KEY" -> "KEY")
+        let conflict_col = extract_conflict_column(&on_clause);
+
+        // Extract WHEN NOT MATCHED THEN INSERT columns and values
+        let insert_part = if let Some(pos) = upper.find("WHEN NOT MATCHED THEN INSERT") {
+            let after = &sql[pos + 28..];
+            after.trim().to_string()
+        } else {
+            String::new()
+        };
+
+        // Extract WHEN MATCHED THEN UPDATE SET ...
+        let update_set = if let Some(pos) = upper.find("WHEN MATCHED THEN UPDATE SET") {
+            let after = &sql[pos + 28..];
+            // Take until "WHEN NOT MATCHED" or end
+            let end = after.to_uppercase().find("WHEN NOT MATCHED")
+                .unwrap_or(after.len());
+            after[..end].trim().to_string()
+        } else {
+            String::new()
+        };
+
+        // Build PostgreSQL INSERT ... ON CONFLICT
+        if !insert_part.is_empty() {
+            let mut pg_sql = format!("INSERT INTO {} {}", target, insert_part.trim_end());
+
+            if let Some(ref col) = conflict_col {
+                if !update_set.is_empty() {
+                    pg_sql.push_str(&format!(" ON CONFLICT ({}) DO UPDATE SET {}", col, update_set));
+                } else {
+                    pg_sql.push_str(&format!(" ON CONFLICT ({}) DO NOTHING", col));
+                }
+            }
+
+            return pg_sql;
+        }
+
+        sql.to_string()
     }
 
     /// Translate FETCH FIRST n ROWS ONLY to LIMIT n.
@@ -403,6 +484,47 @@ impl Default for SqlTranslator {
     }
 }
 
+/// Extract the text between two delimiters in `haystack`.
+///
+/// Returns the first occurrence of text between `start_delim` and `end_delim`,
+/// trimmed of whitespace.
+fn extract_between(haystack: &str, start_delim: &str, end_delim: &str) -> Option<String> {
+    let start_pos = haystack.find(start_delim)?;
+    let after_start = &haystack[start_pos + start_delim.len()..];
+    let end_pos = after_start.find(end_delim)?;
+    let value = after_start[..end_pos].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+/// Extract the conflict/key column from an ON clause.
+///
+/// Given something like `T.KEY = S.KEY` or `TARGET.ID = SOURCE.ID`,
+/// extracts the unqualified column name (`KEY` or `ID`).
+fn extract_conflict_column(on_clause: &str) -> Option<String> {
+    // Split on '=' and take the left side
+    let parts: Vec<&str> = on_clause.split('=').collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let left = parts[0].trim();
+    // If qualified (e.g., "T.KEY"), take the part after the dot
+    let col = if let Some(dot_pos) = left.rfind('.') {
+        &left[dot_pos + 1..]
+    } else {
+        left
+    };
+    let col = col.trim();
+    if col.is_empty() {
+        None
+    } else {
+        Some(col.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,6 +700,63 @@ mod tests {
         let result = translator.translate(sql);
         assert!(!result.contains("OPTIMIZE FOR"));
         assert!(!result.contains("100 ROWS"));
+    }
+
+    // --- Epic 310: MERGE Translation ---
+
+    #[test]
+    fn test_merge_basic_upsert() {
+        let translator = SqlTranslator::new();
+
+        let sql = "MERGE INTO TARGET AS T USING SOURCE AS S ON T.KEY = S.KEY WHEN MATCHED THEN UPDATE SET COL1 = S.COL1 WHEN NOT MATCHED THEN INSERT (COL1) VALUES (S.COL1)";
+        let result = translator.translate(sql);
+        assert!(result.starts_with("INSERT INTO TARGET"), "got: {}", result);
+        assert!(result.contains("ON CONFLICT (KEY) DO UPDATE SET"));
+    }
+
+    #[test]
+    fn test_merge_insert_only() {
+        let translator = SqlTranslator::new();
+
+        // MERGE with only NOT MATCHED (insert-only upsert with conflict ignore)
+        let sql = "MERGE INTO ORDERS AS T USING NEW_ORDERS AS S ON T.ID = S.ID WHEN NOT MATCHED THEN INSERT (ID, AMOUNT) VALUES (S.ID, S.AMOUNT)";
+        let result = translator.translate(sql);
+        assert!(result.starts_with("INSERT INTO ORDERS"), "got: {}", result);
+        assert!(result.contains("ON CONFLICT (ID) DO NOTHING"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_merge_non_merge_passthrough() {
+        let translator = SqlTranslator::new();
+
+        let sql = "SELECT * FROM T";
+        let result = translator.translate(sql);
+        // Non-MERGE statements should not be affected
+        assert!(!result.contains("ON CONFLICT"));
+    }
+
+    #[test]
+    fn test_extract_between_basic() {
+        let result = extract_between("MERGE INTO TARGET USING", "MERGE INTO ", " ");
+        assert_eq!(result, Some("TARGET".to_string()));
+    }
+
+    #[test]
+    fn test_extract_between_missing() {
+        let result = extract_between("SELECT FROM T", "MERGE INTO ", " ");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_conflict_column_qualified() {
+        let result = extract_conflict_column("T.KEY = S.KEY");
+        assert_eq!(result, Some("KEY".to_string()));
+    }
+
+    #[test]
+    fn test_extract_conflict_column_unqualified() {
+        let result = extract_conflict_column("ID = ID");
+        assert_eq!(result, Some("ID".to_string()));
     }
 
     #[test]

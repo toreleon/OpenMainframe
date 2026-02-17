@@ -80,6 +80,20 @@ pub enum SqlStatementType {
     ReleaseSavepoint,
     /// ROLLBACK TO SAVEPOINT — undo work back to a savepoint
     RollbackToSavepoint,
+    /// DECLARE TABLE — compile-time validation, no runtime code
+    DeclareTable,
+    /// MERGE — upsert operation
+    Merge,
+    /// CALL — invoke stored procedure
+    Call,
+    /// GRANT — grant privileges
+    Grant,
+    /// REVOKE — revoke privileges
+    Revoke,
+    /// LABEL ON — label column or table
+    Label,
+    /// COMMENT ON — comment on column or table
+    Comment,
     /// Other/unknown
     Other,
 }
@@ -101,7 +115,21 @@ impl SqlStatementType {
             "INSERT" => SqlStatementType::Insert,
             "UPDATE" => SqlStatementType::Update,
             "DELETE" => SqlStatementType::Delete,
-            "DECLARE" => SqlStatementType::DeclareCursor,
+            "MERGE" => SqlStatementType::Merge,
+            "CALL" => SqlStatementType::Call,
+            "GRANT" => SqlStatementType::Grant,
+            "REVOKE" => SqlStatementType::Revoke,
+            "LABEL" => SqlStatementType::Label,
+            "COMMENT" => SqlStatementType::Comment,
+            "DECLARE" => {
+                // DECLARE TABLE vs DECLARE CURSOR
+                let words: Vec<&str> = upper.split_whitespace().collect();
+                if words.len() >= 3 && words[2] == "TABLE" {
+                    SqlStatementType::DeclareTable
+                } else {
+                    SqlStatementType::DeclareCursor
+                }
+            }
             "OPEN" => SqlStatementType::Open,
             "FETCH" => SqlStatementType::Fetch,
             "CLOSE" => SqlStatementType::Close,
@@ -361,6 +389,14 @@ impl SqlPreprocessor {
                     block.sql.trim()
                 );
                 self.replace_block(&mut cobol_lines, block, &replacement);
+            } else if stmt_type == SqlStatementType::DeclareTable {
+                // DECLARE TABLE is a compile-time directive for validation
+                // only — no runtime code is generated.
+                let replacement = format!(
+                    "      * DECLARE TABLE: {}",
+                    block.sql.trim().chars().take(60).collect::<String>()
+                );
+                self.replace_block(&mut cobol_lines, block, &replacement);
             } else {
                 // Generate COBOL CALL replacement
                 let mut call_code = self.generate_call(stmt_num, stmt_type, &block.sql);
@@ -515,6 +551,12 @@ impl SqlPreprocessor {
             SqlStatementType::Insert => "SQLINSERT",
             SqlStatementType::Update => "SQLUPDATE",
             SqlStatementType::Delete => "SQLDELETE",
+            SqlStatementType::Merge => "SQLMERGE",
+            SqlStatementType::Call => "SQLCALL",
+            SqlStatementType::Grant => "SQLGRANT",
+            SqlStatementType::Revoke => "SQLREVOK",
+            SqlStatementType::Label => "SQLLABEL",
+            SqlStatementType::Comment => "SQLCOMNT",
             SqlStatementType::Open => "SQLOPEN",
             SqlStatementType::Fetch => "SQLFETCH",
             SqlStatementType::Close => "SQLCLOSE",
@@ -975,6 +1017,136 @@ mod tests {
         assert_eq!(result.sql_statements.len(), 1);
         assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::ReleaseSavepoint);
         assert!(result.cobol_source.contains("CALL \"SQLRLSP\""));
+    }
+
+    // --- Epic 310: Additional SQL Statement Type Detection ---
+
+    #[test]
+    fn test_declare_table_detection() {
+        assert_eq!(
+            SqlStatementType::from_sql("DECLARE EMPLOYEE TABLE (ID INTEGER, NAME VARCHAR(50))"),
+            SqlStatementType::DeclareTable
+        );
+        // DECLARE ... CURSOR should still be DeclareCursor
+        assert_eq!(
+            SqlStatementType::from_sql("DECLARE C1 CURSOR FOR SELECT * FROM T"),
+            SqlStatementType::DeclareCursor
+        );
+    }
+
+    #[test]
+    fn test_merge_type_detection() {
+        assert_eq!(
+            SqlStatementType::from_sql("MERGE INTO TARGET USING SOURCE ON T.KEY = S.KEY WHEN MATCHED THEN UPDATE SET COL = S.COL"),
+            SqlStatementType::Merge
+        );
+    }
+
+    #[test]
+    fn test_call_type_detection() {
+        assert_eq!(
+            SqlStatementType::from_sql("CALL SYSPROC.DSNUTILS('RUNSTATS', :RS-RC)"),
+            SqlStatementType::Call
+        );
+    }
+
+    #[test]
+    fn test_grant_revoke_type_detection() {
+        assert_eq!(
+            SqlStatementType::from_sql("GRANT SELECT ON TABLE EMP TO PUBLIC"),
+            SqlStatementType::Grant
+        );
+        assert_eq!(
+            SqlStatementType::from_sql("REVOKE INSERT ON TABLE EMP FROM USER1"),
+            SqlStatementType::Revoke
+        );
+    }
+
+    #[test]
+    fn test_label_comment_type_detection() {
+        assert_eq!(
+            SqlStatementType::from_sql("LABEL ON COLUMN EMP.SALARY IS 'Employee Salary'"),
+            SqlStatementType::Label
+        );
+        assert_eq!(
+            SqlStatementType::from_sql("COMMENT ON TABLE EMPLOYEE IS 'Main employee table'"),
+            SqlStatementType::Comment
+        );
+    }
+
+    #[test]
+    fn test_declare_table_generates_comment_not_call() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             DECLARE EMPLOYEE TABLE
+             (ID INTEGER, NAME VARCHAR(50))
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.sql_statements.len(), 1);
+        assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::DeclareTable);
+        // Should generate a comment, NOT a runtime CALL
+        assert!(!result.cobol_source.contains("CALL"), "DECLARE TABLE should not generate CALL");
+        assert!(result.cobol_source.contains("* DECLARE TABLE"));
+    }
+
+    #[test]
+    fn test_merge_generates_sqlmerge_call() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             MERGE INTO TARGET USING SOURCE
+             ON T.KEY = S.KEY
+             WHEN MATCHED THEN UPDATE SET COL = S.COL
+             WHEN NOT MATCHED THEN INSERT (COL) VALUES (S.COL)
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::Merge);
+        assert!(result.cobol_source.contains("CALL \"SQLMERGE\""));
+    }
+
+    #[test]
+    fn test_call_generates_sqlcall() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             CALL MYPROC(:PARAM1, :PARAM2)
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::Call);
+        assert!(result.cobol_source.contains("CALL \"SQLCALL\""));
+    }
+
+    #[test]
+    fn test_grant_generates_sqlgrant_call() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             GRANT SELECT ON TABLE EMP TO PUBLIC
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::Grant);
+        assert!(result.cobol_source.contains("CALL \"SQLGRANT\""));
     }
 
     #[test]
