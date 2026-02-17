@@ -3,7 +3,7 @@
 //! Provides a storage layer for IMS segments that can be queried
 //! using DL/I navigation patterns.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// A hierarchical segment record.
 #[derive(Debug, Clone)]
@@ -68,6 +68,12 @@ pub struct HierarchicalStore {
     roots: Vec<u64>,
     /// Next record ID
     next_id: u64,
+    /// Secondary indexes: (index_name) -> BTreeMap<key_bytes, Vec<record_id>>
+    secondary_indexes: HashMap<String, BTreeMap<Vec<u8>, Vec<u64>>>,
+    /// Index definitions: index_name -> (segment_name, field_name)
+    index_definitions: HashMap<String, (String, String)>,
+    /// Logical child mappings: (parent_id, lchild_name) -> Vec<record_id>
+    logical_child_map: HashMap<(u64, String), Vec<u64>>,
 }
 
 impl HierarchicalStore {
@@ -80,6 +86,9 @@ impl HierarchicalStore {
             children: HashMap::new(),
             roots: Vec::new(),
             next_id: 1,
+            secondary_indexes: HashMap::new(),
+            index_definitions: HashMap::new(),
+            logical_child_map: HashMap::new(),
         }
     }
 
@@ -97,6 +106,8 @@ impl HierarchicalStore {
             .or_default()
             .push(id);
         self.roots.push(id);
+
+        self.index_insert(id);
 
         id
     }
@@ -123,6 +134,8 @@ impl HierarchicalStore {
             .push(id);
         children.push(id);
 
+        self.index_insert(id);
+
         Some(id)
     }
 
@@ -143,6 +156,10 @@ impl HierarchicalStore {
         if let Some(record) = self.records.get_mut(&id) {
             record.keys = keys;
         }
+
+        // Re-index now that keys are set (insert_root/insert_child indexed
+        // before keys were populated, so we need to re-index)
+        self.index_insert(id);
 
         Some(id)
     }
@@ -374,6 +391,9 @@ impl HierarchicalStore {
             None => return false,
         };
 
+        // Remove from secondary indexes
+        self.index_remove(&record);
+
         // Remove from by_segment index
         if let Some(ids) = self.by_segment.get_mut(&record.segment_name.to_uppercase()) {
             ids.retain(|&rid| rid != id);
@@ -473,6 +493,119 @@ impl HierarchicalStore {
         self.roots.first().and_then(|&id| self.records.get(&id))
     }
 
+    // -----------------------------------------------------------------------
+    // Secondary Index Operations
+    // -----------------------------------------------------------------------
+
+    /// Define a secondary index. Must be called before inserting data.
+    pub fn define_index(&mut self, index_name: &str, segment_name: &str, field_name: &str) {
+        let key = index_name.to_uppercase();
+        self.index_definitions.insert(
+            key.clone(),
+            (segment_name.to_uppercase(), field_name.to_uppercase()),
+        );
+        self.secondary_indexes.entry(key).or_default();
+    }
+
+    /// Maintain secondary indexes when a record is inserted.
+    fn index_insert(&mut self, record_id: u64) {
+        let record = match self.records.get(&record_id) {
+            Some(r) => r,
+            None => return,
+        };
+        let seg_upper = record.segment_name.to_uppercase();
+
+        // Collect matching indexes
+        let matching: Vec<(String, String)> = self.index_definitions.iter()
+            .filter(|(_, (seg, _))| *seg == seg_upper)
+            .map(|(idx_name, (_, field))| (idx_name.clone(), field.clone()))
+            .collect();
+
+        for (idx_name, field) in matching {
+            if let Some(key_val) = self.records.get(&record_id).and_then(|r| r.get_key(&field).map(|v| v.to_vec())) {
+                self.secondary_indexes
+                    .entry(idx_name)
+                    .or_default()
+                    .entry(key_val)
+                    .or_default()
+                    .push(record_id);
+            }
+        }
+    }
+
+    /// Maintain secondary indexes when a record is deleted.
+    fn index_remove(&mut self, record: &SegmentRecord) {
+        let seg_upper = record.segment_name.to_uppercase();
+
+        let matching: Vec<(String, String)> = self.index_definitions.iter()
+            .filter(|(_, (seg, _))| *seg == seg_upper)
+            .map(|(idx_name, (_, field))| (idx_name.clone(), field.clone()))
+            .collect();
+
+        for (idx_name, field) in matching {
+            if let Some(key_val) = record.get_key(&field) {
+                if let Some(idx) = self.secondary_indexes.get_mut(&idx_name) {
+                    if let Some(ids) = idx.get_mut(key_val) {
+                        ids.retain(|&id| id != record.id);
+                        if ids.is_empty() {
+                            idx.remove(key_val);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Look up records via secondary index. Returns records matching the key.
+    pub fn find_by_index(&self, index_name: &str, value: &[u8], op: QualOp) -> Vec<&SegmentRecord> {
+        let key = index_name.to_uppercase();
+        let idx = match self.secondary_indexes.get(&key) {
+            Some(idx) => idx,
+            None => return vec![],
+        };
+
+        match op {
+            QualOp::Eq => {
+                idx.get(value)
+                    .map(|ids| ids.iter().filter_map(|&id| self.records.get(&id)).collect())
+                    .unwrap_or_default()
+            }
+            _ => {
+                // Range queries using BTreeMap range operations
+                let results: Vec<&SegmentRecord> = idx.iter()
+                    .filter(|(k, _)| op.matches(k, value))
+                    .flat_map(|(_, ids)| ids.iter().filter_map(|&id| self.records.get(&id)))
+                    .collect();
+                results
+            }
+        }
+    }
+
+    /// Get the index definition for a given index name.
+    pub fn get_index_definition(&self, index_name: &str) -> Option<&(String, String)> {
+        self.index_definitions.get(&index_name.to_uppercase())
+    }
+
+    // -----------------------------------------------------------------------
+    // Logical Child Operations
+    // -----------------------------------------------------------------------
+
+    /// Register a logical child relationship.
+    pub fn add_logical_child(&mut self, parent_id: u64, lchild_name: &str, child_id: u64) {
+        self.logical_child_map
+            .entry((parent_id, lchild_name.to_uppercase()))
+            .or_default()
+            .push(child_id);
+    }
+
+    /// Find logical children of a parent segment.
+    pub fn find_logical_children(&self, parent_id: u64, lchild_name: &str) -> Vec<&SegmentRecord> {
+        self.logical_child_map
+            .get(&(parent_id, lchild_name.to_uppercase()))
+            .map(|ids| ids.iter().filter_map(|&id| self.records.get(&id)).collect())
+            .unwrap_or_default()
+    }
+
     /// Create a snapshot of the current store state.
     ///
     /// The snapshot is a full clone of all data structures.
@@ -491,6 +624,9 @@ impl HierarchicalStore {
         self.children = snapshot.children.clone();
         self.roots = snapshot.roots.clone();
         self.next_id = snapshot.next_id;
+        self.secondary_indexes = snapshot.secondary_indexes.clone();
+        self.logical_child_map = snapshot.logical_child_map.clone();
+        // index_definitions are preserved (they don't change with data)
     }
 }
 
@@ -650,5 +786,111 @@ mod tests {
         // Different key
         keys.insert("CUSTNO".to_string(), b"99999".to_vec());
         assert!(store.key_changed(cust1, &keys, "CUSTNO"));
+    }
+
+    #[test]
+    fn test_secondary_index_define_and_lookup() {
+        let mut store = HierarchicalStore::new("TESTDB");
+        store.define_index("CUSTNAME_IX", "CUSTOMER", "CUSTNAME");
+
+        // Insert with keys
+        let mut keys1 = HashMap::new();
+        keys1.insert("CUSTNO".to_string(), b"00001".to_vec());
+        keys1.insert("CUSTNAME".to_string(), b"ALICE".to_vec());
+        store.insert_with_keys(0, "CUSTOMER", b"Customer Alice".to_vec(), keys1);
+
+        let mut keys2 = HashMap::new();
+        keys2.insert("CUSTNO".to_string(), b"00002".to_vec());
+        keys2.insert("CUSTNAME".to_string(), b"BOB".to_vec());
+        store.insert_with_keys(0, "CUSTOMER", b"Customer Bob".to_vec(), keys2);
+
+        // Lookup by secondary index
+        let results = store.find_by_index("CUSTNAME_IX", b"ALICE", QualOp::Eq);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].data, b"Customer Alice");
+
+        let results = store.find_by_index("CUSTNAME_IX", b"BOB", QualOp::Eq);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].data, b"Customer Bob");
+
+        // Nonexistent key
+        let results = store.find_by_index("CUSTNAME_IX", b"CHARLIE", QualOp::Eq);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_secondary_index_maintained_on_delete() {
+        let mut store = HierarchicalStore::new("TESTDB");
+        store.define_index("CUSTNAME_IX", "CUSTOMER", "CUSTNAME");
+
+        let mut keys = HashMap::new();
+        keys.insert("CUSTNAME".to_string(), b"ALICE".to_vec());
+        let id = store.insert_with_keys(0, "CUSTOMER", b"Alice".to_vec(), keys).unwrap();
+
+        assert_eq!(store.find_by_index("CUSTNAME_IX", b"ALICE", QualOp::Eq).len(), 1);
+
+        store.delete(id);
+        assert!(store.find_by_index("CUSTNAME_IX", b"ALICE", QualOp::Eq).is_empty());
+    }
+
+    #[test]
+    fn test_secondary_index_non_unique() {
+        let mut store = HierarchicalStore::new("TESTDB");
+        store.define_index("CITY_IX", "CUSTOMER", "CITY");
+
+        let mut keys1 = HashMap::new();
+        keys1.insert("CITY".to_string(), b"NYC".to_vec());
+        store.insert_with_keys(0, "CUSTOMER", b"Alice in NYC".to_vec(), keys1);
+
+        let mut keys2 = HashMap::new();
+        keys2.insert("CITY".to_string(), b"NYC".to_vec());
+        store.insert_with_keys(0, "CUSTOMER", b"Bob in NYC".to_vec(), keys2);
+
+        let results = store.find_by_index("CITY_IX", b"NYC", QualOp::Eq);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_secondary_index_range_query() {
+        let mut store = HierarchicalStore::new("TESTDB");
+        store.define_index("NAME_IX", "CUSTOMER", "NAME");
+
+        for name in &[b"ALICE".to_vec(), b"BOB".to_vec(), b"CHARLIE".to_vec()] {
+            let mut keys = HashMap::new();
+            keys.insert("NAME".to_string(), name.clone());
+            store.insert_with_keys(0, "CUSTOMER", name.clone(), keys);
+        }
+
+        // Greater than BOB
+        let results = store.find_by_index("NAME_IX", b"BOB", QualOp::Gt);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].data, b"CHARLIE");
+    }
+
+    #[test]
+    fn test_logical_child_map() {
+        let mut store = HierarchicalStore::new("TESTDB");
+
+        let parent = store.insert_root("CUSTOMER", b"Customer 1".to_vec());
+        let child1 = store.insert_child(parent, "ORDER", b"Order 1".to_vec()).unwrap();
+        let child2 = store.insert_child(parent, "ORDER", b"Order 2".to_vec()).unwrap();
+
+        store.add_logical_child(parent, "LORDER", child1);
+        store.add_logical_child(parent, "LORDER", child2);
+
+        let lchildren = store.find_logical_children(parent, "LORDER");
+        assert_eq!(lchildren.len(), 2);
+    }
+
+    #[test]
+    fn test_index_definition_lookup() {
+        let mut store = HierarchicalStore::new("TESTDB");
+        store.define_index("MY_IDX", "CUSTOMER", "CUSTNAME");
+
+        let def = store.get_index_definition("MY_IDX").unwrap();
+        assert_eq!(def.0, "CUSTOMER");
+        assert_eq!(def.1, "CUSTNAME");
+
+        assert!(store.get_index_definition("NONEXIST").is_none());
     }
 }

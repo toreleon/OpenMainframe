@@ -221,11 +221,20 @@ impl ImsRuntime {
     }
 
     /// Load a database definition.
+    ///
+    /// Also registers any secondary indexes defined via XDFLD in the DBD
+    /// into the corresponding HierarchicalStore.
     pub fn load_dbd(&mut self, dbd: DatabaseDefinition) {
         let name = dbd.name.clone();
-        self.databases
+        let store = self.databases
             .entry(name.clone())
             .or_insert_with(|| HierarchicalStore::new(&name));
+
+        // Register secondary indexes from DBD into the store
+        for idx in &dbd.secondary_indexes {
+            store.define_index(&idx.name, &idx.segment, &idx.search_field);
+        }
+
         self.dbds.insert(name, dbd);
     }
 
@@ -241,6 +250,36 @@ impl ImsRuntime {
         self.gsam_datasets
             .entry(name.to_uppercase())
             .or_insert_with(|| GsamDataset::new(name))
+    }
+
+    /// Look up logical children across databases.
+    ///
+    /// Given a key field/value, finds matching segments in the target database.
+    /// This enables LCHILD-style cross-database navigation where a segment in
+    /// one database logically references segments in another.
+    pub fn find_logical_children(
+        &self,
+        target_db: &str,
+        target_segment: &str,
+        key_field: &str,
+        key_value: &[u8],
+    ) -> Vec<crate::dli::store::SegmentRecord> {
+        let target_store = match self.databases.get(&target_db.to_uppercase()) {
+            Some(s) => s,
+            None => return Vec::new(),
+        };
+
+        // Use find_root_qualified for root segments, or scan for children
+        if let Some(rec) = target_store.find_root_qualified(
+            target_segment,
+            key_field,
+            key_value,
+            QualOp::Eq,
+        ) {
+            vec![rec.clone()]
+        } else {
+            Vec::new()
+        }
     }
 
     /// Schedule a PSB for execution.
@@ -305,6 +344,7 @@ impl ImsRuntime {
         }
 
         let dbname = pcb.dbname.clone();
+        let procseq = pcb.procseq.clone();
         let store = self
             .databases
             .entry(dbname.clone())
@@ -313,11 +353,11 @@ impl ImsRuntime {
         let position = self.positions.entry(dbname.clone()).or_default();
 
         match call.function {
-            DliFunction::GU => execute_gu(store, call, pcb, position),
-            DliFunction::GN => execute_gn(store, call, pcb, position),
+            DliFunction::GU => execute_gu(store, call, pcb, position, procseq.as_deref()),
+            DliFunction::GN => execute_gn(store, call, pcb, position, procseq.as_deref()),
             DliFunction::GNP => execute_gnp(store, call, pcb, position),
-            DliFunction::GHU => execute_ghu(store, call, pcb, position),
-            DliFunction::GHN => execute_ghn(store, call, pcb, position),
+            DliFunction::GHU => execute_ghu(store, call, pcb, position, procseq.as_deref()),
+            DliFunction::GHN => execute_ghn(store, call, pcb, position, procseq.as_deref()),
             DliFunction::GHNP => execute_ghnp(store, call, pcb, position),
             DliFunction::ISRT => execute_isrt(store, call, pcb, position),
             DliFunction::DLET => execute_dlet(store, call, pcb, position),
@@ -802,6 +842,7 @@ fn execute_gu(
     call: &DliCall,
     pcb: &mut ProgramCommBlock,
     position: &mut DatabasePosition,
+    procseq: Option<&str>,
 ) -> ImsResult<DliResult> {
     // Reset position for GU
     position.current_id = 0;
@@ -811,6 +852,29 @@ fn execute_gu(
     if call.ssas.is_empty() {
         pcb.set_status(StatusCode::AD);
         return Ok(DliResult::error(StatusCode::AD));
+    }
+
+    // If PROCSEQ is set and the last SSA has a qualification, try secondary index
+    if let Some(idx_name) = procseq {
+        if let Some(ssa) = call.ssas.last() {
+            if let Some(ref qual) = ssa.qualification {
+                let results = store.find_by_index(
+                    idx_name,
+                    &qual.value,
+                    convert_ssa_op(qual.operator),
+                );
+                if let Some(rec) = results.into_iter().next() {
+                    position.current_id = rec.id;
+                    position.parent_id = rec.parent_id;
+                    position.path.push(rec.segment_name.clone());
+                    pcb.set_status(StatusCode::Ok);
+                    return Ok(DliResult::ok(rec.data.clone(), &rec.segment_name));
+                } else {
+                    pcb.set_status(StatusCode::GE);
+                    return Ok(DliResult::not_found());
+                }
+            }
+        }
     }
 
     // Navigate through SSAs
@@ -883,6 +947,7 @@ fn execute_gn(
     call: &DliCall,
     pcb: &mut ProgramCommBlock,
     position: &mut DatabasePosition,
+    _procseq: Option<&str>,
 ) -> ImsResult<DliResult> {
     let target_segment = call.ssas.last().map(|s| s.segment_name.as_str());
 
@@ -961,7 +1026,7 @@ fn execute_gn(
             if !pcb.is_segment_accessible(&rec.segment_name) {
                 // Skip and continue
                 position.current_id = rec.id;
-                return execute_gn(store, call, pcb, position);
+                return execute_gn(store, call, pcb, position, _procseq);
             }
 
             position.current_id = rec.id;
@@ -1043,9 +1108,10 @@ fn execute_ghu(
     call: &DliCall,
     pcb: &mut ProgramCommBlock,
     position: &mut DatabasePosition,
+    procseq: Option<&str>,
 ) -> ImsResult<DliResult> {
     // Same as GU but marks for hold
-    let result = execute_gu(store, call, pcb, position)?;
+    let result = execute_gu(store, call, pcb, position, procseq)?;
 
     // Position already set, so we're "holding" the current record
     Ok(result)
@@ -1057,8 +1123,9 @@ fn execute_ghn(
     call: &DliCall,
     pcb: &mut ProgramCommBlock,
     position: &mut DatabasePosition,
+    procseq: Option<&str>,
 ) -> ImsResult<DliResult> {
-    execute_gn(store, call, pcb, position)
+    execute_gn(store, call, pcb, position, procseq)
 }
 
 /// Execute GHNP (Get Hold Next within Parent) call.
@@ -2063,5 +2130,199 @@ mod tests {
 
         ds.restore_from(&snap);
         assert_eq!(ds.record_count(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Epic 406: Secondary Index Tests
+    // -----------------------------------------------------------------------
+
+    fn create_indexed_runtime() -> ImsRuntime {
+        use crate::dbd::{DatabaseDefinition, AccessMethod, SecondaryIndex};
+
+        let mut runtime = ImsRuntime::new();
+
+        // Create a DBD with a secondary index on CUSTNAME
+        let mut dbd = DatabaseDefinition::new("TESTDB", AccessMethod::HIDAM);
+        let mut seg = crate::dbd::SegmentDefinition::new("CUSTOMER", "", 100);
+        seg.add_field(crate::dbd::FieldDefinition::new("CUSTNO", 1, 10, crate::dbd::FieldType::Character));
+        seg.add_field(crate::dbd::FieldDefinition::new("CUSTNAME", 11, 30, crate::dbd::FieldType::Character));
+        dbd.add_segment(seg);
+        dbd.add_secondary_index(SecondaryIndex {
+            name: "CUSTNAME_IX".to_string(),
+            segment: "CUSTOMER".to_string(),
+            search_field: "CUSTNAME".to_string(),
+            unique: false,
+        });
+        runtime.load_dbd(dbd);
+
+        // Create PSB with PROCSEQ pointing to secondary index
+        let mut psb = ProgramSpecBlock::new("TESTPSB", crate::psb::PsbLanguage::Cobol);
+        let mut pcb = ProgramCommBlock::new_db("TESTDB", ProcessingOptions::from_str("A"), 50);
+        pcb.procseq = Some("CUSTNAME_IX".to_string());
+        pcb.add_senseg(SensitiveSegment::new("CUSTOMER", "", ProcessingOptions::from_str("A")));
+        psb.add_pcb(pcb);
+        runtime.schedule_psb(psb).unwrap();
+
+        // Insert test data
+        {
+            let store = runtime.get_store("TESTDB");
+            let mut keys1 = std::collections::HashMap::new();
+            keys1.insert("CUSTNO".to_string(), b"00001".to_vec());
+            keys1.insert("CUSTNAME".to_string(), b"ZEBRA".to_vec());
+            store.insert_with_keys(0, "CUSTOMER", b"Customer Zebra".to_vec(), keys1);
+
+            let mut keys2 = std::collections::HashMap::new();
+            keys2.insert("CUSTNO".to_string(), b"00002".to_vec());
+            keys2.insert("CUSTNAME".to_string(), b"ALPHA".to_vec());
+            store.insert_with_keys(0, "CUSTOMER", b"Customer Alpha".to_vec(), keys2);
+
+            let mut keys3 = std::collections::HashMap::new();
+            keys3.insert("CUSTNO".to_string(), b"00003".to_vec());
+            keys3.insert("CUSTNAME".to_string(), b"MIDDLE".to_vec());
+            store.insert_with_keys(0, "CUSTOMER", b"Customer Middle".to_vec(), keys3);
+        }
+
+        runtime
+    }
+
+    #[test]
+    fn test_secondary_index_gu_via_procseq() {
+        let mut runtime = create_indexed_runtime();
+
+        // GU with qualification on CUSTNAME — should use secondary index
+        let ssa = Ssa::qualified("CUSTOMER", "CUSTNAME", crate::dli::SsaOperator::Eq, b"ALPHA");
+        let result = runtime.gu(0, vec![ssa]).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.segment_data.as_deref(), Some(b"Customer Alpha".as_slice()));
+    }
+
+    #[test]
+    fn test_secondary_index_gu_not_found() {
+        let mut runtime = create_indexed_runtime();
+
+        let ssa = Ssa::qualified("CUSTOMER", "CUSTNAME", crate::dli::SsaOperator::Eq, b"NONEXIST");
+        let result = runtime.gu(0, vec![ssa]).unwrap();
+        assert!(!result.is_ok());
+    }
+
+    #[test]
+    fn test_secondary_index_insert_updates_index() {
+        let mut runtime = create_indexed_runtime();
+
+        // Insert a new customer
+        let ssa = Ssa::qualified("CUSTOMER", "CUSTNAME", crate::dli::SsaOperator::Eq, b"NEWCUST");
+        let call = crate::dli::DliCall::new(DliFunction::ISRT, 0)
+            .with_ssas(vec![ssa])
+            .with_io_area(b"New Customer".to_vec());
+        runtime.execute(&call).unwrap();
+
+        // Now look it up via the secondary index
+        let ssa = Ssa::qualified("CUSTOMER", "CUSTNAME", crate::dli::SsaOperator::Eq, b"NEWCUST");
+        let result = runtime.gu(0, vec![ssa]).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.segment_data.as_deref(), Some(b"New Customer".as_slice()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Epic 407: Logical Relationship Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_logical_child_cross_database_lookup() {
+        use crate::dbd::{DatabaseDefinition, AccessMethod};
+
+        let mut runtime = ImsRuntime::new();
+
+        // Create source database (CUSTDB)
+        let mut custdbd = DatabaseDefinition::new("CUSTDB", AccessMethod::HIDAM);
+        let mut seg = crate::dbd::SegmentDefinition::new("CUSTOMER", "", 100);
+        seg.add_field(crate::dbd::FieldDefinition::new("CUSTNO", 1, 10, crate::dbd::FieldType::Character));
+        custdbd.add_segment(seg);
+        custdbd.add_logical_child(crate::dbd::LogicalChild {
+            name: "ORDER".to_string(),
+            lchild_db: "ORDERDB".to_string(),
+            parent_segment: "CUSTOMER".to_string(),
+            pointer: None,
+            paired: false,
+        });
+        runtime.load_dbd(custdbd);
+
+        // Create target database (ORDERDB) with orders keyed by CUSTNO
+        let mut orderdbd = DatabaseDefinition::new("ORDERDB", AccessMethod::HIDAM);
+        let mut seg = crate::dbd::SegmentDefinition::new("ORDER", "", 50);
+        seg.add_field(crate::dbd::FieldDefinition::new("ORDERNO", 1, 8, crate::dbd::FieldType::Character));
+        seg.add_field(crate::dbd::FieldDefinition::new("CUSTNO", 9, 10, crate::dbd::FieldType::Character));
+        orderdbd.add_segment(seg);
+        runtime.load_dbd(orderdbd);
+
+        // Insert customer in CUSTDB
+        {
+            let store = runtime.get_store("CUSTDB");
+            let mut keys = std::collections::HashMap::new();
+            keys.insert("CUSTNO".to_string(), b"C001".to_vec());
+            store.insert_with_keys(0, "CUSTOMER", b"Customer C001".to_vec(), keys);
+        }
+
+        // Insert orders in ORDERDB
+        {
+            let store = runtime.get_store("ORDERDB");
+            let mut keys1 = std::collections::HashMap::new();
+            keys1.insert("ORDERNO".to_string(), b"O001".to_vec());
+            keys1.insert("CUSTNO".to_string(), b"C001".to_vec());
+            store.insert_with_keys(0, "ORDER", b"Order O001 for C001".to_vec(), keys1);
+
+            let mut keys2 = std::collections::HashMap::new();
+            keys2.insert("ORDERNO".to_string(), b"O002".to_vec());
+            keys2.insert("CUSTNO".to_string(), b"C002".to_vec());
+            store.insert_with_keys(0, "ORDER", b"Order O002 for C002".to_vec(), keys2);
+        }
+
+        // Use find_logical_children to navigate from CUSTDB to ORDERDB
+        let results = runtime.find_logical_children(
+            "ORDERDB",
+            "ORDER",
+            "CUSTNO",
+            b"C001",
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].data, b"Order O001 for C001");
+    }
+
+    #[test]
+    fn test_logical_child_no_match() {
+        let mut runtime = ImsRuntime::new();
+
+        let dbd = crate::dbd::DatabaseDefinition::new("ORDERDB", crate::dbd::AccessMethod::HIDAM);
+        runtime.load_dbd(dbd);
+
+        let results = runtime.find_logical_children("ORDERDB", "ORDER", "CUSTNO", b"NOEXIST");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_lchild_parsed_in_dbd() {
+        let mut runtime = ImsRuntime::new();
+
+        // Parse a DBD with LCHILD
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             SEGM  NAME=CUSTOMER,BYTES=100,PARENT=0
+             FIELD NAME=CUSTNO,START=1,BYTES=10,TYPE=C,SEQ
+             LCHILD NAME=ORDER,SOURCE=ORDERDB
+             DBDGEN
+        "#;
+
+        let mut parser = crate::dbd::DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        assert_eq!(dbd.logical_children.len(), 1);
+        assert_eq!(dbd.logical_children[0].name, "ORDER");
+        assert_eq!(dbd.logical_children[0].lchild_db, "ORDERDB");
+        assert_eq!(dbd.logical_children[0].parent_segment, "CUSTOMER");
+
+        runtime.load_dbd(dbd);
+        // Verify that loading the DBD doesn't panic and the database store is created
+        let store = runtime.get_store("CUSTDB");
+        assert!(store.is_empty()); // No data yet, just the definition
     }
 }

@@ -10,6 +10,34 @@
 
 use std::collections::HashMap;
 
+/// A secondary index definition (XDFLD macro).
+#[derive(Debug, Clone)]
+pub struct SecondaryIndex {
+    /// Index name (the XDFLD NAME value)
+    pub name: String,
+    /// Target segment that is indexed
+    pub segment: String,
+    /// Search field in the target segment used as the index key
+    pub search_field: String,
+    /// Whether the index key is unique
+    pub unique: bool,
+}
+
+/// A logical child relationship (LCHILD macro).
+#[derive(Debug, Clone)]
+pub struct LogicalChild {
+    /// Logical child segment name
+    pub name: String,
+    /// The database containing the logical child segment
+    pub lchild_db: String,
+    /// The physical parent segment in this DBD that has the relationship
+    pub parent_segment: String,
+    /// Optional pointer field for the relationship
+    pub pointer: Option<String>,
+    /// Whether this is a paired relationship (bidirectional)
+    pub paired: bool,
+}
+
 /// A complete Database Definition.
 #[derive(Debug, Clone)]
 pub struct DatabaseDefinition {
@@ -23,6 +51,10 @@ pub struct DatabaseDefinition {
     pub segments: HashMap<String, SegmentDefinition>,
     /// Segment hierarchy (parent -> children)
     pub hierarchy: HashMap<String, Vec<String>>,
+    /// Secondary indexes defined via XDFLD
+    pub secondary_indexes: Vec<SecondaryIndex>,
+    /// Logical child relationships defined via LCHILD
+    pub logical_children: Vec<LogicalChild>,
 }
 
 impl DatabaseDefinition {
@@ -34,6 +66,8 @@ impl DatabaseDefinition {
             root_segment: String::new(),
             segments: HashMap::new(),
             hierarchy: HashMap::new(),
+            secondary_indexes: Vec::new(),
+            logical_children: Vec::new(),
         }
     }
 
@@ -70,6 +104,29 @@ impl DatabaseDefinition {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Add a secondary index definition.
+    pub fn add_secondary_index(&mut self, index: SecondaryIndex) {
+        self.secondary_indexes.push(index);
+    }
+
+    /// Get a secondary index by name.
+    pub fn get_secondary_index(&self, name: &str) -> Option<&SecondaryIndex> {
+        self.secondary_indexes.iter().find(|idx| idx.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Add a logical child relationship.
+    pub fn add_logical_child(&mut self, lchild: LogicalChild) {
+        self.logical_children.push(lchild);
+    }
+
+    /// Get logical children of a segment.
+    pub fn get_logical_children(&self, parent_segment: &str) -> Vec<&LogicalChild> {
+        self.logical_children
+            .iter()
+            .filter(|lc| lc.parent_segment.eq_ignore_ascii_case(parent_segment))
+            .collect()
     }
 
     /// Get the path from root to a segment.
@@ -265,6 +322,7 @@ impl DbdParser {
 
         let mut dbd: Option<DatabaseDefinition> = None;
         let mut current_segment: Option<SegmentDefinition> = None;
+        let mut last_segment_name = String::new();
 
         while self.current_line < self.lines.len() {
             let line = &self.lines[self.current_line];
@@ -303,6 +361,7 @@ impl DbdParser {
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(0);
 
+                        last_segment_name = name.clone();
                         current_segment = Some(SegmentDefinition::new(&name, &parent, bytes));
                     }
                     "FIELD" => {
@@ -334,6 +393,41 @@ impl DbdParser {
                             }
 
                             seg.add_field(field);
+                        }
+                    }
+                    "XDFLD" => {
+                        // Secondary index definition
+                        if let Some(ref mut db) = dbd {
+                            let name = params.get("NAME").cloned().unwrap_or_default();
+                            let segment = params.get("SEGMENT").cloned()
+                                .unwrap_or_else(|| last_segment_name.clone());
+                            let srch = params.get("SRCH").cloned().unwrap_or_default();
+                            let unique = params.contains_key("UNIQUE");
+
+                            db.add_secondary_index(SecondaryIndex {
+                                name,
+                                segment,
+                                search_field: srch,
+                                unique,
+                            });
+                        }
+                    }
+                    "LCHILD" => {
+                        // Logical child relationship
+                        if let Some(ref mut db) = dbd {
+                            let name = params.get("NAME").cloned().unwrap_or_default();
+                            let lchild_db = params.get("SOURCE").or(params.get("INDEX"))
+                                .cloned().unwrap_or_default();
+                            let pointer = params.get("POINTER").cloned();
+                            let paired = params.contains_key("PAIRED");
+
+                            db.add_logical_child(LogicalChild {
+                                name,
+                                lchild_db,
+                                parent_segment: last_segment_name.clone(),
+                                pointer,
+                                paired,
+                            });
                         }
                     }
                     "DBDGEN" | "FINISH" | "END" => {
@@ -370,7 +464,7 @@ impl DbdParser {
         }
 
         // Check if first part is a known macro
-        let known_macros = ["DBD", "SEGM", "FIELD", "DATASET", "LCHILD", "DBDGEN", "FINISH", "END"];
+        let known_macros = ["DBD", "SEGM", "FIELD", "DATASET", "LCHILD", "XDFLD", "DBDGEN", "FINISH", "END"];
 
         if known_macros.contains(&parts[0].to_uppercase().as_str()) {
             return Some(line.to_string());
@@ -599,5 +693,104 @@ mod tests {
         assert_eq!(FieldType::from_char('P'), FieldType::Packed);
         assert_eq!(FieldType::from_char('Z'), FieldType::Zoned);
         assert_eq!(FieldType::from_char('X'), FieldType::Hex);
+    }
+
+    #[test]
+    fn test_parse_xdfld_secondary_index() {
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             SEGM  NAME=CUSTOMER,BYTES=100,PARENT=0
+             FIELD NAME=CUSTNO,START=1,BYTES=10,TYPE=C,SEQ
+             FIELD NAME=CUSTNAME,START=11,BYTES=30,TYPE=C
+             XDFLD NAME=CUSTNAME_IX,SEGMENT=CUSTOMER,SRCH=CUSTNAME
+             SEGM  NAME=ORDER,BYTES=50,PARENT=CUSTOMER
+             FIELD NAME=ORDERNO,START=1,BYTES=8,TYPE=C,SEQ
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        assert_eq!(dbd.secondary_indexes.len(), 1);
+        let idx = &dbd.secondary_indexes[0];
+        assert_eq!(idx.name, "CUSTNAME_IX");
+        assert_eq!(idx.segment, "CUSTOMER");
+        assert_eq!(idx.search_field, "CUSTNAME");
+        assert!(!idx.unique);
+    }
+
+    #[test]
+    fn test_parse_xdfld_unique_index() {
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             SEGM  NAME=CUSTOMER,BYTES=100,PARENT=0
+             FIELD NAME=CUSTNO,START=1,BYTES=10,TYPE=C,SEQ
+             FIELD NAME=SSN,START=41,BYTES=9,TYPE=C
+             XDFLD NAME=SSN_IX,SEGMENT=CUSTOMER,SRCH=SSN,UNIQUE
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        assert_eq!(dbd.secondary_indexes.len(), 1);
+        assert!(dbd.secondary_indexes[0].unique);
+    }
+
+    #[test]
+    fn test_parse_lchild() {
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             SEGM  NAME=CUSTOMER,BYTES=100,PARENT=0
+             FIELD NAME=CUSTNO,START=1,BYTES=10,TYPE=C,SEQ
+             LCHILD NAME=ORDER,SOURCE=ORDERDB
+             SEGM  NAME=ADDRESS,BYTES=200,PARENT=CUSTOMER
+             FIELD NAME=ADDRNO,START=1,BYTES=4,TYPE=C,SEQ
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        assert_eq!(dbd.logical_children.len(), 1);
+        let lc = &dbd.logical_children[0];
+        assert_eq!(lc.name, "ORDER");
+        assert_eq!(lc.lchild_db, "ORDERDB");
+        assert_eq!(lc.parent_segment, "CUSTOMER");
+        assert!(!lc.paired);
+    }
+
+    #[test]
+    fn test_get_secondary_index() {
+        let mut dbd = DatabaseDefinition::new("TEST", AccessMethod::HIDAM);
+        dbd.add_secondary_index(SecondaryIndex {
+            name: "CUSTNAME_IX".to_string(),
+            segment: "CUSTOMER".to_string(),
+            search_field: "CUSTNAME".to_string(),
+            unique: false,
+        });
+
+        assert!(dbd.get_secondary_index("CUSTNAME_IX").is_some());
+        assert!(dbd.get_secondary_index("custname_ix").is_some());
+        assert!(dbd.get_secondary_index("NONEXIST").is_none());
+    }
+
+    #[test]
+    fn test_get_logical_children() {
+        let mut dbd = DatabaseDefinition::new("TEST", AccessMethod::HIDAM);
+        dbd.add_logical_child(LogicalChild {
+            name: "ORDER".to_string(),
+            lchild_db: "ORDERDB".to_string(),
+            parent_segment: "CUSTOMER".to_string(),
+            pointer: None,
+            paired: false,
+        });
+
+        let children = dbd.get_logical_children("CUSTOMER");
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].name, "ORDER");
+
+        let children = dbd.get_logical_children("NONEXIST");
+        assert!(children.is_empty());
     }
 }

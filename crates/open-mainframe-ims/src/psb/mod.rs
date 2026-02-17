@@ -110,6 +110,8 @@ pub struct ProgramCommBlock {
     pub status_time: String,
     /// I/O PCB: input message sequence number
     pub input_msg_seq: u32,
+    /// PROCSEQ: secondary index name for alternate processing sequence
+    pub procseq: Option<String>,
 }
 
 impl ProgramCommBlock {
@@ -130,6 +132,7 @@ impl ProgramCommBlock {
             status_date: String::new(),
             status_time: String::new(),
             input_msg_seq: 0,
+            procseq: None,
         }
     }
 
@@ -156,6 +159,7 @@ impl ProgramCommBlock {
             status_date: String::new(),
             status_time: String::new(),
             input_msg_seq: 0,
+            procseq: None,
         }
     }
 
@@ -176,6 +180,7 @@ impl ProgramCommBlock {
             status_date: String::new(),
             status_time: String::new(),
             input_msg_seq: 0,
+            procseq: None,
         }
     }
 
@@ -366,11 +371,14 @@ impl PsbParser {
 
                         let procopt = ProcessingOptions::from_str(&procopt_str);
 
+                        let procseq = params.get("PROCSEQ").cloned();
+
                         let mut pcb = match pcb_type_str.to_uppercase().as_str() {
                             "GSAM" => ProgramCommBlock::new_gsam(&dbname),
                             _ => ProgramCommBlock::new_db(&dbname, procopt, keylen),
                         };
                         pcb.position = pcb_position;
+                        pcb.procseq = procseq;
                         pcb_position += 1;
 
                         current_pcb = Some(pcb);
@@ -634,5 +642,30 @@ mod tests {
         assert_eq!(PsbLanguage::from_str("PLI"), Some(PsbLanguage::Pli));
         assert_eq!(PsbLanguage::from_str("ASM"), Some(PsbLanguage::Asm));
         assert_eq!(PsbLanguage::from_str("UNKNOWN"), None);
+    }
+
+    #[test]
+    fn test_procseq_parsing() {
+        let source = r#"
+             PSB   PSBNAME(TESTPSB),LANG(COBOL)
+             PCB   TYPE(DB),DBDNAME(CUSTDB),PROCOPT(G),KEYLEN(50),PROCSEQ(CUSTNAME_IX)
+             SENSEG NAME(CUSTOMER),PARENT=0
+             PSBGEN
+        "#;
+
+        let mut parser = PsbParser::new();
+        let psb = parser.parse(source).unwrap();
+
+        let pcb = psb.get_pcb("CUSTDB").unwrap();
+        assert_eq!(pcb.procseq, Some("CUSTNAME_IX".to_string()));
+    }
+
+    #[test]
+    fn test_procseq_none_when_not_specified() {
+        let mut parser = PsbParser::new();
+        let psb = parser.parse(SAMPLE_PSB).unwrap();
+
+        let pcb = psb.get_pcb("CUSTDB").unwrap();
+        assert_eq!(pcb.procseq, None);
     }
 }
