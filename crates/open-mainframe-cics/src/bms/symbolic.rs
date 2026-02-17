@@ -143,6 +143,14 @@ impl SymbolicMapGenerator {
             ));
         }
 
+        // Color attribute field (extended attribute)
+        if self.include_attribute {
+            output.push_str(&format!(
+                "               10  {}C              PIC X.\n",
+                name
+            ));
+        }
+
         // Data field
         let picture = self.get_picture(field);
         output.push_str(&format!(
@@ -181,6 +189,14 @@ impl SymbolicMapGenerator {
             ));
         }
 
+        // Color attribute field (extended attribute)
+        if self.include_attribute {
+            output.push_str(&format!(
+                "               10  {}C              PIC X.\n",
+                name
+            ));
+        }
+
         // Data field
         let picture = self.get_picture(field);
         output.push_str(&format!(
@@ -197,14 +213,12 @@ impl SymbolicMapGenerator {
             return pic.clone();
         }
 
-        // Generate default picture based on field type and length
-        if field.attributes.numeric {
-            if field.length > 9 {
-                format!("9({})", field.length)
-            } else {
-                "9".repeat(field.length)
-            }
-        } else if field.length > 10 {
+        // BMS symbolic map data fields are always PIC X(n), regardless of
+        // the NUM attribute.  The NUM attribute only affects the 3270
+        // terminal keyboard lock (numeric-only input) — it does not change
+        // the COBOL data type.  Programs rely on alphanumeric operations
+        // (reference modification, SPACES comparison, etc.) on these fields.
+        if field.length > 10 {
             format!("X({})", field.length)
         } else {
             "X".repeat(field.length)
@@ -269,7 +283,8 @@ pub fn calculate_map_size(map: &BmsMap, include_length: bool, include_flag: bool
                 size += 1;
             }
             if include_attr {
-                size += 1;
+                size += 1; // basic attribute (A)
+                size += 1; // color attribute (C)
             }
             size += field.length;
         }
@@ -316,18 +331,13 @@ pub fn decompose_from_buffer(
         };
 
         // F field: 1 byte (flag)
-        if offset < buffer.len() {
-            offset += 1;
-        } else {
-            offset += 1;
-        }
+        offset += 1;
 
         // A field: 1 byte (attribute)
-        if offset < buffer.len() {
-            offset += 1;
-        } else {
-            offset += 1;
-        }
+        offset += 1;
+
+        // C field: 1 byte (color attribute)
+        offset += 1;
 
         // Data field: field.length bytes
         let data_start = offset;
@@ -372,7 +382,7 @@ pub fn decompose_from_display_string(
 
     // In display-string mode, the COBOL interpreter stores the symbolic map
     // as a flat string. We iterate fields and extract by offset.
-    // Layout: 12 chars TIOAPFX + (4 chars L/F/A + data) per field
+    // Layout: 12 chars TIOAPFX + (5 chars L/F/A/C + data) per field
     let mut offset = 12;
 
     for field in &map.fields {
@@ -380,8 +390,8 @@ pub fn decompose_from_display_string(
             continue;
         }
 
-        // L: 2 display chars, F: 1 char, A: 1 char
-        offset += 4;
+        // L: 2 display chars, F: 1 char, A: 1 char, C: 1 char
+        offset += 5;
 
         // Data field
         let data_start = offset;
@@ -441,6 +451,9 @@ pub fn compose_to_display_string(
         offset += 1;
 
         // A field: 1 byte attribute (space = default)
+        offset += 1;
+
+        // C field: 1 byte color attribute (space = default)
         offset += 1;
 
         // Data field: field.length bytes, right-padded with spaces
@@ -506,8 +519,8 @@ NUMER    DFHMDF POS=(3,1),LENGTH=8,ATTRB=(NUM,UNPROT)
         assert!(copybook.contains("PIC XXXXX"));
         // Long alphanumeric should use X(50)
         assert!(copybook.contains("PIC X(50)"));
-        // Numeric should use 9s
-        assert!(copybook.contains("PIC 99999999"));
+        // Numeric fields also use PIC X (BMS data fields are always alphanumeric)
+        assert!(copybook.contains("PIC XXXXXXXX"));
     }
 
     #[test]
@@ -534,11 +547,11 @@ FLD2     DFHMDF POS=(2,1),LENGTH=20,ATTRB=(PROT)
         let mapset = parser.parse(source).unwrap();
         let map = &mapset.maps[0];
 
-        // Size = 12 (TIOAPFX) + 2 fields * (2 + 1 + 1 + length)
-        // = 12 + (2 + 1 + 1 + 10) + (2 + 1 + 1 + 20)
-        // = 12 + 14 + 24 = 50
+        // Size = 12 (TIOAPFX) + 2 fields * (2 + 1 + 1 + 1 + length)
+        // = 12 + (2 + 1 + 1 + 1 + 10) + (2 + 1 + 1 + 1 + 20)
+        // = 12 + 15 + 25 = 52
         let size = calculate_map_size(map, true, true, true);
-        assert_eq!(size, 50);
+        assert_eq!(size, 52);
     }
 
     #[test]
@@ -556,26 +569,26 @@ FLD2     DFHMDF POS=(2,1),LENGTH=5,ATTRB=(UNPROT)
 
         // Symbolic map layout:
         // 12 bytes TIOAPFX
-        // FLD1: 2 L + 1 F + 1 A + 10 data = 14 bytes (offsets 12..26)
-        // FLD2: 2 L + 1 F + 1 A + 5 data = 9 bytes (offsets 26..35)
-        // Total = 35 bytes
+        // FLD1: 2 L + 1 F + 1 A + 1 C + 10 data = 15 bytes (offsets 12..27)
+        // FLD2: 2 L + 1 F + 1 A + 1 C + 5 data = 10 bytes (offsets 27..37)
+        // Total = 37 bytes
         let size = super::calculate_map_size(map, true, true, true);
-        assert_eq!(size, 35);
+        assert_eq!(size, 37);
         let mut buffer = vec![0u8; size];
 
         // FLD1: L=5 (only 5 chars of data are meaningful)
         buffer[12] = 0; // high byte of length
         buffer[13] = 5; // low byte of length
-        // F=0 at [14], A=0 at [15]
-        // Data starts at offset 16, length 10
-        buffer[16..21].copy_from_slice(b"Hello");
+        // F=0 at [14], A=0 at [15], C=0 at [16]
+        // Data starts at offset 17, length 10
+        buffer[17..22].copy_from_slice(b"Hello");
 
-        // FLD2: L=3, starts at offset 26
-        buffer[26] = 0;
-        buffer[27] = 3;
-        // F=0 at [28], A=0 at [29]
-        // Data starts at offset 30, length 5
-        buffer[30..33].copy_from_slice(b"Hi!");
+        // FLD2: L=3, starts at offset 27
+        buffer[27] = 0;
+        buffer[28] = 3;
+        // F=0 at [29], A=0 at [30], C=0 at [31]
+        // Data starts at offset 32, length 5
+        buffer[32..35].copy_from_slice(b"Hi!");
 
         let result = super::decompose_from_buffer(map, &buffer);
         assert!(result.contains_key("FLD1"), "FLD1 should be present");
@@ -614,7 +627,8 @@ FLD2     DFHMDF POS=(2,1),LENGTH=5,ATTRB=(UNPROT)
         let mut buffer = vec![0u8; size];
         buffer[12] = 0;
         buffer[13] = 5; // FLD1 length = 5
-        buffer[16..21].copy_from_slice(b"Hello");
+        // Data starts at offset 17 (after L=2, F=1, A=1, C=1)
+        buffer[17..22].copy_from_slice(b"Hello");
         // FLD2: L=0, all zeros -> should be skipped
 
         let result = super::decompose_from_buffer(map, &buffer);
@@ -635,12 +649,12 @@ FLD2     DFHMDF POS=(2,1),LENGTH=5,ATTRB=(UNPROT)
         let mapset = parser.parse(source).unwrap();
         let map = &mapset.maps[0];
 
-        // Build a display string: 12 chars TIOAPFX + 4 chars (L/F/A) + 10 data + 4 + 5 data = 35
+        // Build a display string: 12 chars TIOAPFX + 5 chars (L/F/A/C) + 10 data + 5 + 5 data = 37
         let mut display = String::new();
         display.push_str("            "); // 12 TIOAPFX
-        display.push_str("    "); // L/F/A for FLD1
+        display.push_str("     "); // L/F/A/C for FLD1
         display.push_str("Hello     "); // 10 chars for FLD1
-        display.push_str("    "); // L/F/A for FLD2
+        display.push_str("     "); // L/F/A/C for FLD2
         display.push_str("World"); // 5 chars for FLD2
 
         let result = super::decompose_from_display_string(map, &display);
@@ -673,8 +687,8 @@ FLD2     DFHMDF POS=(2,1),LENGTH=5,ATTRB=(UNPROT)
 
         let result = super::compose_to_display_string(map, &fields);
 
-        // Total size = 12 + (2+1+1+10) + (2+1+1+5) = 35
-        assert_eq!(result.len(), 35, "Composed string should be 35 chars");
+        // Total size = 12 + (2+1+1+1+10) + (2+1+1+1+5) = 37
+        assert_eq!(result.len(), 37, "Composed string should be 37 chars");
 
         // Decompose it back and verify round-trip
         let decomposed = super::decompose_from_display_string(map, &result);

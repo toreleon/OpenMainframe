@@ -45,7 +45,47 @@ impl Preprocessor {
     ///
     /// Returns the expanded source with all copybooks inlined.
     pub fn preprocess(&mut self, source: &str) -> Result<String> {
-        self.preprocess_recursive(source, 0)
+        let expanded = self.preprocess_recursive(source, 0)?;
+        // Post-process: expand CICS DFHRESP() pseudo-function calls
+        Ok(Self::expand_dfhresp(&expanded))
+    }
+
+    /// Expand DFHRESP(condition) pseudo-function calls to numeric CICS response codes.
+    fn expand_dfhresp(source: &str) -> String {
+        let mut result = String::with_capacity(source.len());
+        let mut remaining = source.as_bytes();
+
+        while !remaining.is_empty() {
+            // Find next DFHRESP( occurrence (case-insensitive)
+            if let Some(pos) = find_dfhresp(remaining) {
+                // Copy everything before the match
+                result.push_str(&source[source.len() - remaining.len()..source.len() - remaining.len() + pos]);
+                remaining = &remaining[pos..];
+
+                // Find the matching closing paren
+                let prefix_len = b"DFHRESP(".len();
+                if remaining.len() > prefix_len {
+                    if let Some(close) = remaining[prefix_len..].iter().position(|&b| b == b')') {
+                        let condition = std::str::from_utf8(&remaining[prefix_len..prefix_len + close])
+                            .unwrap_or("")
+                            .trim();
+                        let code = dfhresp_code(condition);
+                        result.push_str(&code.to_string());
+                        remaining = &remaining[prefix_len + close + 1..];
+                        continue;
+                    }
+                }
+                // No closing paren found, copy the DFHRESP literally
+                result.push_str(&source[source.len() - remaining.len()..source.len() - remaining.len() + 1]);
+                remaining = &remaining[1..];
+            } else {
+                // No more DFHRESP found, copy the rest
+                result.push_str(&source[source.len() - remaining.len()..]);
+                break;
+            }
+        }
+
+        result
     }
 
     /// Recursively preprocess source, tracking depth.
@@ -292,6 +332,127 @@ impl Preprocessor {
         s.trim_start_matches("==")
             .trim_end_matches("==")
             .to_string()
+    }
+}
+
+/// Find position of case-insensitive "DFHRESP(" in byte slice.
+fn find_dfhresp(haystack: &[u8]) -> Option<usize> {
+    let needle = b"DFHRESP(";
+    if haystack.len() < needle.len() {
+        return None;
+    }
+    for i in 0..=haystack.len() - needle.len() {
+        if haystack[i..i + needle.len()]
+            .iter()
+            .zip(needle.iter())
+            .all(|(a, b)| a.to_ascii_uppercase() == b.to_ascii_uppercase())
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Map a CICS condition name to its numeric response code.
+fn dfhresp_code(condition: &str) -> i32 {
+    match condition.to_uppercase().as_str() {
+        "NORMAL" => 0,
+        "ERROR" => 1,
+        "RDATT" => 2,
+        "WRBRK" => 3,
+        "EOF" => 4,
+        "EODS" => 5,
+        "EOC" => 6,
+        "INBFMH" => 7,
+        "ENDINPT" => 8,
+        "NONVAL" => 9,
+        "NOSTART" => 10,
+        "TERMIDERR" => 11,
+        "FILENOTFOUND" | "DSIDERR" => 12,
+        "NOTFND" => 13,
+        "DUPREC" => 14,
+        "DUPKEY" => 15,
+        "INVREQ" => 16,
+        "IOERR" => 17,
+        "NOSPACE" => 18,
+        "NOTOPEN" => 19,
+        "ENDFILE" => 20,
+        "ILLOGIC" => 21,
+        "LENGERR" => 22,
+        "QZERO" => 23,
+        "SIGNAL" => 24,
+        "QBUSY" => 25,
+        "ITEMERR" => 26,
+        "PGMIDERR" => 27,
+        "TRANSIDERR" => 28,
+        "ENDDATA" => 29,
+        "INVTSREQ" => 30,
+        "EXPIRED" => 31,
+        "MAPFAIL" => 36,
+        "INVMPSZ" => 38,
+        "OVERFLOW" => 40,
+        "INVLDC" => 41,
+        "NOSTG" => 42,
+        "JIDERR" => 43,
+        "QIDERR" => 44,
+        "NOJBUFSP" => 45,
+        "DSSTAT" => 46,
+        "SELNERR" => 47,
+        "FUNCERR" => 48,
+        "UNEXPIN" => 49,
+        "NOPASSBKRD" => 50,
+        "NOPASSBKWR" => 51,
+        "SYSIDERR" => 53,
+        "ISCINVREQ" => 54,
+        "ENQBUSY" => 55,
+        "ENVDEFERR" => 56,
+        "IGREQCD" => 57,
+        "SESSIONERR" => 58,
+        "SYSBUSY" => 59,
+        "SESSBUSY" => 60,
+        "NOTALLOC" => 61,
+        "CBIDERR" => 62,
+        "INVEXITREQ" => 63,
+        "INVPARTNSET" => 64,
+        "INVPARTN" => 65,
+        "PARTNFAIL" => 66,
+        "USERIDERR" => 69,
+        "NOTAUTH" => 70,
+        "VOLIDERR" => 71,
+        "SUPPRESSED" => 72,
+        "RESIDERR" => 76,
+        "NOSPOOL" => 80,
+        "TERMERR" => 81,
+        "ROLLEDBACK" => 82,
+        "END" => 83,
+        "DISABLED" => 84,
+        "ALLOCERR" => 85,
+        "STRELERR" => 86,
+        "OPENERR" => 87,
+        "SPOLBUSY" => 88,
+        "SPOLDERR" => 89,
+        "LOADING" => 94,
+        "MODELIDERR" => 95,
+        "OUTDESCRERR" => 96,
+        "PARTNERIDERR" => 97,
+        "PROFILEIDERR" => 98,
+        "NETNAMEIDERR" => 99,
+        "LOCKED" => 100,
+        "RECORDBUSY" => 101,
+        "UOWNOTFOUND" => 102,
+        "UOWLNOTFOUND" => 103,
+        "LSRPOOLFULL" => 104,
+        "CHANNELERR" => 122,
+        "CCSIDERR" => 123,
+        "TIMEDOUT" => 124,
+        "CODEPAGEERR" => 125,
+        "INCOMPLETE" => 126,
+        "CONTAINERERR" => 127,
+        "TOKENERR" => 128,
+        _ => {
+            eprintln!("WARNING: Unknown DFHRESP condition: {}", condition);
+            -1
+        }
     }
 }
 

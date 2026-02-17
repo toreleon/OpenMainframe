@@ -99,6 +99,18 @@ pub fn load_vsam_data(
     key_len: usize,
     rec_len: usize,
 ) -> std::result::Result<Vec<open_mainframe_cics::runtime::FileRecord>, String> {
+    load_vsam_data_with_key_pos(path, key_len, rec_len, 0)
+}
+
+/// Load VSAM data with a custom key position within each record.
+/// `key_pos` is the byte offset within each record where the key starts.
+/// This supports alternate index paths where the key is not at offset 0.
+pub fn load_vsam_data_with_key_pos(
+    path: &str,
+    key_len: usize,
+    rec_len: usize,
+    key_pos: usize,
+) -> std::result::Result<Vec<open_mainframe_cics::runtime::FileRecord>, String> {
     let data =
         std::fs::read(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
 
@@ -106,7 +118,8 @@ pub fn load_vsam_data(
     let mut offset = 0;
     while offset + rec_len <= data.len() {
         let record_bytes = &data[offset..offset + rec_len];
-        let key = record_bytes[..key_len.min(rec_len)].to_vec();
+        let key_end = (key_pos + key_len).min(rec_len);
+        let key = record_bytes[key_pos.min(rec_len)..key_end].to_vec();
         records.push(open_mainframe_cics::runtime::FileRecord {
             key,
             data: record_bytes.to_vec(),
@@ -229,15 +242,16 @@ pub fn interpret(
 
     let mut bridge = CicsBridge::new("CARD", "T001");
 
-    // Load VSAM data files (format: DDNAME=path or DDNAME=path:key_len:rec_len)
+    // Load VSAM data files (format: DDNAME=path or DDNAME=path:key_len:rec_len or DDNAME=path:key_len:rec_len:key_pos)
     for spec in &data_files {
         if let Some((ddname, rest)) = spec.split_once('=') {
             let parts: Vec<&str> = rest.split(':').collect();
             let file_path = parts[0];
             let key_len: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(8);
             let rec_len: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(80);
+            let key_pos: usize = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
 
-            match load_vsam_data(file_path, key_len, rec_len) {
+            match load_vsam_data_with_key_pos(file_path, key_len, rec_len, key_pos) {
                 Ok(records) => {
                     tracing::info!(
                         "Loaded {} records for VSAM file {} from {}",
@@ -476,12 +490,14 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
     let mut initial_values = Vec::new();
     let mut condition_names: HashMap<String, (String, String)> = HashMap::new();
     let mut group_layouts: HashMap<String, Vec<open_mainframe_runtime::interpreter::GroupField>> = HashMap::new();
+    let mut redefines_map: Vec<(String, String)> = Vec::new();
     if let Some(ref data) = program.data {
         collect_data_items(
             &data.working_storage,
             &mut data_items,
             &mut initial_values,
             &mut condition_names,
+            &mut redefines_map,
         );
         collect_group_layouts(&data.working_storage, &mut group_layouts);
     }
@@ -618,6 +634,7 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
         is_initial: program.identification.program_id.is_initial,
         is_common: program.identification.program_id.is_common,
         declarative_handlers,
+        redefines_aliases: redefines_map,
     })
 }
 
@@ -627,11 +644,14 @@ fn collect_data_items(
     out: &mut Vec<(String, DataItemMeta)>,
     inits: &mut Vec<(String, SimpleExpr)>,
     cond_names: &mut HashMap<String, (String, String)>,
+    redefines_map: &mut Vec<(String, String)>,
 ) {
     for item in items {
         if let DataItemName::Named(ref name) = item.name {
+            // Use compute_item_size_base for proper COMP/BINARY size
+            let computed_size = compute_item_size_base(item);
             let meta = DataItemMeta {
-                size: item.picture.as_ref().map(|p| p.size as usize).unwrap_or(80),
+                size: if computed_size > 0 { computed_size } else { 80 },
                 decimals: item
                     .picture
                     .as_ref()
@@ -649,8 +669,14 @@ fn collect_data_items(
                     })
                     .unwrap_or(false),
                 picture: item.picture.as_ref().map(|p| p.picture.clone()),
+                is_justified: item.justified,
             };
             out.push((name.clone(), meta));
+
+            // Track REDEFINES relationships
+            if let Some(ref redef_target) = item.redefines {
+                redefines_map.push((name.to_uppercase(), redef_target.name.to_uppercase()));
+            }
 
             // Handle VALUE clause
             if let Some(ref value) = item.value {
@@ -681,25 +707,15 @@ fn collect_data_items(
             }
         }
         // Recurse into children
-        collect_data_items(&item.children, out, inits, cond_names);
+        collect_data_items(&item.children, out, inits, cond_names, redefines_map);
     }
 }
 
 /// Compute the byte size of a data item (recursive for group items).
-/// Accounts for OCCURS (multiplies by count) and excludes REDEFINES items.
+/// Accounts for OCCURS (multiplies by count), excludes REDEFINES items,
+/// and adjusts for USAGE COMP/BINARY/COMP-3 storage sizes.
 fn compute_item_size(item: &DataItem) -> usize {
-    let base = if let Some(ref pic) = item.picture {
-        pic.size as usize
-    } else if !item.children.is_empty() {
-        // Group item: sum of children sizes (excluding level-88 and REDEFINES)
-        item.children
-            .iter()
-            .filter(|c| c.level != 88 && c.redefines.is_none())
-            .map(compute_item_size)
-            .sum()
-    } else {
-        0
-    };
+    let base = compute_item_size_base(item);
     // Multiply by OCCURS count
     if let Some(ref occ) = item.occurs {
         base * occ.times as usize
@@ -710,9 +726,41 @@ fn compute_item_size(item: &DataItem) -> usize {
 
 /// Compute the byte size of a single occurrence (ignoring the OCCURS multiplier).
 fn compute_item_size_single(item: &DataItem) -> usize {
+    compute_item_size_base(item)
+}
+
+/// Base size computation shared by both functions.
+fn compute_item_size_base(item: &DataItem) -> usize {
     if let Some(ref pic) = item.picture {
-        pic.size as usize
+        // Adjust size based on USAGE clause: COMP/BINARY items use binary
+        // storage, not the display representation.
+        match item.usage {
+            Some(open_mainframe_cobol::ast::Usage::Binary)
+            | Some(open_mainframe_cobol::ast::Usage::Comp5) => {
+                // BINARY / COMP / COMP-4 / COMP-5:
+                //   PIC S9(1-4) → 2 bytes (halfword)
+                //   PIC S9(5-9) → 4 bytes (fullword)
+                //   PIC S9(10-18) → 8 bytes (doubleword)
+                let digits = pic.size as usize;
+                if digits <= 4 {
+                    2
+                } else if digits <= 9 {
+                    4
+                } else {
+                    8
+                }
+            }
+            Some(open_mainframe_cobol::ast::Usage::PackedDecimal) => {
+                // COMP-3 / PACKED-DECIMAL: ceil((digits + 1) / 2)
+                let digits = pic.size as usize;
+                (digits + 2) / 2
+            }
+            Some(open_mainframe_cobol::ast::Usage::Comp1) => 4, // Single-precision float
+            Some(open_mainframe_cobol::ast::Usage::Comp2) => 8, // Double-precision float
+            _ => pic.size as usize, // DISPLAY (default)
+        }
     } else if !item.children.is_empty() {
+        // Group item: sum of children sizes (excluding level-88 and REDEFINES)
         item.children
             .iter()
             .filter(|c| c.level != 88 && c.redefines.is_none())
@@ -944,7 +992,18 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
         Statement::Move(m) => {
             let from = convert_expr(&m.from)?;
             let to: Vec<SimpleExpr> = m.to.iter().map(|q| {
-                if !q.subscripts.is_empty() {
+                if let Some((ref start, ref length)) = q.refmod {
+                    // Reference modification on target: variable(start:length)
+                    let start_expr = convert_expr(start).unwrap_or(SimpleExpr::Integer(1));
+                    let len_expr = length.as_ref().map(|l| {
+                        Box::new(convert_expr(l).unwrap_or(SimpleExpr::Integer(1)))
+                    });
+                    SimpleExpr::RefMod {
+                        variable: Box::new(SimpleExpr::Variable(q.name.clone())),
+                        start: Box::new(start_expr),
+                        length: len_expr,
+                    }
+                } else if !q.subscripts.is_empty() {
                     let index = convert_expr(&q.subscripts[0]).unwrap_or(SimpleExpr::Integer(1));
                     SimpleExpr::Subscript {
                         variable: q.name.clone(),
@@ -1686,12 +1745,28 @@ fn convert_condition(cond: &open_mainframe_cobol::ast::Condition) -> Result<Simp
 
         open_mainframe_cobol::ast::Condition::Paren(inner) => convert_condition(inner),
 
-        // Class and sign conditions - evaluate to true for now
-        open_mainframe_cobol::ast::Condition::Class(_) => Ok(SimpleCondition::Compare {
-            left: SimpleExpr::Integer(1),
-            op: SimpleCompareOp::Equal,
-            right: SimpleExpr::Integer(1),
-        }),
+        open_mainframe_cobol::ast::Condition::Class(c) => {
+            let operand = convert_expr(&c.operand)?;
+            let class = match c.class {
+                open_mainframe_cobol::ast::ClassType::Numeric => {
+                    open_mainframe_runtime::interpreter::SimpleClassType::Numeric
+                }
+                open_mainframe_cobol::ast::ClassType::Alphabetic => {
+                    open_mainframe_runtime::interpreter::SimpleClassType::Alphabetic
+                }
+                open_mainframe_cobol::ast::ClassType::AlphabeticLower => {
+                    open_mainframe_runtime::interpreter::SimpleClassType::AlphabeticLower
+                }
+                open_mainframe_cobol::ast::ClassType::AlphabeticUpper => {
+                    open_mainframe_runtime::interpreter::SimpleClassType::AlphabeticUpper
+                }
+            };
+            Ok(SimpleCondition::ClassCondition {
+                operand,
+                class,
+                negated: c.negated,
+            })
+        }
 
         open_mainframe_cobol::ast::Condition::Sign(_) => Ok(SimpleCondition::Compare {
             left: SimpleExpr::Integer(1),

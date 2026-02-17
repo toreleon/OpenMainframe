@@ -19,7 +19,7 @@ use open_mainframe_tui::event::{CrosstermEventSource, EventSource};
 use open_mainframe_tui::session::{Session, SessionConfig, setup_terminal, restore_terminal};
 
 use super::cics_bridge::CicsBridge;
-use super::interpret::{load_program as load_interpret_program, find_program_source, load_vsam_data};
+use super::interpret::{load_program as load_interpret_program, find_program_source, load_vsam_data, load_vsam_data_with_key_pos};
 
 // ---------- TUI Callback (connects CicsBridge → Session) ----------
 
@@ -338,15 +338,16 @@ pub fn run_session(
     bridge.set_assign_values(assign_values);
     bridge.set_mapset_maps(mapset_maps.clone());
 
-    // Load VSAM data files
+    // Load VSAM data files (format: DDNAME=path:key_len:rec_len or DDNAME=path:key_len:rec_len:key_pos)
     for spec in &data_files {
         if let Some((ddname, rest)) = spec.split_once('=') {
             let parts: Vec<&str> = rest.split(':').collect();
             let file_path = parts[0];
             let key_len: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(8);
             let rec_len: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(80);
+            let key_pos: usize = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
 
-            match load_vsam_data(file_path, key_len, rec_len) {
+            match load_vsam_data_with_key_pos(file_path, key_len, rec_len, key_pos) {
                 Ok(records) => {
                     tracing::info!(
                         "Loaded {} records for {}",

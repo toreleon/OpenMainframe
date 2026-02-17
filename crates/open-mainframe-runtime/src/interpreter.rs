@@ -34,6 +34,8 @@ pub struct DataItemMeta {
     pub is_numeric: bool,
     /// Picture string.
     pub picture: Option<String>,
+    /// Whether JUSTIFIED RIGHT is specified.
+    pub is_justified: bool,
 }
 
 impl Default for DataItemMeta {
@@ -43,6 +45,7 @@ impl Default for DataItemMeta {
             decimals: 0,
             is_numeric: false,
             picture: None,
+            is_justified: false,
         }
     }
 }
@@ -94,6 +97,8 @@ pub struct Environment {
     pub cics_handler: Option<Box<dyn CicsCommandHandler>>,
     /// Open files (in-memory simulation).
     pub files: HashMap<String, FileState>,
+    /// REDEFINES aliases: maps a REDEFINES variable name to the original variable name.
+    redefines_aliases: HashMap<String, String>,
 }
 
 impl Environment {
@@ -108,6 +113,7 @@ impl Environment {
             stopped: false,
             cics_handler: None,
             files: HashMap::new(),
+            redefines_aliases: HashMap::new(),
         }
     }
 
@@ -122,6 +128,7 @@ impl Environment {
             stopped: false,
             cics_handler: None,
             files: HashMap::new(),
+            redefines_aliases: HashMap::new(),
         }
     }
 
@@ -147,12 +154,28 @@ impl Environment {
         self.metadata.insert(name_upper, meta);
     }
 
+    /// Register a REDEFINES alias: `alias_name` REDEFINES `original_name`.
+    /// When either is set, the other gets the same display value.
+    pub fn register_redefines(&mut self, alias_name: &str, original_name: &str) {
+        self.redefines_aliases.insert(
+            alias_name.to_uppercase(),
+            original_name.to_uppercase(),
+        );
+    }
+
     /// Get a variable value.
+    /// If the variable has a REDEFINES alias, returns the original's value.
     pub fn get(&self, name: &str) -> Option<&CobolValue> {
-        self.variables.get(&name.to_uppercase())
+        let name_upper = name.to_uppercase();
+        self.variables.get(&name_upper).or_else(|| {
+            // Check if this is a REDEFINES alias
+            self.redefines_aliases.get(&name_upper)
+                .and_then(|original| self.variables.get(original))
+        })
     }
 
     /// Set a variable value.
+    /// If the variable has REDEFINES relationships, propagates the value.
     pub fn set(&mut self, name: &str, value: CobolValue) -> Result<()> {
         let name_upper = name.to_uppercase();
 
@@ -162,7 +185,71 @@ impl Environment {
             self.metadata.insert(name_upper.clone(), meta);
         }
 
-        self.variables.insert(name_upper, value);
+        // Format the value according to this field's PIC clause for REDEFINES propagation.
+        // In COBOL, REDEFINES shares raw storage, so a PIC 9(11) field with value 1
+        // is stored as "00000000001" in memory, and a REDEFINES PIC X(11) sees those bytes.
+        let formatted = if let Some(meta) = self.metadata.get(&name_upper) {
+            if meta.is_numeric && meta.size > 0 {
+                let raw = value.to_display_string();
+                let trimmed = raw.trim().trim_start_matches('-');
+                // Zero-pad numeric value to field size
+                let padded = format!("{:0>width$}", trimmed, width = meta.size);
+                // If the value has a decimal and the field has decimals, handle it
+                if meta.decimals > 0 {
+                    // Remove decimal point and pad
+                    let no_dot: String = padded.replace('.', "");
+                    format!("{:0>width$}", no_dot, width = meta.size)
+                } else {
+                    padded
+                }
+            } else if meta.size > 0 {
+                // Alphanumeric: right-pad with spaces to field size
+                let raw = value.to_display_string();
+                format!("{:<width$}", raw, width = meta.size)
+            } else {
+                value.to_display_string()
+            }
+        } else {
+            value.to_display_string()
+        };
+
+        // Propagate to REDEFINES aliases
+        if let Some(original) = self.redefines_aliases.get(&name_upper).cloned() {
+            // This is a REDEFINES alias — also update the original
+            self.variables.insert(original, CobolValue::Alphanumeric(formatted.clone()));
+        }
+        // Check if any alias points to this variable as its original
+        let aliases_to_update: Vec<String> = self.redefines_aliases.iter()
+            .filter(|(_, orig)| orig.as_str() == name_upper)
+            .map(|(alias, _)| alias.clone())
+            .collect();
+        for alias in aliases_to_update {
+            self.variables.insert(alias, CobolValue::Alphanumeric(formatted.clone()));
+        }
+
+        // Apply JUSTIFIED RIGHT: right-justify alphanumeric values in the field
+        let final_value = if let Some(meta) = self.metadata.get(&name_upper) {
+            if meta.is_justified && !meta.is_numeric && meta.size > 0 {
+                let raw = value.to_display_string();
+                let trimmed = raw.trim_end();
+                if trimmed.len() < meta.size {
+                    // Right-justify: pad with spaces on the left
+                    let justified = format!("{:>width$}", trimmed, width = meta.size);
+                    CobolValue::Alphanumeric(justified)
+                } else if trimmed.len() > meta.size {
+                    // Truncate on the left
+                    let start = trimmed.len() - meta.size;
+                    CobolValue::Alphanumeric(trimmed[start..].to_string())
+                } else {
+                    value
+                }
+            } else {
+                value
+            }
+        } else {
+            value
+        };
+        self.variables.insert(name_upper, final_value);
         Ok(())
     }
 
@@ -588,6 +675,21 @@ pub enum SimpleCondition {
     Or(Box<SimpleCondition>, Box<SimpleCondition>),
     /// Level-88 condition name (resolved at runtime from program.condition_names)
     ConditionName(String),
+    /// Class condition (IS NUMERIC, IS ALPHABETIC, etc.)
+    ClassCondition {
+        operand: SimpleExpr,
+        class: SimpleClassType,
+        negated: bool,
+    },
+}
+
+/// Class type for IS NUMERIC / IS ALPHABETIC conditions.
+#[derive(Debug, Clone, Copy)]
+pub enum SimpleClassType {
+    Numeric,
+    Alphabetic,
+    AlphabeticLower,
+    AlphabeticUpper,
 }
 
 /// Simple comparison operator.
@@ -624,6 +726,8 @@ pub struct SimpleProgram {
     pub is_common: bool,
     /// Declarative error handlers: file-name (or "INPUT"/"OUTPUT") -> paragraph name.
     pub declarative_handlers: HashMap<String, String>,
+    /// REDEFINES aliases: (alias_name, original_name) for propagating set/get.
+    pub redefines_aliases: Vec<(String, String)>,
 }
 
 /// A sub-field within a group item, with its offset and size.
@@ -643,13 +747,25 @@ pub struct GroupField {
 
 /// When a group item is set, decompose its value into sub-fields based on the group layout.
 fn decompose_group(group_name: &str, data: &str, program: &SimpleProgram, env: &mut Environment) -> Result<()> {
+    let debug = std::env::var("OPEN_MAINFRAME_DEBUG_CMP").is_ok();
     if let Some(fields) = program.group_layouts.get(&group_name.to_uppercase()) {
         let data_bytes = data.as_bytes();
+        if debug {
+            eprintln!("[DECOMPOSE] group={} data_len={} field_count={}", group_name, data_bytes.len(), fields.len());
+            // Print first 200 bytes as hex + ascii
+            let show = data_bytes.len().min(200);
+            eprintln!("[DECOMPOSE] data[0..{}] hex: {:?}", show, &data_bytes[..show]);
+            eprintln!("[DECOMPOSE] data[0..{}] str: {:?}", show, &data[..show]);
+        }
         for field in fields {
             let end = (field.offset + field.size).min(data_bytes.len());
             if field.offset < data_bytes.len() {
                 let slice = &data_bytes[field.offset..end];
                 let val_str = String::from_utf8_lossy(slice).to_string();
+                if debug && !field.name.is_empty() {
+                    eprintln!("[DECOMPOSE]   field={} offset={} size={} is_numeric={} raw={:?} val_str={:?}",
+                        field.name, field.offset, field.size, field.is_numeric, slice, val_str);
+                }
                 if field.is_numeric {
                     let trimmed = val_str.trim();
                     let n = trimmed.parse::<i64>().unwrap_or(0);
@@ -659,6 +775,8 @@ fn decompose_group(group_name: &str, data: &str, program: &SimpleProgram, env: &
                 }
             }
         }
+    } else if debug {
+        eprintln!("[DECOMPOSE] NO LAYOUT for group={}", group_name);
     }
     Ok(())
 }
@@ -724,6 +842,11 @@ pub fn execute(program: &SimpleProgram, env: &mut Environment) -> Result<i32> {
     // Initialize data items
     for (name, meta) in &program.data_items {
         env.define(name, meta.clone());
+    }
+
+    // Register REDEFINES aliases
+    for (alias, original) in &program.redefines_aliases {
+        env.register_redefines(alias, original);
     }
 
     // Execute main statements
@@ -807,15 +930,44 @@ fn execute_statement_impl(
             }
             let value = eval_expr(from, env)?;
             for target_expr in to {
-                let target = resolve_target_name(target_expr, env)?;
-                env.set(&target, value.clone())?;
-                // If target is a group item, decompose into sub-fields
-                if program.group_layouts.contains_key(&target.to_uppercase()) {
-                    let data = value.to_display_string();
-                    if std::env::var("OPEN_MAINFRAME_DEBUG_GROUPS").is_ok() {
-                        eprintln!("[MOVE→DECOMPOSE] target={} data_len={} data={:?}", target, data.len(), &data[..data.len().min(40)]);
+                // Handle RefMod on target: splice the value into the variable
+                if let SimpleExpr::RefMod { variable, start, length } = target_expr {
+                    let var_name = resolve_target_name(variable, env)?;
+                    let current = env.get(&var_name)
+                        .map(|v| v.to_display_string())
+                        .unwrap_or_default();
+                    let start_pos = to_numeric(&eval_expr(start, env)?).integer_part() as usize;
+                    let zero_start = if start_pos > 0 { start_pos - 1 } else { 0 };
+                    let src_str = value.to_display_string();
+                    let splice_len = if let Some(len_expr) = length {
+                        to_numeric(&eval_expr(len_expr, env)?).integer_part() as usize
+                    } else {
+                        current.len().saturating_sub(zero_start)
+                    };
+                    // Build new value by splicing src into current at the right position
+                    let mut buf: Vec<u8> = current.into_bytes();
+                    // Ensure buffer is large enough
+                    if zero_start + splice_len > buf.len() {
+                        buf.resize(zero_start + splice_len, b' ');
                     }
-                    decompose_group(&target, &data, program, env)?;
+                    let src_bytes = src_str.as_bytes();
+                    for i in 0..splice_len {
+                        buf[zero_start + i] = if i < src_bytes.len() { src_bytes[i] } else { b' ' };
+                    }
+                    env.set(&var_name, CobolValue::Alphanumeric(
+                        String::from_utf8_lossy(&buf).to_string(),
+                    ))?;
+                } else {
+                    let target = resolve_target_name(target_expr, env)?;
+                    env.set(&target, value.clone())?;
+                    // If target is a group item, decompose into sub-fields
+                    if program.group_layouts.contains_key(&target.to_uppercase()) {
+                        let data = value.to_display_string();
+                        if std::env::var("OPEN_MAINFRAME_DEBUG_GROUPS").is_ok() {
+                            eprintln!("[MOVE→DECOMPOSE] target={} data_len={} data={:?}", target, data.len(), &data[..data.len().min(40)]);
+                        }
+                        decompose_group(&target, &data, program, env)?;
+                    }
                 }
             }
         }
@@ -2084,6 +2236,34 @@ fn eval_condition(cond: &SimpleCondition, env: &Environment, program: &SimplePro
                 Ok(false)
             }
         }
+
+        SimpleCondition::ClassCondition { operand, class, negated } => {
+            let val = eval_expr(operand, env)?;
+            let display = val.to_display_string();
+            let result = match class {
+                SimpleClassType::Numeric => {
+                    // IS NUMERIC: all characters are digits, spaces, signs, or decimal points
+                    // For display numeric fields, the display string should be parseable as a number
+                    let trimmed = display.trim();
+                    if trimmed.is_empty() {
+                        // Empty/all-spaces is considered numeric in COBOL
+                        false
+                    } else {
+                        trimmed.chars().all(|c| c.is_ascii_digit() || c == '+' || c == '-' || c == '.')
+                    }
+                }
+                SimpleClassType::Alphabetic => {
+                    display.chars().all(|c| c.is_ascii_alphabetic() || c == ' ')
+                }
+                SimpleClassType::AlphabeticLower => {
+                    display.chars().all(|c| c.is_ascii_lowercase() || c == ' ')
+                }
+                SimpleClassType::AlphabeticUpper => {
+                    display.chars().all(|c| c.is_ascii_uppercase() || c == ' ')
+                }
+            };
+            Ok(if *negated { !result } else { result })
+        }
     }
 }
 
@@ -2108,6 +2288,7 @@ mod tests {
                 decimals: 0,
                 is_numeric: true,
                 picture: Some("9(5)".to_string()),
+                is_justified: false,
             },
         );
 
@@ -2118,6 +2299,7 @@ mod tests {
                 decimals: 0,
                 is_numeric: true,
                 picture: Some("9(5)".to_string()),
+                is_justified: false,
             },
         );
 
@@ -2130,6 +2312,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
             statements: vec![
                 SimpleStatement::Move {
                     from: SimpleExpr::Integer(10),
@@ -2164,6 +2347,7 @@ mod tests {
                 decimals: 0,
                 is_numeric: true,
                 picture: Some("9(5)".to_string()),
+                is_justified: false,
             },
         );
 
@@ -2174,6 +2358,7 @@ mod tests {
                 decimals: 0,
                 is_numeric: false,
                 picture: Some("X(10)".to_string()),
+                is_justified: false,
             },
         );
 
@@ -2188,6 +2373,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
             statements: vec![SimpleStatement::If {
                 condition: SimpleCondition::Compare {
                     left: SimpleExpr::Variable("X".to_string()),
@@ -2223,6 +2409,7 @@ mod tests {
                 decimals: 0,
                 is_numeric: true,
                 picture: Some("9(5)".to_string()),
+                is_justified: false,
             },
         );
 
@@ -2237,6 +2424,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
             statements: vec![SimpleStatement::Add {
                 values: vec![SimpleExpr::Integer(5), SimpleExpr::Integer(3)],
                 to: vec!["X".to_string()],
@@ -2263,6 +2451,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
             statements: vec![
                 SimpleStatement::StopRun {
                     return_code: Some(4),
@@ -2307,7 +2496,7 @@ mod tests {
         // Define data items
         env.define("OPT-COUNT", DataItemMeta {
             size: 2, decimals: 0, is_numeric: true,
-            picture: Some("9(02)".to_string()),
+            picture: Some("9(02)".to_string()), is_justified: false,
         });
 
         // Build group layout for MENU-OPTIONS
@@ -2368,6 +2557,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
             statements: vec![
                 // Step 1: Initialize group from FILLER defaults
                 SimpleStatement::Move {

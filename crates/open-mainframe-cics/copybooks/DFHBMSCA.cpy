@@ -38,5 +38,8 @@
            02  DFHBLINK  PIC X VALUE X'F1'.
            02  DFHREVRS  PIC X VALUE X'F2'.
            02  DFHUNDLN  PIC X VALUE X'F4'.
+      *    Additional Field Attributes
+           02  DFHBMASB  PIC X VALUE X'F1'.
+           02  DFHNEUTR  PIC X VALUE X'00'.
       *    Cursor Position
            02  DFHIC     PIC S9(4) COMP VALUE +0.

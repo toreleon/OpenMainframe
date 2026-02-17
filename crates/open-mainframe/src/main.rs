@@ -86,7 +86,7 @@ enum Commands {
         emit_llvm: bool,
 
         /// Additional copybook search paths
-        #[arg(short = 'I', long = "include", value_name = "DIR")]
+        #[arg(short = 'I', long = "include", value_name = "DIR", action = clap::ArgAction::Append)]
         include_paths: Vec<PathBuf>,
     },
 
@@ -116,7 +116,7 @@ enum Commands {
         input: PathBuf,
 
         /// Additional copybook search paths
-        #[arg(short = 'I', long = "include", value_name = "DIR")]
+        #[arg(short = 'I', long = "include", value_name = "DIR", action = clap::ArgAction::Append)]
         include_paths: Vec<PathBuf>,
     },
 
@@ -145,11 +145,11 @@ enum Commands {
         input: PathBuf,
 
         /// Additional copybook search paths
-        #[arg(short = 'I', long = "include", value_name = "DIR")]
+        #[arg(short = 'I', long = "include", value_name = "DIR", action = clap::ArgAction::Append)]
         include_paths: Vec<PathBuf>,
 
         /// VSAM data files to load (format: DDNAME=path[:key_len[:rec_len]])
-        #[arg(long = "data", value_name = "DDNAME=FILE")]
+        #[arg(long = "data", value_name = "DDNAME=FILE", action = clap::ArgAction::Append)]
         data_files: Vec<String>,
 
         /// Set CICS EIB COMMAREA length (simulates returning from a pseudo-conversation)
@@ -161,7 +161,7 @@ enum Commands {
         eibaid: Option<String>,
 
         /// Set CICS variables before execution (format: NAME=VALUE)
-        #[arg(long = "set", value_name = "NAME=VALUE")]
+        #[arg(long = "set", value_name = "NAME=VALUE", action = clap::ArgAction::Append)]
         set_vars: Vec<String>,
     },
 
@@ -199,11 +199,11 @@ enum Commands {
         input: PathBuf,
 
         /// Additional copybook search paths
-        #[arg(short = 'I', long = "include", value_name = "DIR")]
+        #[arg(short = 'I', long = "include", value_name = "DIR", action = clap::ArgAction::Append)]
         include_paths: Vec<PathBuf>,
 
         /// VSAM data files to load (format: DDNAME=path[:key_len[:rec_len]])
-        #[arg(long = "data", value_name = "DDNAME=FILE")]
+        #[arg(long = "data", value_name = "DDNAME=FILE", action = clap::ArgAction::Append)]
         data_files: Vec<String>,
 
         /// Directory containing BMS map source files
@@ -215,7 +215,7 @@ enum Commands {
         theme: String,
 
         /// Transaction-to-program mappings (format: TRANSID=PROGRAM)
-        #[arg(long = "transid", value_name = "TRANSID=PROGRAM")]
+        #[arg(long = "transid", value_name = "TRANSID=PROGRAM", action = clap::ArgAction::Append)]
         transid_map: Vec<String>,
     },
 
