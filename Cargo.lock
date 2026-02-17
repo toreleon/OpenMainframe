@@ -1222,6 +1222,7 @@ name = "open-mainframe-cics"
 version = "0.1.0"
 dependencies = [
  "open-mainframe-dataset",
+ "open-mainframe-encoding",
  "serde",
  "serde_json",
  "thiserror",

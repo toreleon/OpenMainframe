@@ -81,6 +81,18 @@ pub struct CicsRuntime {
     call_stack: Vec<String>,
     /// Mock mode
     mock_mode: bool,
+    /// CONVERSE send buffer (outbound data)
+    converse_send_buffer: Option<Vec<u8>>,
+    /// CONVERSE receive buffer (simulated inbound data for testing)
+    converse_receive_buffer: Option<Vec<u8>>,
+    /// CONVERSE erase flag
+    converse_erase: bool,
+    /// Terminal output buffer (SEND data)
+    terminal_output: Option<Vec<u8>>,
+    /// Terminal input buffer (simulated RECEIVE data for testing)
+    terminal_input: Option<Vec<u8>>,
+    /// Terminal erase flag
+    terminal_erase: bool,
 }
 
 impl CicsRuntime {
@@ -97,6 +109,12 @@ impl CicsRuntime {
             commarea: None,
             call_stack: Vec::new(),
             mock_mode: true,
+            converse_send_buffer: None,
+            converse_receive_buffer: None,
+            converse_erase: false,
+            terminal_output: None,
+            terminal_input: None,
+            terminal_erase: false,
         }
     }
 
@@ -401,6 +419,88 @@ impl CicsRuntime {
     /// Get pending trigger transactions from TD queues.
     pub fn get_td_triggers(&mut self) -> Vec<String> {
         self.td_queues.get_pending_triggers()
+    }
+
+    /// Execute CONVERSE command — combined SEND + RECEIVE.
+    ///
+    /// CONVERSE sends data to the terminal then immediately waits for
+    /// a response. It is equivalent to SEND followed by RECEIVE but
+    /// in a single command.
+    pub fn converse(
+        &mut self,
+        send_data: &[u8],
+        max_receive_length: usize,
+        erase: bool,
+    ) -> CicsResult<Vec<u8>> {
+        self.eib.reset_for_command();
+
+        // Store the send data for the terminal to display
+        self.converse_send_buffer = Some(send_data.to_vec());
+        self.converse_erase = erase;
+
+        // In mock/test mode, return from the receive buffer if set
+        let received = if let Some(ref buf) = self.converse_receive_buffer {
+            let mut data = buf.clone();
+            data.truncate(max_receive_length);
+            data
+        } else {
+            Vec::new()
+        };
+
+        self.converse_send_buffer = None;
+        self.converse_receive_buffer = None;
+
+        self.eib.set_response(CicsResponse::Normal);
+        Ok(received)
+    }
+
+    /// Set simulated CONVERSE receive data (for testing).
+    ///
+    /// Call this before `converse()` to provide the data that would
+    /// come back from the terminal.
+    pub fn set_converse_response(&mut self, data: &[u8]) {
+        self.converse_receive_buffer = Some(data.to_vec());
+    }
+
+    /// Get the last CONVERSE send buffer (for testing/inspection).
+    pub fn last_converse_send(&self) -> Option<&[u8]> {
+        self.converse_send_buffer.as_deref()
+    }
+
+    /// Execute SEND (basic terminal I/O — sends data to terminal).
+    pub fn send_data(&mut self, data: &[u8], erase: bool) -> CicsResult<()> {
+        self.eib.reset_for_command();
+        self.terminal_output = Some(data.to_vec());
+        self.terminal_erase = erase;
+        self.eib.set_response(CicsResponse::Normal);
+        Ok(())
+    }
+
+    /// Execute RECEIVE (basic terminal I/O — receives data from terminal).
+    pub fn receive_data(&mut self, max_length: usize) -> CicsResult<Vec<u8>> {
+        self.eib.reset_for_command();
+
+        let received = if let Some(ref buf) = self.terminal_input {
+            let mut data = buf.clone();
+            data.truncate(max_length);
+            data
+        } else {
+            return Err(CicsError::InvalidRequest("No terminal input available".to_string()));
+        };
+
+        self.terminal_input = None;
+        self.eib.set_response(CicsResponse::Normal);
+        Ok(received)
+    }
+
+    /// Set simulated terminal input (for testing).
+    pub fn set_terminal_input(&mut self, data: &[u8]) {
+        self.terminal_input = Some(data.to_vec());
+    }
+
+    /// Get the last terminal output (for testing/inspection).
+    pub fn last_terminal_output(&self) -> Option<&[u8]> {
+        self.terminal_output.as_deref()
     }
 
     /// Execute ABEND command.
@@ -761,6 +861,82 @@ mod tests {
         let triggers = runtime.get_td_triggers();
         assert_eq!(triggers.len(), 1);
         assert_eq!(triggers[0], "PROC");
+    }
+
+    // === Story 203.1: CONVERSE command ===
+
+    #[test]
+    fn test_converse_basic() {
+        let mut runtime = CicsRuntime::new("TEST");
+        // Set up simulated response
+        runtime.set_converse_response(b"USER INPUT");
+
+        let received = runtime.converse(b"ENTER NAME:", 80, false).unwrap();
+        assert_eq!(received, b"USER INPUT");
+        assert_eq!(runtime.eib.eibresp, CicsResponse::Normal as u32);
+    }
+
+    #[test]
+    fn test_converse_truncates_to_maxlength() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.set_converse_response(b"THIS IS A LONG RESPONSE");
+
+        let received = runtime.converse(b"PROMPT", 10, false).unwrap();
+        assert_eq!(received.len(), 10);
+        assert_eq!(received, b"THIS IS A ");
+    }
+
+    #[test]
+    fn test_converse_no_response_returns_empty() {
+        let mut runtime = CicsRuntime::new("TEST");
+        // No response set
+        let received = runtime.converse(b"PROMPT", 80, false).unwrap();
+        assert!(received.is_empty());
+    }
+
+    #[test]
+    fn test_converse_with_erase() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.set_converse_response(b"OK");
+
+        let received = runtime.converse(b"HELLO", 80, true).unwrap();
+        assert_eq!(received, b"OK");
+    }
+
+    // === Terminal SEND/RECEIVE ===
+
+    #[test]
+    fn test_send_data() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.send_data(b"HELLO WORLD", false).unwrap();
+
+        assert_eq!(runtime.last_terminal_output(), Some(b"HELLO WORLD".as_slice()));
+        assert_eq!(runtime.eib.eibresp, CicsResponse::Normal as u32);
+    }
+
+    #[test]
+    fn test_receive_data() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.set_terminal_input(b"USER RESPONSE");
+
+        let data = runtime.receive_data(80).unwrap();
+        assert_eq!(data, b"USER RESPONSE");
+    }
+
+    #[test]
+    fn test_receive_data_no_input() {
+        let mut runtime = CicsRuntime::new("TEST");
+        let result = runtime.receive_data(80);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_receive_data_truncates() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.set_terminal_input(b"LONG INPUT DATA");
+
+        let data = runtime.receive_data(4).unwrap();
+        assert_eq!(data, b"LONG");
     }
 
     #[test]

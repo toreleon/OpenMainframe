@@ -235,41 +235,15 @@ impl MapRenderer {
     }
 
     fn translate_to_ebcdic(&self, ascii: u8) -> u8 {
-        // Simple ASCII to EBCDIC translation for common characters
-        match ascii {
-            b'A'..=b'I' => ascii - b'A' + 0xC1,
-            b'J'..=b'R' => ascii - b'J' + 0xD1,
-            b'S'..=b'Z' => ascii - b'S' + 0xE2,
-            b'a'..=b'i' => ascii - b'a' + 0x81,
-            b'j'..=b'r' => ascii - b'j' + 0x91,
-            b's'..=b'z' => ascii - b's' + 0xA2,
-            b'0'..=b'9' => ascii - b'0' + 0xF0,
-            b' ' => 0x40,
-            b'.' => 0x4B,
-            b',' => 0x6B,
-            b':' => 0x7A,
-            b'-' => 0x60,
-            b'_' => 0x6D,
-            b'/' => 0x61,
-            b'(' => 0x4D,
-            b')' => 0x5D,
-            b'$' => 0x5B,
-            b'#' => 0x7B,
-            b'@' => 0x7C,
-            b'%' => 0x6C,
-            b'&' => 0x50,
-            b'!' => 0x5A,
-            b'=' => 0x7E,
-            b'+' => 0x4E,
-            b'*' => 0x5C,
-            b'<' => 0x4C,
-            b'>' => 0x6E,
-            b'?' => 0x6F,
-            b';' => 0x5E,
-            b'\'' => 0x7D,
-            b'"' => 0x7F,
-            _ => 0x40, // Default to space
-        }
+        use open_mainframe_encoding::CP037;
+        CP037.ascii_to_ebcdic_byte(ascii)
+    }
+
+    /// Translate an EBCDIC byte back to ASCII using Code Page 037.
+    #[cfg(test)]
+    fn translate_to_ascii(&self, ebcdic: u8) -> u8 {
+        use open_mainframe_encoding::CP037;
+        CP037.ebcdic_to_ascii_byte(ebcdic)
     }
 
     /// Render map to text representation (for debugging).
@@ -347,11 +321,54 @@ mod tests {
     fn test_ebcdic_translation() {
         let renderer = MapRenderer::new(ScreenSize::Model2);
 
+        // Letters
         assert_eq!(renderer.translate_to_ebcdic(b'A'), 0xC1);
         assert_eq!(renderer.translate_to_ebcdic(b'Z'), 0xE9);
+        assert_eq!(renderer.translate_to_ebcdic(b'a'), 0x81);
+        assert_eq!(renderer.translate_to_ebcdic(b'z'), 0xA9);
+
+        // Digits
         assert_eq!(renderer.translate_to_ebcdic(b'0'), 0xF0);
         assert_eq!(renderer.translate_to_ebcdic(b'9'), 0xF9);
+
+        // Space
         assert_eq!(renderer.translate_to_ebcdic(b' '), 0x40);
+
+        // Special characters that were in the old 33-char table
+        assert_eq!(renderer.translate_to_ebcdic(b'.'), 0x4B);
+        assert_eq!(renderer.translate_to_ebcdic(b','), 0x6B);
+        assert_eq!(renderer.translate_to_ebcdic(b'$'), 0x5B);
+        assert_eq!(renderer.translate_to_ebcdic(b'#'), 0x7B);
+        assert_eq!(renderer.translate_to_ebcdic(b'@'), 0x7C);
+    }
+
+    #[test]
+    fn test_ebcdic_translation_extended_chars() {
+        // Story 204.1: Characters that were NOT in the old 33-char stub
+        let renderer = MapRenderer::new(ScreenSize::Model2);
+
+        // Brackets, braces, pipe — these previously defaulted to space
+        assert_eq!(renderer.translate_to_ebcdic(b'['), 0xAD);
+        assert_eq!(renderer.translate_to_ebcdic(b']'), 0xBD);
+        assert_eq!(renderer.translate_to_ebcdic(b'{'), 0xC0);
+        assert_eq!(renderer.translate_to_ebcdic(b'}'), 0xD0);
+        assert_eq!(renderer.translate_to_ebcdic(b'|'), 0x4F);
+        assert_eq!(renderer.translate_to_ebcdic(b'\\'), 0xE0);
+        assert_eq!(renderer.translate_to_ebcdic(b'^'), 0x5F);
+        assert_eq!(renderer.translate_to_ebcdic(b'~'), 0xA1);
+        assert_eq!(renderer.translate_to_ebcdic(b'`'), 0x79);
+    }
+
+    #[test]
+    fn test_ebcdic_roundtrip() {
+        // Story 204.1: Any printable ASCII round-trips correctly
+        let renderer = MapRenderer::new(ScreenSize::Model2);
+
+        for ch in 0x20u8..0x7F {
+            let ebcdic = renderer.translate_to_ebcdic(ch);
+            let back = renderer.translate_to_ascii(ebcdic);
+            assert_eq!(back, ch, "Roundtrip failed for ASCII 0x{:02X} ('{}')", ch, ch as char);
+        }
     }
 
     #[test]

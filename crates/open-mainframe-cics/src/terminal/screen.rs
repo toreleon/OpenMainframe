@@ -106,6 +106,11 @@ impl ScreenBuffer {
         self.size.dimensions()
     }
 
+    /// Get screen size model.
+    pub fn screen_size(&self) -> ScreenSize {
+        self.size
+    }
+
     /// Get total cells.
     pub fn total_cells(&self) -> usize {
         self.cells.len()

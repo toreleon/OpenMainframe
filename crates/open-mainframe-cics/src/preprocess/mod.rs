@@ -116,6 +116,8 @@ pub enum CicsCommandType {
     MoveContainer,
     /// DELETE CONTAINER - remove container from channel
     DeleteContainer,
+    /// CONVERSE - combined SEND + RECEIVE
+    Converse,
     /// Other/unknown command
     Other,
 }
@@ -179,6 +181,7 @@ impl CicsCommandType {
                     CicsCommandType::Receive
                 }
             }
+            "CONVERSE" => CicsCommandType::Converse,
             "GETMAIN" => CicsCommandType::Getmain,
             "FREEMAIN" => CicsCommandType::Freemain,
             "HANDLE" => {
@@ -429,6 +432,7 @@ impl CicsPreprocessor {
             CicsCommandType::GetContainer => "CICSGETC",
             CicsCommandType::MoveContainer => "CICSMOVC",
             CicsCommandType::DeleteContainer => "CICSDELC",
+            CicsCommandType::Converse => "CICSCNVS",
             _ => "CICSEXEC",
         };
 
@@ -674,6 +678,41 @@ mod tests {
             CicsCommandType::from_text("DELETEQ TS QUEUE('TSQ1')"),
             CicsCommandType::DeleteqTs
         );
+    }
+
+    // === Story 203.1: CONVERSE command ===
+
+    #[test]
+    fn test_converse_command_type() {
+        assert_eq!(
+            CicsCommandType::from_text("CONVERSE FROM(WS-OUT) INTO(WS-IN) MAXLENGTH(80)"),
+            CicsCommandType::Converse
+        );
+    }
+
+    #[test]
+    fn test_converse_preprocessing() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC CICS
+             CONVERSE FROM(WS-OUT)
+                      INTO(WS-IN)
+                      MAXLENGTH(80)
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = CicsPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.commands.len(), 1);
+        assert_eq!(result.commands[0].command_type, CicsCommandType::Converse);
+        assert!(result.cobol_source.contains("CALL \"CICSCNVS\""));
+
+        let opts = &result.commands[0].options;
+        assert!(opts.iter().any(|o| o.name == "FROM"));
+        assert!(opts.iter().any(|o| o.name == "INTO"));
+        assert!(opts.iter().any(|o| o.name == "MAXLENGTH"));
     }
 
     #[test]

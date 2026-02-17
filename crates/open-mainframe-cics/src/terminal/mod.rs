@@ -167,6 +167,47 @@ impl TerminalManager {
         Ok((data, aid))
     }
 
+    /// Set default screen size for new terminals.
+    pub fn set_default_size(&mut self, size: ScreenSize) {
+        self.default_size = size;
+    }
+
+    /// Get default screen size.
+    pub fn default_size(&self) -> ScreenSize {
+        self.default_size
+    }
+
+    /// Execute CONVERSE — combined SEND + RECEIVE.
+    ///
+    /// Sends text to the terminal, then waits for input. Returns
+    /// received data and the AID key pressed. The terminal must
+    /// have input pre-staged (via `simulate_input`) before the
+    /// CONVERSE completes.
+    pub fn converse(
+        &mut self,
+        terminal_id: &str,
+        text: &str,
+        erase: bool,
+        max_receive_length: usize,
+    ) -> CicsResult<(Vec<u8>, u8)> {
+        // SEND phase — write output to the screen
+        let terminal = self.get_or_create(terminal_id);
+
+        if erase {
+            terminal.clear_screen();
+        }
+
+        // Write text but preserve input state if already set
+        let cursor = terminal.cursor();
+        terminal.screen_write_string(cursor, text.as_bytes());
+
+        // RECEIVE phase — read whatever input is staged
+        let data = terminal.get_input_data(max_receive_length)?;
+        let aid = terminal.last_aid();
+
+        Ok((data, aid))
+    }
+
     /// Simulate terminal input for testing.
     pub fn simulate_input(
         &mut self,
@@ -324,6 +365,40 @@ STATUS   DFHMDF POS=(7,10),LENGTH=15,ATTRB=(PROT)
         );
 
         assert!(result.is_ok());
+    }
+
+    // === Story 203.1: CONVERSE via terminal manager ===
+
+    #[test]
+    fn test_converse_terminal() {
+        let mut manager = TerminalManager::new();
+
+        // Create terminal and set raw input to simulate user response
+        let term = manager.get_or_create("T001");
+        term.set_raw_input(0x7D, b"USER REPLY".to_vec()); // ENTER key
+
+        // Converse: send text then receive
+        let (data, aid) = manager.converse("T001", "Enter data:", false, 80).unwrap();
+        assert_eq!(aid, 0x7D);
+        assert_eq!(data, b"USER REPLY");
+    }
+
+    // === Story 203.2: Dynamic terminal screen size ===
+
+    #[test]
+    fn test_terminal_manager_default_size() {
+        let manager = TerminalManager::new();
+        assert_eq!(manager.default_size(), ScreenSize::Model2);
+    }
+
+    #[test]
+    fn test_terminal_manager_custom_size() {
+        let mut manager = TerminalManager::new();
+        manager.set_default_size(ScreenSize::Model4);
+
+        let term = manager.get_or_create("T001");
+        assert_eq!(term.screen_size(), ScreenSize::Model4);
+        assert_eq!(term.screen_size().dimensions(), (43, 80));
     }
 
     #[test]

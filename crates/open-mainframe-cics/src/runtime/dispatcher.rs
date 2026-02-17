@@ -206,6 +206,10 @@ impl CicsDispatcher {
             "CICSPUTC" => Self::dispatch_put_container(params, runtime),
             "CICSGETC" => Self::dispatch_get_container(params, runtime),
             "CICSDLCN" => Self::dispatch_delete_container(params, runtime),
+            // Terminal I/O
+            "CICSSEND" => Self::dispatch_send(params, runtime),
+            "CICSRECV" => Self::dispatch_receive(params, runtime),
+            "CICSCNVS" => Self::dispatch_converse(params, runtime),
             // Storage management
             "CICSGMN"  => Self::dispatch_getmain(params, runtime),
             // Condition handling
@@ -453,6 +457,51 @@ impl CicsDispatcher {
         }
     }
 
+    // --- Terminal I/O ---
+
+    fn dispatch_send(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        let from = params.get("FROM").unwrap_or("");
+        let erase = params.get("ERASE").is_some();
+
+        match runtime.send_data(from.as_bytes(), erase) {
+            Ok(()) => Ok(DispatchResult::ok()),
+            Err(_) => Ok(DispatchResult::from_eib(&runtime.eib)),
+        }
+    }
+
+    fn dispatch_receive(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        let max_length: usize = params.get("MAXLENGTH")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(32767);
+
+        match runtime.receive_data(max_length) {
+            Ok(data) => Ok(DispatchResult::ok_with_data(data)),
+            Err(_) => Ok(DispatchResult::from_eib(&runtime.eib)),
+        }
+    }
+
+    fn dispatch_converse(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        let from = params.get("FROM").unwrap_or("");
+        let max_length: usize = params.get("MAXLENGTH")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(32767);
+        let erase = params.get("ERASE").is_some();
+
+        match runtime.converse(from.as_bytes(), max_length, erase) {
+            Ok(data) => Ok(DispatchResult::ok_with_data(data)),
+            Err(_) => Ok(DispatchResult::from_eib(&runtime.eib)),
+        }
+    }
+
     // --- Storage Management ---
 
     fn dispatch_getmain(
@@ -684,6 +733,46 @@ mod tests {
         let result = CicsDispatcher::dispatch("CICSGETC", &params, &mut runtime, None).unwrap();
         assert_eq!(result.eibresp, CicsResponse::Normal as u32);
         assert_eq!(result.output_data, Some(b"Hello".to_vec()));
+    }
+
+    // === Story 203.1: CONVERSE dispatch ===
+
+    #[test]
+    fn test_dispatch_converse() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.set_converse_response(b"RESPONSE");
+
+        let mut params = CommandParamBlock::new("CICSCNVS");
+        params.set("FROM", "ENTER DATA:");
+        params.set("MAXLENGTH", "80");
+
+        let result = CicsDispatcher::dispatch("CICSCNVS", &params, &mut runtime, None).unwrap();
+        assert_eq!(result.eibresp, CicsResponse::Normal as u32);
+        assert_eq!(result.output_data, Some(b"RESPONSE".to_vec()));
+    }
+
+    #[test]
+    fn test_dispatch_send() {
+        let mut runtime = CicsRuntime::new("TEST");
+
+        let mut params = CommandParamBlock::new("CICSSEND");
+        params.set("FROM", "HELLO");
+
+        let result = CicsDispatcher::dispatch("CICSSEND", &params, &mut runtime, None).unwrap();
+        assert_eq!(result.eibresp, CicsResponse::Normal as u32);
+    }
+
+    #[test]
+    fn test_dispatch_receive() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.set_terminal_input(b"INPUT DATA");
+
+        let mut params = CommandParamBlock::new("CICSRECV");
+        params.set("MAXLENGTH", "80");
+
+        let result = CicsDispatcher::dispatch("CICSRECV", &params, &mut runtime, None).unwrap();
+        assert_eq!(result.eibresp, CicsResponse::Normal as u32);
+        assert_eq!(result.output_data, Some(b"INPUT DATA".to_vec()));
     }
 
     #[test]

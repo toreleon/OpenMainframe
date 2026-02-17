@@ -64,7 +64,7 @@ impl Terminal {
 
     /// Get screen size.
     pub fn screen_size(&self) -> ScreenSize {
-        ScreenSize::Model2 // TODO: Store actual size
+        self.screen.screen_size()
     }
 
     /// Get current state.
@@ -192,6 +192,15 @@ impl Terminal {
         Ok(data)
     }
 
+    /// Set raw simulated input (for testing CONVERSE/RECEIVE).
+    ///
+    /// Sets the AID and raw input buffer directly, bypassing field mapping.
+    pub fn set_raw_input(&mut self, aid: u8, data: Vec<u8>) {
+        self.last_aid = aid;
+        self.input_buffer = data;
+        self.state = TerminalState::InputReceived;
+    }
+
     /// Set simulated input (for testing).
     pub fn set_input(&mut self, aid: u8, fields: HashMap<String, Vec<u8>>) {
         self.last_aid = aid;
@@ -214,6 +223,13 @@ impl Terminal {
                 }
             }
         }
+    }
+
+    /// Write to screen buffer without changing terminal state.
+    ///
+    /// Used by CONVERSE to write output while preserving input readiness.
+    pub fn screen_write_string(&mut self, start: ScreenPosition, data: &[u8]) {
+        self.screen.write_string(start, data);
     }
 
     /// Get cursor position.
@@ -316,6 +332,36 @@ NAME     DFHMDF POS=(1,12),LENGTH=20,ATTRB=(UNPROT,IC)
         let data = term.extract_map_data(&map).unwrap();
 
         assert_eq!(data.get("NAME").map(|v| v.as_slice()), Some(b"Test User".as_slice()));
+    }
+
+    // === Story 203.2: Dynamic terminal screen size ===
+
+    #[test]
+    fn test_terminal_screen_size_model2() {
+        let term = Terminal::new("T001", ScreenSize::Model2);
+        assert_eq!(term.screen_size(), ScreenSize::Model2);
+        assert_eq!(term.screen_size().dimensions(), (24, 80));
+    }
+
+    #[test]
+    fn test_terminal_screen_size_model3() {
+        let term = Terminal::new("T001", ScreenSize::Model3);
+        assert_eq!(term.screen_size(), ScreenSize::Model3);
+        assert_eq!(term.screen_size().dimensions(), (32, 80));
+    }
+
+    #[test]
+    fn test_terminal_screen_size_model4() {
+        let term = Terminal::new("T001", ScreenSize::Model4);
+        assert_eq!(term.screen_size(), ScreenSize::Model4);
+        assert_eq!(term.screen_size().dimensions(), (43, 80));
+    }
+
+    #[test]
+    fn test_terminal_screen_size_model5() {
+        let term = Terminal::new("T001", ScreenSize::Model5);
+        assert_eq!(term.screen_size(), ScreenSize::Model5);
+        assert_eq!(term.screen_size().dimensions(), (27, 132));
     }
 
     #[test]
