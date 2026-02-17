@@ -148,7 +148,7 @@ impl TerminalCallback for MockTerminal {
         if let Some(input) = self.input_queue.pop_front() {
             // Flatten field data into a single buffer
             let mut data = Vec::new();
-            for (_, v) in &input.fields {
+            for v in input.fields.values() {
                 data.extend_from_slice(v);
             }
             data.truncate(max_length);

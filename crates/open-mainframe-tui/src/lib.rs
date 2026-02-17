@@ -35,6 +35,7 @@
 //! ```
 
 pub mod color;
+pub mod dbcs;
 pub mod error;
 pub mod event;
 pub mod fields;
@@ -44,7 +45,9 @@ pub mod oia;
 pub mod renderer;
 pub mod session;
 pub mod status;
+pub mod structured_fields;
 pub mod styles;
+pub mod tn3270;
 
 // Re-export key types for convenience.
 pub use color::ColorTheme;
