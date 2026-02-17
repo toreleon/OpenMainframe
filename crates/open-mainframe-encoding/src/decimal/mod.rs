@@ -10,6 +10,7 @@
 mod binary;
 mod floating;
 mod ieee_float;
+pub mod national;
 mod native_binary;
 mod packed;
 mod zoned;
@@ -23,6 +24,7 @@ pub use ieee_float::{
     decode_ieee_long, decode_ieee_short, encode_ieee_long, encode_ieee_long_into,
     encode_ieee_short, encode_ieee_short_into, IeeeDouble, IeeeFloat,
 };
+pub use national::{decode_national, ebcdic_to_national, encode_national, national_byte_length};
 pub use native_binary::{
     decode_native_binary, encode_native_binary, validate_native_range, NativeBinaryInteger,
 };
