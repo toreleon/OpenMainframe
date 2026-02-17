@@ -21,21 +21,27 @@ pub mod analyzer;
 pub mod ast_analyzer;
 pub mod callgraph;
 pub mod cics_inventory;
+pub mod compatibility;
+pub mod dead_code;
+pub mod jcl_deps;
 pub mod metrics;
 pub mod report;
-pub mod compatibility;
 pub mod scanner;
+pub mod snapshot;
 pub mod sql_analysis;
 
 pub use analyzer::{Analyzer, AnalysisResult};
 pub use ast_analyzer::AstAnalyzer;
 pub use callgraph::{CallGraph, CallEdge, CallType};
 pub use cics_inventory::{CicsInventory, CicsCommand, CicsCategory, SupportStatus};
+pub use dead_code::{detect_dead_code, DeadCodeReport, DeadCodeItem, DeadCodeKind};
+pub use jcl_deps::{analyze_jcl, JclDependencyMap, JclJob, JclStep, DdStatement, DdIoType};
 pub use sql_analysis::{SqlAnalysis, SqlStatement, SqlComplexity};
 pub use metrics::{CodeMetrics, ComplexityLevel};
 pub use report::{Report, ReportFormat};
 pub use compatibility::{CompatibilityChecker, CompatibilityIssue};
 pub use scanner::{Scanner, ScanConfig, ScanResult};
+pub use snapshot::{AssessmentSnapshot, ProgramSnapshot, SnapshotDiff, compare_snapshots};
 
 use thiserror::Error;
 
