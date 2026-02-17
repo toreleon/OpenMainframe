@@ -3,10 +3,12 @@
 //! This module provides runtime support for executing CICS commands.
 
 mod commands;
+pub mod dispatcher;
 pub mod eib;
 mod files;
 
 pub use commands::{CicsRuntime, ProgramRegistry};
+pub use dispatcher::{CicsDispatcher, CommandParamBlock, DispatchError, DispatchResult};
 pub use eib::Eib;
 pub use files::{CicsFile, FileManager, FileMode, FileRecord};
 

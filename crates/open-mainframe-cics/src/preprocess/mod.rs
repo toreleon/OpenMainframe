@@ -94,6 +94,12 @@ pub enum CicsCommandType {
     WriteqTs,
     /// DELETEQ TS - delete temporary storage
     DeleteqTs,
+    /// READQ TD - read transient data
+    ReadqTd,
+    /// WRITEQ TD - write transient data
+    WriteqTd,
+    /// DELETEQ TD - delete transient data queue
+    DeleteqTd,
     /// ENQ - enqueue resource
     Enq,
     /// DEQ - dequeue resource
@@ -205,6 +211,8 @@ impl CicsCommandType {
             "READQ" => {
                 if words.len() > 1 && words[1] == "TS" {
                     CicsCommandType::ReadqTs
+                } else if words.len() > 1 && words[1] == "TD" {
+                    CicsCommandType::ReadqTd
                 } else {
                     CicsCommandType::Other
                 }
@@ -212,6 +220,8 @@ impl CicsCommandType {
             "WRITEQ" => {
                 if words.len() > 1 && words[1] == "TS" {
                     CicsCommandType::WriteqTs
+                } else if words.len() > 1 && words[1] == "TD" {
+                    CicsCommandType::WriteqTd
                 } else {
                     CicsCommandType::Other
                 }
@@ -219,6 +229,8 @@ impl CicsCommandType {
             "DELETEQ" => {
                 if words.len() > 1 && words[1] == "TS" {
                     CicsCommandType::DeleteqTs
+                } else if words.len() > 1 && words[1] == "TD" {
+                    CicsCommandType::DeleteqTd
                 } else {
                     CicsCommandType::Other
                 }
@@ -410,6 +422,9 @@ impl CicsPreprocessor {
             CicsCommandType::HandleCondition => "CICSHCND",
             CicsCommandType::HandleAbend => "CICSHABN",
             CicsCommandType::HandleAid => "CICSHAID",
+            CicsCommandType::ReadqTd => "CICSRDTD",
+            CicsCommandType::WriteqTd => "CICSWRTD",
+            CicsCommandType::DeleteqTd => "CICSDLTD",
             CicsCommandType::PutContainer => "CICSPUTC",
             CicsCommandType::GetContainer => "CICSGETC",
             CicsCommandType::MoveContainer => "CICSMOVC",
@@ -574,6 +589,91 @@ mod tests {
         assert!(opts.iter().any(|o| o.name == "CONTAINER"));
         assert!(opts.iter().any(|o| o.name == "CHANNEL"));
         assert!(opts.iter().any(|o| o.name == "FROM"));
+    }
+
+    // === Story 201.1: TD queue command types ===
+
+    #[test]
+    fn test_writeq_td_command_type() {
+        assert_eq!(
+            CicsCommandType::from_text("WRITEQ TD QUEUE('CSSL') FROM(LOG-REC)"),
+            CicsCommandType::WriteqTd
+        );
+    }
+
+    #[test]
+    fn test_readq_td_command_type() {
+        assert_eq!(
+            CicsCommandType::from_text("READQ TD QUEUE('CSSL') INTO(LOG-REC)"),
+            CicsCommandType::ReadqTd
+        );
+    }
+
+    #[test]
+    fn test_deleteq_td_command_type() {
+        assert_eq!(
+            CicsCommandType::from_text("DELETEQ TD QUEUE('CSSL')"),
+            CicsCommandType::DeleteqTd
+        );
+    }
+
+    #[test]
+    fn test_writeq_td_preprocessing() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC CICS
+             WRITEQ TD QUEUE('CSSL')
+                       FROM(LOG-REC)
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = CicsPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.commands.len(), 1);
+        assert_eq!(result.commands[0].command_type, CicsCommandType::WriteqTd);
+        assert!(result.cobol_source.contains("CALL \"CICSWRTD\""));
+
+        let opts = &result.commands[0].options;
+        assert!(opts.iter().any(|o| o.name == "QUEUE"));
+        assert!(opts.iter().any(|o| o.name == "FROM"));
+    }
+
+    #[test]
+    fn test_readq_td_preprocessing() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC CICS
+             READQ TD QUEUE('CSSL')
+                      INTO(LOG-REC)
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = CicsPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.commands.len(), 1);
+        assert_eq!(result.commands[0].command_type, CicsCommandType::ReadqTd);
+        assert!(result.cobol_source.contains("CALL \"CICSRDTD\""));
+    }
+
+    #[test]
+    fn test_ts_still_works_after_td() {
+        // Ensure TS queue detection still works
+        assert_eq!(
+            CicsCommandType::from_text("WRITEQ TS QUEUE('TSQ1') FROM(DATA)"),
+            CicsCommandType::WriteqTs
+        );
+        assert_eq!(
+            CicsCommandType::from_text("READQ TS QUEUE('TSQ1') INTO(DATA)"),
+            CicsCommandType::ReadqTs
+        );
+        assert_eq!(
+            CicsCommandType::from_text("DELETEQ TS QUEUE('TSQ1')"),
+            CicsCommandType::DeleteqTs
+        );
     }
 
     #[test]

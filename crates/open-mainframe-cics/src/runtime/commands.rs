@@ -3,6 +3,7 @@
 //! Implements LINK, XCTL, RETURN, and other program control commands.
 
 use super::{Commarea, Eib, FileManager, TransactionContext};
+use crate::queues::td::{TdQueueManager, TdError};
 use crate::{CicsError, CicsResponse, CicsResult};
 use std::collections::HashMap;
 
@@ -72,6 +73,8 @@ pub struct CicsRuntime {
     pub context: TransactionContext,
     /// File manager
     pub files: FileManager,
+    /// Transient Data queue manager
+    pub td_queues: TdQueueManager,
     /// Current COMMAREA
     commarea: Option<Commarea>,
     /// Program call stack
@@ -90,6 +93,7 @@ impl CicsRuntime {
             eib,
             context: TransactionContext::new(transaction_id),
             files: FileManager::new(),
+            td_queues: TdQueueManager::new(),
             commarea: None,
             call_stack: Vec::new(),
             mock_mode: true,
@@ -317,6 +321,86 @@ impl CicsRuntime {
                 "No channel specified and no current channel set".to_string(),
             ))
         }
+    }
+
+    /// Execute WRITEQ TD command — write a record to a transient data queue.
+    pub fn writeq_td(&mut self, queue_name: &str, data: &[u8]) -> CicsResult<()> {
+        self.eib.reset_for_command();
+        match self.td_queues.writeq(queue_name, data.to_vec()) {
+            Ok(()) => {
+                self.eib.set_response(CicsResponse::Normal);
+                Ok(())
+            }
+            Err(TdError::QueueNotFound) => {
+                self.eib.set_response(CicsResponse::Qiderr);
+                Err(CicsError::InvalidRequest(format!(
+                    "TD queue '{}' not found (QIDERR)",
+                    queue_name
+                )))
+            }
+            Err(e) => {
+                self.eib.set_response(CicsResponse::Ioerr);
+                Err(CicsError::InvalidRequest(format!("TD write error: {}", e)))
+            }
+        }
+    }
+
+    /// Execute READQ TD command — read a record from a transient data queue.
+    ///
+    /// TD reads are destructive: the record is removed from the queue.
+    pub fn readq_td(&mut self, queue_name: &str) -> CicsResult<Vec<u8>> {
+        self.eib.reset_for_command();
+        match self.td_queues.readq(queue_name) {
+            Ok(data) => {
+                self.eib.set_response(CicsResponse::Normal);
+                Ok(data)
+            }
+            Err(TdError::QueueNotFound) => {
+                self.eib.set_response(CicsResponse::Qiderr);
+                Err(CicsError::InvalidRequest(format!(
+                    "TD queue '{}' not found (QIDERR)",
+                    queue_name
+                )))
+            }
+            Err(TdError::QueueEmpty) => {
+                self.eib.set_response(CicsResponse::Qzero);
+                Err(CicsError::InvalidRequest(format!(
+                    "TD queue '{}' is empty (QZERO)",
+                    queue_name
+                )))
+            }
+            Err(e) => {
+                self.eib.set_response(CicsResponse::Ioerr);
+                Err(CicsError::InvalidRequest(format!("TD read error: {}", e)))
+            }
+        }
+    }
+
+    /// Execute DELETEQ TD command — delete a transient data queue.
+    pub fn deleteq_td(&mut self, queue_name: &str) -> CicsResult<()> {
+        self.eib.reset_for_command();
+        match self.td_queues.delete_queue(queue_name) {
+            Ok(()) => {
+                self.eib.set_response(CicsResponse::Normal);
+                Ok(())
+            }
+            Err(TdError::QueueNotFound) => {
+                self.eib.set_response(CicsResponse::Qiderr);
+                Err(CicsError::InvalidRequest(format!(
+                    "TD queue '{}' not found (QIDERR)",
+                    queue_name
+                )))
+            }
+            Err(e) => {
+                self.eib.set_response(CicsResponse::Ioerr);
+                Err(CicsError::InvalidRequest(format!("TD delete error: {}", e)))
+            }
+        }
+    }
+
+    /// Get pending trigger transactions from TD queues.
+    pub fn get_td_triggers(&mut self) -> Vec<String> {
+        self.td_queues.get_pending_triggers()
     }
 
     /// Execute ABEND command.
@@ -602,6 +686,81 @@ mod tests {
         // No current channel set and no explicit channel
         let result = runtime.get_container("DATA1", None);
         assert!(result.is_err());
+    }
+
+    // === Story 201.1: TD queue runtime commands ===
+
+    #[test]
+    fn test_writeq_td_readq_td() {
+        use crate::queues::td::{TdQueue, TdDestType};
+
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.td_queues.define_queue(TdQueue::new("CSSL", TdDestType::Intrapartition));
+
+        // WRITEQ TD
+        runtime.writeq_td("CSSL", b"Log record 1").unwrap();
+        runtime.writeq_td("CSSL", b"Log record 2").unwrap();
+        assert_eq!(runtime.eib.eibresp, CicsResponse::Normal as u32);
+
+        // READQ TD (destructive, FIFO)
+        let rec1 = runtime.readq_td("CSSL").unwrap();
+        assert_eq!(rec1, b"Log record 1");
+        let rec2 = runtime.readq_td("CSSL").unwrap();
+        assert_eq!(rec2, b"Log record 2");
+    }
+
+    #[test]
+    fn test_readq_td_empty_queue() {
+        use crate::queues::td::{TdQueue, TdDestType};
+
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.td_queues.define_queue(TdQueue::new("EMPTY", TdDestType::Intrapartition));
+
+        let result = runtime.readq_td("EMPTY");
+        assert!(result.is_err());
+        assert_eq!(runtime.eib.eibresp, CicsResponse::Qzero as u32);
+    }
+
+    #[test]
+    fn test_writeq_td_queue_not_found() {
+        let mut runtime = CicsRuntime::new("TEST");
+        let result = runtime.writeq_td("NOQUEUE", b"data");
+        assert!(result.is_err());
+        assert_eq!(runtime.eib.eibresp, CicsResponse::Qiderr as u32);
+    }
+
+    #[test]
+    fn test_deleteq_td() {
+        use crate::queues::td::{TdQueue, TdDestType};
+
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.td_queues.define_queue(TdQueue::new("TDQ1", TdDestType::Intrapartition));
+        runtime.writeq_td("TDQ1", b"data").unwrap();
+
+        runtime.deleteq_td("TDQ1").unwrap();
+        assert_eq!(runtime.eib.eibresp, CicsResponse::Normal as u32);
+
+        // Queue is gone
+        let result = runtime.writeq_td("TDQ1", b"more");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_td_trigger_via_runtime() {
+        use crate::queues::td::{TdQueue, TdDestType};
+
+        let mut runtime = CicsRuntime::new("TEST");
+        let queue = TdQueue::new("TRGQ", TdDestType::Intrapartition)
+            .with_trigger(2, "PROC");
+        runtime.td_queues.define_queue(queue);
+
+        runtime.writeq_td("TRGQ", b"rec1").unwrap();
+        assert!(runtime.get_td_triggers().is_empty());
+
+        runtime.writeq_td("TRGQ", b"rec2").unwrap();
+        let triggers = runtime.get_td_triggers();
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0], "PROC");
     }
 
     #[test]
