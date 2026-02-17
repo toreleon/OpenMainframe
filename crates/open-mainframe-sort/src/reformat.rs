@@ -204,6 +204,11 @@ impl OutrecSpec {
     }
 }
 
+/// Public (crate-level) wrapper for apply_edit_mask.
+pub(crate) fn apply_edit_mask_pub(value: i64, mask: &str) -> String {
+    apply_edit_mask(value, mask)
+}
+
 /// Apply a DFSORT EDIT mask to a numeric value.
 ///
 /// EDIT mask characters:

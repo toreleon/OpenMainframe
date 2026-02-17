@@ -33,6 +33,8 @@ mod filter;
 pub mod ifthen;
 pub mod outfil;
 mod reformat;
+pub mod joinkeys;
+pub mod icetool;
 
 pub use error::SortError;
 pub use fields::{DataType, SortField, SortOrder, SortSpec};
@@ -42,3 +44,5 @@ pub use filter::{Condition, FilterSpec, CompareOp};
 pub use ifthen::{IfThenSpec, IfThenClause, WhenCondition, IfThenAction, OverlayField, OverlayData};
 pub use outfil::{OutfilSpec, OutfilDescriptor, SplitMode};
 pub use reformat::{OutrecField, OutrecSpec, OverlaySpec, FindRepSpec};
+pub use joinkeys::{JoinKeysSpec, JoinKeyField, JoinType, ReformatField as JoinReformatField};
+pub use icetool::{IceToolOp, IceToolResult, FieldStats, DisplayColumn, OnField};
