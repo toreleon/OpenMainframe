@@ -114,7 +114,9 @@ impl Idcams {
                 outdataset,
                 fromkey,
                 tokey,
-            } => self.repro(indataset, outdataset, fromkey.as_deref(), tokey.as_deref()),
+                skip,
+                count,
+            } => self.repro(indataset, outdataset, fromkey.as_deref(), tokey.as_deref(), *skip, *count),
 
             IdcamsCommand::Verify { dataset } => self.verify(dataset),
 
@@ -404,12 +406,19 @@ impl Idcams {
     }
 
     /// REPRO command.
+    ///
+    /// Copies records from input to output with optional filtering:
+    /// - `fromkey`/`tokey`: key-range filtering (records compared lexicographically)
+    /// - `skip`: number of records to skip from the start
+    /// - `count`: maximum number of records to copy (0 = all)
     fn repro(
         &mut self,
         indataset: &str,
         outdataset: &str,
-        _fromkey: Option<&str>,
-        _tokey: Option<&str>,
+        fromkey: Option<&str>,
+        tokey: Option<&str>,
+        skip: usize,
+        count: usize,
     ) -> Result<(), DatasetError> {
         self.output
             .push_str(&format!("IDC0001I REPRO - {} TO {}\n", indataset, outdataset));
@@ -424,12 +433,67 @@ impl Idcams {
             return Ok(());
         }
 
-        std::fs::create_dir_all(out_path.parent().unwrap_or(Path::new(".")))?;
-        std::fs::copy(&in_path, &out_path)?;
+        let needs_filtering = fromkey.is_some() || tokey.is_some() || skip > 0 || count > 0;
 
-        let metadata = std::fs::metadata(&out_path)?;
-        self.output
-            .push_str(&format!("IDC0002I {} BYTES COPIED\n", metadata.len()));
+        if !needs_filtering {
+            // Fast path: simple file copy
+            std::fs::create_dir_all(out_path.parent().unwrap_or(Path::new(".")))?;
+            std::fs::copy(&in_path, &out_path)?;
+            let metadata = std::fs::metadata(&out_path)?;
+            self.output
+                .push_str(&format!("IDC0002I {} BYTES COPIED\n", metadata.len()));
+        } else {
+            // Record-level filtering: read line by line
+            let input_data = std::fs::read_to_string(&in_path).map_err(|e| {
+                DatasetError::IoError {
+                    message: format!("Failed to read {}: {}", in_path.display(), e),
+                }
+            })?;
+
+            let mut output_lines = Vec::new();
+            let mut skipped = 0usize;
+            let mut copied = 0usize;
+
+            for line in input_data.lines() {
+                // Key-range filtering: compare record text lexicographically
+                if let Some(fk) = fromkey {
+                    if line < fk {
+                        continue;
+                    }
+                }
+                if let Some(tk) = tokey {
+                    if line > tk {
+                        continue;
+                    }
+                }
+
+                // SKIP filtering
+                if skipped < skip {
+                    skipped += 1;
+                    continue;
+                }
+
+                // COUNT filtering
+                if count > 0 && copied >= count {
+                    break;
+                }
+
+                output_lines.push(line);
+                copied += 1;
+            }
+
+            std::fs::create_dir_all(out_path.parent().unwrap_or(Path::new(".")))?;
+            let output_text = if output_lines.is_empty() {
+                String::new()
+            } else {
+                output_lines.join("\n") + "\n"
+            };
+            std::fs::write(&out_path, &output_text)?;
+
+            self.output
+                .push_str(&format!("IDC0002I {} RECORDS COPIED\n", copied));
+        }
+
         Ok(())
     }
 
@@ -705,6 +769,123 @@ mod tests {
         // Verify PATH metadata file was created
         let path_file = dir.join("MY/PATH.path");
         assert!(path_file.exists());
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_repro_with_skip() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        // Create source file with numbered lines
+        let source_path = dir.join("SOURCE/SKIP");
+        fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+        fs::write(&source_path, "LINE1\nLINE2\nLINE3\nLINE4\nLINE5\n").unwrap();
+
+        let mut idcams = Idcams::new(&dir);
+        let result = idcams
+            .execute("REPRO INDATASET(SOURCE.SKIP) OUTDATASET(TARGET.SKIP) SKIP(2)")
+            .unwrap();
+
+        assert!(result.is_success());
+        assert!(result.output.contains("3 RECORDS COPIED"));
+
+        let target_path = dir.join("TARGET/SKIP");
+        let content = fs::read_to_string(&target_path).unwrap();
+        assert_eq!(content, "LINE3\nLINE4\nLINE5\n");
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_repro_with_count() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let source_path = dir.join("SOURCE/COUNT");
+        fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+        fs::write(&source_path, "AAA\nBBB\nCCC\nDDD\nEEE\n").unwrap();
+
+        let mut idcams = Idcams::new(&dir);
+        let result = idcams
+            .execute("REPRO INDATASET(SOURCE.COUNT) OUTDATASET(TARGET.COUNT) COUNT(3)")
+            .unwrap();
+
+        assert!(result.is_success());
+        assert!(result.output.contains("3 RECORDS COPIED"));
+
+        let target_path = dir.join("TARGET/COUNT");
+        let content = fs::read_to_string(&target_path).unwrap();
+        assert_eq!(content, "AAA\nBBB\nCCC\n");
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_repro_with_skip_and_count() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let source_path = dir.join("SOURCE/BOTH");
+        fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+        fs::write(&source_path, "R1\nR2\nR3\nR4\nR5\nR6\n").unwrap();
+
+        let mut idcams = Idcams::new(&dir);
+        let result = idcams
+            .execute("REPRO INDATASET(SOURCE.BOTH) OUTDATASET(TARGET.BOTH) SKIP(1) COUNT(3)")
+            .unwrap();
+
+        assert!(result.is_success());
+        assert!(result.output.contains("3 RECORDS COPIED"));
+
+        let target_path = dir.join("TARGET/BOTH");
+        let content = fs::read_to_string(&target_path).unwrap();
+        assert_eq!(content, "R2\nR3\nR4\n");
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_repro_with_fromkey_tokey() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let source_path = dir.join("SOURCE/KEYRANGE");
+        fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+        fs::write(&source_path, "APPLE\nBANANA\nCHERRY\nDATE\nELDERBERRY\n").unwrap();
+
+        let mut idcams = Idcams::new(&dir);
+        let result = idcams
+            .execute("REPRO INDATASET(SOURCE.KEYRANGE) OUTDATASET(TARGET.KEYRANGE) FROMKEY(BANANA) TOKEY(DATE)")
+            .unwrap();
+
+        assert!(result.is_success());
+        assert!(result.output.contains("3 RECORDS COPIED"));
+
+        let target_path = dir.join("TARGET/KEYRANGE");
+        let content = fs::read_to_string(&target_path).unwrap();
+        assert_eq!(content, "BANANA\nCHERRY\nDATE\n");
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_repro_skip_beyond_records() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let source_path = dir.join("SOURCE/SKIP2");
+        fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+        fs::write(&source_path, "ONLY\nTWO\n").unwrap();
+
+        let mut idcams = Idcams::new(&dir);
+        let result = idcams
+            .execute("REPRO INDATASET(SOURCE.SKIP2) OUTDATASET(TARGET.SKIP2) SKIP(10)")
+            .unwrap();
+
+        assert!(result.is_success());
+        assert!(result.output.contains("0 RECORDS COPIED"));
 
         cleanup(&dir);
     }

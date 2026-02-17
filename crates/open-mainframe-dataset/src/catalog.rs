@@ -212,6 +212,9 @@ impl Catalog {
     }
 
     /// List datasets matching a pattern.
+    ///
+    /// Checks both explicit catalog entries and scans the filesystem
+    /// under the base directory for matching datasets.
     pub fn list(&self, pattern: &str) -> Vec<String> {
         let pattern_upper = pattern.to_uppercase();
         let mut results = Vec::new();
@@ -223,10 +226,154 @@ impl Catalog {
             }
         }
 
-        // TODO: Also scan filesystem for matching datasets
+        // Scan filesystem for matching datasets
+        if self.base_dir.exists() && self.base_dir.is_dir() {
+            self.scan_directory(&self.base_dir.clone(), "", &pattern_upper, &mut results);
+        }
 
         results.sort();
+        results.dedup();
         results
+    }
+
+    /// Recursively scan a directory to discover datasets.
+    ///
+    /// Builds DSN from path components separated by dots.
+    #[allow(clippy::only_used_in_recursion)]
+    fn scan_directory(&self, dir: &Path, prefix: &str, pattern: &str, results: &mut Vec<String>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy().to_uppercase();
+
+            // Skip hidden/metadata files
+            if name_str.starts_with('.') || name_str.starts_with('_') {
+                continue;
+            }
+
+            let dsn = if prefix.is_empty() {
+                name_str.to_string()
+            } else {
+                format!("{}.{}", prefix, name_str)
+            };
+
+            let path = entry.path();
+            if path.is_file() {
+                // Strip known extensions for DSN
+                let dsn_clean = strip_dataset_extension(&dsn);
+                if Self::matches_pattern(&dsn_clean, pattern) && !results.contains(&dsn_clean) {
+                    results.push(dsn_clean);
+                }
+            } else if path.is_dir() {
+                // Check if this directory itself matches as a dataset (e.g., PDS)
+                if Self::matches_pattern(&dsn, pattern) && !results.contains(&dsn) {
+                    // Only add directories that look like datasets (contain _pds_directory or files)
+                    if path.join("_pds_directory.json").exists() {
+                        results.push(dsn.clone());
+                    }
+                }
+                // Recurse into subdirectories
+                self.scan_directory(&path, &dsn, pattern, results);
+            }
+        }
+    }
+
+    /// Save catalog entries to a persistent file.
+    ///
+    /// Writes all explicit catalog entries to `<base_dir>/.catalog.idx`
+    /// in a simple line-based format: `DSN|PATH|RECFM|LRECL|BLKSIZE|IS_PDS`
+    pub fn save(&self) -> Result<(), DatasetError> {
+        let catalog_path = self.base_dir.join(".catalog.idx");
+        std::fs::create_dir_all(&self.base_dir).map_err(|e| DatasetError::IoError {
+            message: format!("Failed to create catalog directory: {}", e),
+        })?;
+
+        let mut lines = Vec::new();
+        for entry in self.entries.values() {
+            let recfm = match entry.attributes.recfm {
+                RecordFormat::Fixed => "F",
+                RecordFormat::FixedBlocked => "FB",
+                RecordFormat::Variable => "V",
+                RecordFormat::VariableBlocked => "VB",
+                RecordFormat::Undefined => "U",
+                RecordFormat::VariableSpanned => "VS",
+                RecordFormat::VariableBlockedSpanned => "VBS",
+            };
+            lines.push(format!(
+                "{}|{}|{}|{}|{}|{}",
+                entry.dsn,
+                entry.path.display(),
+                recfm,
+                entry.attributes.lrecl,
+                entry.attributes.blksize,
+                if entry.is_pds { "Y" } else { "N" },
+            ));
+        }
+
+        lines.sort();
+        let content = lines.join("\n") + "\n";
+        std::fs::write(&catalog_path, content).map_err(|e| DatasetError::IoError {
+            message: format!("Failed to write catalog: {}", e),
+        })?;
+
+        Ok(())
+    }
+
+    /// Load catalog entries from a persistent file.
+    ///
+    /// Reads entries from `<base_dir>/.catalog.idx` and populates the
+    /// in-memory catalog. Existing entries are not cleared — loaded
+    /// entries are merged in.
+    pub fn load(&mut self) -> Result<usize, DatasetError> {
+        let catalog_path = self.base_dir.join(".catalog.idx");
+        if !catalog_path.exists() {
+            return Ok(0);
+        }
+
+        let content = std::fs::read_to_string(&catalog_path).map_err(|e| DatasetError::IoError {
+            message: format!("Failed to read catalog: {}", e),
+        })?;
+
+        let mut count = 0;
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split('|').collect();
+            if parts.len() < 6 {
+                continue;
+            }
+
+            let dsn = parts[0].to_string();
+            let path = PathBuf::from(parts[1]);
+            let recfm = RecordFormat::parse(parts[2]).unwrap_or_default();
+            let lrecl: u32 = parts[3].parse().unwrap_or(80);
+            let blksize: u32 = parts[4].parse().unwrap_or(800);
+            let is_pds = parts[5] == "Y";
+
+            let entry = CatalogEntry {
+                dsn: dsn.clone(),
+                path,
+                attributes: DatasetAttributes {
+                    recfm,
+                    lrecl,
+                    blksize,
+                    ..Default::default()
+                },
+                is_pds,
+            };
+
+            self.entries.insert(dsn.to_uppercase(), entry);
+            count += 1;
+        }
+
+        Ok(count)
     }
 
     /// Check if a DSN matches a pattern (supports * wildcards).
@@ -275,6 +422,16 @@ impl Catalog {
     pub fn set_extensions(&mut self, extensions: Vec<String>) {
         self.extensions = extensions;
     }
+}
+
+/// Strip known dataset file extensions from a DSN.
+fn strip_dataset_extension(dsn: &str) -> String {
+    for ext in &[".DAT", ".TXT", ".CBL", ".COB", ".CPY", ".VSAM", ".AIX", ".PATH"] {
+        if let Some(stripped) = dsn.strip_suffix(ext) {
+            return stripped.to_string();
+        }
+    }
+    dsn.to_string()
 }
 
 impl Default for Catalog {
@@ -340,6 +497,119 @@ mod tests {
             dataset.path.unwrap(),
             PathBuf::from("/special/location/data.dat")
         );
+    }
+
+    #[test]
+    fn test_catalog_save_and_load() {
+        let temp_dir = std::env::temp_dir().join("open_mainframe_catalog_save_test");
+        std::fs::create_dir_all(&temp_dir).ok();
+
+        // Create catalog with entries and save
+        {
+            let mut catalog = Catalog::new(&temp_dir);
+            catalog.add_entry(CatalogEntry {
+                dsn: "MY.TEST.DATA".to_string(),
+                path: PathBuf::from("/datasets/MY/TEST/DATA.dat"),
+                attributes: DatasetAttributes {
+                    recfm: RecordFormat::FixedBlocked,
+                    lrecl: 80,
+                    blksize: 3200,
+                    ..Default::default()
+                },
+                is_pds: false,
+            });
+            catalog.add_entry(CatalogEntry {
+                dsn: "MY.SOURCE.LIB".to_string(),
+                path: PathBuf::from("/datasets/MY/SOURCE/LIB"),
+                attributes: DatasetAttributes {
+                    recfm: RecordFormat::Variable,
+                    lrecl: 255,
+                    blksize: 2550,
+                    ..Default::default()
+                },
+                is_pds: true,
+            });
+            catalog.save().unwrap();
+        }
+
+        // Load into fresh catalog
+        {
+            let mut catalog = Catalog::new(&temp_dir);
+            let count = catalog.load().unwrap();
+            assert_eq!(count, 2);
+
+            // Verify entries loaded correctly
+            let ds = catalog.lookup("MY.TEST.DATA").unwrap();
+            assert_eq!(ds.dsn, "MY.TEST.DATA");
+
+            let ds2 = catalog.lookup("MY.SOURCE.LIB").unwrap();
+            assert_eq!(ds2.dsn, "MY.SOURCE.LIB");
+        }
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_catalog_load_empty() {
+        let temp_dir = std::env::temp_dir().join("open_mainframe_catalog_empty_test");
+        std::fs::create_dir_all(&temp_dir).ok();
+
+        let mut catalog = Catalog::new(&temp_dir);
+        // No catalog file exists — should return 0
+        let count = catalog.load().unwrap();
+        assert_eq!(count, 0);
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_catalog_filesystem_scan() {
+        let temp_dir = std::env::temp_dir().join("open_mainframe_catalog_scan_test");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).ok();
+
+        // Create some dataset files on disk
+        let data_dir = temp_dir.join("USER/DATA");
+        std::fs::create_dir_all(&data_dir).ok();
+        std::fs::write(data_dir.join("FILE1.dat"), "data1").ok();
+        std::fs::write(data_dir.join("FILE2.dat"), "data2").ok();
+
+        let catalog = Catalog::new(&temp_dir);
+        let results = catalog.list("USER.*");
+
+        // Should find datasets via filesystem scan
+        assert!(results.contains(&"USER.DATA.FILE1".to_string()));
+        assert!(results.contains(&"USER.DATA.FILE2".to_string()));
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_catalog_list_deduplicates() {
+        let temp_dir = std::env::temp_dir().join("open_mainframe_catalog_dedup_test");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).ok();
+
+        // Create a file on disk
+        let data_dir = temp_dir.join("MY/DATASET");
+        std::fs::create_dir_all(data_dir.parent().unwrap()).ok();
+        std::fs::write(&data_dir, "content").ok();
+
+        // Also add it as an explicit catalog entry
+        let mut catalog = Catalog::new(&temp_dir);
+        catalog.add_entry(CatalogEntry {
+            dsn: "MY.DATASET".to_string(),
+            path: data_dir.clone(),
+            attributes: DatasetAttributes::default(),
+            is_pds: false,
+        });
+
+        let results = catalog.list("MY.*");
+        // Should not have duplicates
+        let count = results.iter().filter(|s| *s == "MY.DATASET").count();
+        assert_eq!(count, 1);
+
+        std::fs::remove_dir_all(&temp_dir).ok();
     }
 
     #[test]

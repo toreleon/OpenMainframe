@@ -276,11 +276,21 @@ fn parse_repro(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
     let fromkey = extract_param(input, "FROMKEY");
     let tokey = extract_param(input, "TOKEY");
 
+    let skip = extract_param(input, "SKIP")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let count = extract_param(input, "COUNT")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
     Ok(Some(IdcamsCommand::Repro {
         indataset,
         outdataset,
         fromkey,
         tokey,
+        skip,
+        count,
     }))
 }
 
@@ -546,6 +556,52 @@ mod tests {
                 assert_eq!(pathentry, "MY.AIX");
             }
             _ => panic!("Expected DefinePath"),
+        }
+    }
+
+    #[test]
+    fn test_parse_repro_with_skip_count() {
+        let input = "REPRO INDATASET(SOURCE.DATA) OUTDATASET(TARGET.DATA) SKIP(5) COUNT(10)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::Repro {
+                indataset,
+                outdataset,
+                skip,
+                count,
+                ..
+            } => {
+                assert_eq!(indataset, "SOURCE.DATA");
+                assert_eq!(outdataset, "TARGET.DATA");
+                assert_eq!(*skip, 5);
+                assert_eq!(*count, 10);
+            }
+            _ => panic!("Expected Repro"),
+        }
+    }
+
+    #[test]
+    fn test_parse_repro_with_fromkey_tokey() {
+        let input = "REPRO INDATASET(IN.DS) OUTDATASET(OUT.DS) FROMKEY(AAA) TOKEY(ZZZ)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::Repro {
+                fromkey,
+                tokey,
+                skip,
+                count,
+                ..
+            } => {
+                assert_eq!(fromkey.as_deref(), Some("AAA"));
+                assert_eq!(tokey.as_deref(), Some("ZZZ"));
+                assert_eq!(*skip, 0);
+                assert_eq!(*count, 0);
+            }
+            _ => panic!("Expected Repro"),
         }
     }
 

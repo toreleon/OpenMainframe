@@ -83,6 +83,10 @@ pub enum IdcamsCommand {
         fromkey: Option<String>,
         /// Ending key (for KSDS).
         tokey: Option<String>,
+        /// Number of records to skip from the start.
+        skip: usize,
+        /// Maximum number of records to copy (0 = all).
+        count: usize,
     },
 
     /// VERIFY - Verify VSAM integrity.

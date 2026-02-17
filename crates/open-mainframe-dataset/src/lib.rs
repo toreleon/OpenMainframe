@@ -27,6 +27,7 @@
 //! - Dataset catalog for name resolution
 //! - PDS member support
 
+pub mod bsam;
 pub mod catalog;
 pub mod error;
 pub mod gdg;
@@ -37,6 +38,10 @@ pub mod qsam;
 pub mod types;
 pub mod vsam;
 
+pub use bsam::{
+    bpam_pds_path, bpam_read_member, parse_directory_block, read_pds_directory_blocks,
+    BpamDirEntry, BsamReader, BsamWriter, Ttr, DIRECTORY_BLOCK_SIZE, TTR_SIZE,
+};
 pub use catalog::{Catalog, CatalogEntry};
 pub use error::DatasetError;
 pub use gdg::{GdgBase, GdgGeneration, GdgGenerationInfo, GdgListInfo, GdgOptions, GenerationNumber};
