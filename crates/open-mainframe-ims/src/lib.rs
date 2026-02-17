@@ -129,7 +129,7 @@ impl StatusCode {
     }
 
     /// Convert to two-character string.
-    pub fn to_string(&self) -> String {
+    pub fn as_str_pair(&self) -> String {
         match self {
             StatusCode::Ok => "  ".to_string(),
             StatusCode::GE => "GE".to_string(),
@@ -181,7 +181,7 @@ impl Default for StatusCode {
 
 impl std::fmt::Display for StatusCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self.as_str_pair())
     }
 }
 
@@ -199,9 +199,9 @@ mod tests {
 
     #[test]
     fn test_status_code_to_string() {
-        assert_eq!(StatusCode::Ok.to_string(), "  ");
-        assert_eq!(StatusCode::GE.to_string(), "GE");
-        assert_eq!(StatusCode::II.to_string(), "II");
+        assert_eq!(StatusCode::Ok.as_str_pair(), "  ");
+        assert_eq!(StatusCode::GE.as_str_pair(), "GE");
+        assert_eq!(StatusCode::II.as_str_pair(), "II");
     }
 
     #[test]
