@@ -20,7 +20,7 @@ pub fn run(input: PathBuf, format: OutputFormat) -> Result<()> {
 
     if format.is_json() {
         let steps: Vec<JclStepParseOutput> = job
-            .steps
+            .steps()
             .iter()
             .map(|step| {
                 let exec = match &step.exec {
@@ -47,6 +47,9 @@ pub fn run(input: PathBuf, format: OutputFormat) -> Result<()> {
                             open_mainframe_jcl::DdDefinition::Dummy => "DUMMY".to_string(),
                             open_mainframe_jcl::DdDefinition::Concatenation(defs) => {
                                 format!("CONCAT({})", defs.len())
+                            }
+                            open_mainframe_jcl::DdDefinition::UssFile(def) => {
+                                format!("PATH={}", def.path)
                             }
                         };
                         JclDdOutput {

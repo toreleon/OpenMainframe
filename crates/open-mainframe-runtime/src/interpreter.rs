@@ -3648,6 +3648,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
             statements,
             paragraphs: HashMap::new(),
             paragraph_order: Vec::new(),
@@ -3669,6 +3670,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
             statements,
             paragraphs: HashMap::new(),
             paragraph_order: Vec::new(),
@@ -3681,6 +3683,7 @@ mod tests {
             decimals: 0,
             is_numeric: true,
             picture: Some(format!("9({})", size)),
+            is_justified: false,
         }
     }
 
@@ -3690,6 +3693,7 @@ mod tests {
             decimals: 0,
             is_numeric: false,
             picture: Some(format!("X({})", size)),
+            is_justified: false,
         }
     }
 
@@ -4179,6 +4183,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
             statements: vec![
                 SimpleStatement::Move {
                     from: SimpleExpr::String("FROM-INNER".to_string()),
@@ -4198,6 +4203,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
             statements: vec![
                 SimpleStatement::Call {
                     program: SimpleExpr::String("INNER".to_string()),
@@ -4248,6 +4254,7 @@ mod tests {
             decimals: 0,
             is_numeric: true,
             picture: Some("9(5)".to_string()),
+            is_justified: false,
         }
     }
 
@@ -4303,6 +4310,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         let mut env = create_test_env();
@@ -4379,6 +4387,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         let mut env = create_test_env();
@@ -4459,6 +4468,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         let mut env = create_test_env();
@@ -4506,6 +4516,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         let mut env = create_test_env();
@@ -4572,6 +4583,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         let mut env = create_test_env();
@@ -4620,6 +4632,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         let mut env = create_test_env();
@@ -4676,6 +4689,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         let mut env = create_test_env();
@@ -4733,6 +4747,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         let mut env = create_test_env();
@@ -5153,6 +5168,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         execute(&program, &mut env).unwrap();
@@ -5219,6 +5235,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         execute(&program, &mut env).unwrap();
@@ -5261,6 +5278,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         execute(&program, &mut env).unwrap();
@@ -5277,6 +5295,7 @@ mod tests {
         env.define("WS-STATUS", DataItemMeta {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
+            is_justified: false,
         });
         env.set("WS-STATUS", CobolValue::Alphanumeric("Y".to_string())).unwrap();
 
@@ -5302,6 +5321,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         // VALID should be TRUE when WS-STATUS = 'Y'
@@ -5329,6 +5349,7 @@ mod tests {
         env.define("WS-STATUS", DataItemMeta {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
+            is_justified: false,
         });
         env.set("WS-STATUS", CobolValue::Alphanumeric("Y".to_string())).unwrap();
 
@@ -5359,6 +5380,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         execute(&program, &mut env).unwrap();
@@ -5374,6 +5396,7 @@ mod tests {
         env.define("WS-CHAR", DataItemMeta {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
+            is_justified: false,
         });
 
         let mut cond_names = HashMap::new();
@@ -5400,6 +5423,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         // Test each vowel
@@ -5431,6 +5455,7 @@ mod tests {
         env.define("WS-GRADE", DataItemMeta {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
+            is_justified: false,
         });
 
         let mut cond_names = HashMap::new();
@@ -5453,6 +5478,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         // 'A', 'B', 'C', 'D' should all be valid
@@ -5485,6 +5511,7 @@ mod tests {
         env.define("WS-CHAR", DataItemMeta {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
+            is_justified: false,
         });
 
         let mut cond_names = HashMap::new();
@@ -5513,6 +5540,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         execute(&program, &mut env).unwrap();
@@ -5528,6 +5556,7 @@ mod tests {
         env.define("WS-CODE", DataItemMeta {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
+            is_justified: false,
         });
 
         let mut cond_names = HashMap::new();
@@ -5552,6 +5581,7 @@ mod tests {
             is_initial: false,
             is_common: false,
             declarative_handlers: HashMap::new(),
+            redefines_aliases: Vec::new(),
         };
 
         // 'A' and 'B' should pass (single values)
