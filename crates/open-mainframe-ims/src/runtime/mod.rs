@@ -23,6 +23,35 @@ pub struct ImsRuntime {
     processors: Vec<DliProcessor>,
     /// Current position in each database
     positions: HashMap<String, DatabasePosition>,
+    /// Snapshots of databases at last commit point (for ROLB)
+    snapshots: HashMap<String, HierarchicalStore>,
+    /// Checkpoint IDs recorded by CHKP calls
+    checkpoint_ids: Vec<Vec<u8>>,
+    /// Log records written by LOG calls
+    log_records: Vec<Vec<u8>>,
+    /// Runtime statistics
+    stats: RuntimeStats,
+}
+
+/// Runtime statistics for STAT call.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeStats {
+    /// Total number of DL/I calls executed.
+    pub total_calls: u64,
+    /// Number of GU calls.
+    pub gu_calls: u64,
+    /// Number of GN/GNP calls.
+    pub gn_calls: u64,
+    /// Number of ISRT calls.
+    pub isrt_calls: u64,
+    /// Number of DLET calls.
+    pub dlet_calls: u64,
+    /// Number of REPL calls.
+    pub repl_calls: u64,
+    /// Number of CHKP/SYNC calls.
+    pub commit_calls: u64,
+    /// Number of ROLB calls.
+    pub rolb_calls: u64,
 }
 
 /// Current position in a database for GN/GNP calls.
@@ -45,6 +74,10 @@ impl ImsRuntime {
             psb: None,
             processors: Vec::new(),
             positions: HashMap::new(),
+            snapshots: HashMap::new(),
+            checkpoint_ids: Vec::new(),
+            log_records: Vec::new(),
+            stats: RuntimeStats::default(),
         }
     }
 
@@ -105,6 +138,24 @@ impl ImsRuntime {
 
         let position = self.positions.entry(dbname.clone()).or_default();
 
+        // Track statistics
+        self.stats.total_calls += 1;
+        match call.function {
+            DliFunction::GU | DliFunction::GHU => self.stats.gu_calls += 1,
+            DliFunction::GN | DliFunction::GNP | DliFunction::GHN | DliFunction::GHNP => {
+                self.stats.gn_calls += 1
+            }
+            DliFunction::ISRT => self.stats.isrt_calls += 1,
+            DliFunction::DLET => self.stats.dlet_calls += 1,
+            DliFunction::REPL => self.stats.repl_calls += 1,
+            _ => {}
+        }
+
+        // System service calls are dispatched separately
+        if call.function.is_system_service() {
+            return self.execute_system_service(call);
+        }
+
         match call.function {
             DliFunction::GU => execute_gu(store, call, pcb, position),
             DliFunction::GN => execute_gn(store, call, pcb, position),
@@ -148,11 +199,204 @@ impl ImsRuntime {
         self.execute(&call)
     }
 
+    // -----------------------------------------------------------------------
+    // System Service Calls (Epic 401)
+    // -----------------------------------------------------------------------
+
+    /// Execute a system service call (CHKP, SYNC, ROLB, LOG, STAT).
+    fn execute_system_service(&mut self, call: &DliCall) -> ImsResult<DliResult> {
+        match call.function {
+            DliFunction::CHKP => self.execute_chkp(call),
+            DliFunction::SYNC => self.execute_sync(),
+            DliFunction::ROLB => self.execute_rolb(),
+            DliFunction::LOG => self.execute_log(call),
+            DliFunction::STAT => self.execute_stat(),
+            _ => Ok(DliResult::error(StatusCode::AD)),
+        }
+    }
+
+    /// Execute CHKP (Checkpoint).
+    ///
+    /// Commits all database changes and records a checkpoint ID.
+    /// After CHKP, all changes are permanent and cannot be rolled back.
+    fn execute_chkp(&mut self, call: &DliCall) -> ImsResult<DliResult> {
+        self.stats.commit_calls += 1;
+
+        // Record checkpoint ID from I/O area
+        if !call.io_area.is_empty() {
+            self.checkpoint_ids.push(call.io_area.clone());
+        }
+
+        // Take a snapshot of all databases — this IS the commit point
+        self.snapshots.clear();
+        for (name, store) in &self.databases {
+            self.snapshots.insert(name.clone(), store.snapshot());
+        }
+
+        // Reset positions
+        self.positions.clear();
+
+        // Set I/O PCB status to success
+        if let Some(ref mut psb) = self.psb {
+            if let Some(io_pcb) = psb.pcbs.first_mut() {
+                io_pcb.set_status(StatusCode::Ok);
+            }
+        }
+
+        Ok(DliResult::ok(vec![], ""))
+    }
+
+    /// Execute SYNC (Synchronization point).
+    ///
+    /// Same as CHKP but without a checkpoint ID.
+    fn execute_sync(&mut self) -> ImsResult<DliResult> {
+        self.stats.commit_calls += 1;
+
+        // Take a snapshot — commit point
+        self.snapshots.clear();
+        for (name, store) in &self.databases {
+            self.snapshots.insert(name.clone(), store.snapshot());
+        }
+
+        // Reset positions
+        self.positions.clear();
+
+        // Set I/O PCB status
+        if let Some(ref mut psb) = self.psb {
+            if let Some(io_pcb) = psb.pcbs.first_mut() {
+                io_pcb.set_status(StatusCode::Ok);
+            }
+        }
+
+        Ok(DliResult::ok(vec![], ""))
+    }
+
+    /// Execute ROLB (Rollback).
+    ///
+    /// Undoes all changes since the last commit point (CHKP or SYNC).
+    /// If no commit point exists, undoes all changes since PSB schedule.
+    fn execute_rolb(&mut self) -> ImsResult<DliResult> {
+        self.stats.rolb_calls += 1;
+
+        // Restore databases from snapshots
+        if !self.snapshots.is_empty() {
+            for (name, snapshot) in &self.snapshots {
+                if let Some(store) = self.databases.get_mut(name) {
+                    store.restore_from(snapshot);
+                }
+            }
+        } else {
+            // No snapshot — clear all databases to their initial empty state
+            for store in self.databases.values_mut() {
+                let name = store.name.clone();
+                *store = HierarchicalStore::new(&name);
+            }
+        }
+
+        // Reset positions
+        self.positions.clear();
+
+        // Set I/O PCB status
+        if let Some(ref mut psb) = self.psb {
+            if let Some(io_pcb) = psb.pcbs.first_mut() {
+                io_pcb.set_status(StatusCode::Ok);
+            }
+        }
+
+        Ok(DliResult::ok(vec![], ""))
+    }
+
+    /// Execute LOG (Write log record).
+    ///
+    /// Writes the I/O area data to the IMS log.
+    fn execute_log(&mut self, call: &DliCall) -> ImsResult<DliResult> {
+        self.log_records.push(call.io_area.clone());
+
+        // Set I/O PCB status
+        if let Some(ref mut psb) = self.psb {
+            if let Some(io_pcb) = psb.pcbs.first_mut() {
+                io_pcb.set_status(StatusCode::Ok);
+            }
+        }
+
+        Ok(DliResult::ok(vec![], ""))
+    }
+
+    /// Execute STAT (Get statistics).
+    ///
+    /// Returns runtime statistics in the I/O area.
+    fn execute_stat(&mut self) -> ImsResult<DliResult> {
+        // Format statistics as a byte array
+        let stats_str = format!(
+            "CALLS={},GU={},GN={},ISRT={},DLET={},REPL={},COMMIT={},ROLB={}",
+            self.stats.total_calls,
+            self.stats.gu_calls,
+            self.stats.gn_calls,
+            self.stats.isrt_calls,
+            self.stats.dlet_calls,
+            self.stats.repl_calls,
+            self.stats.commit_calls,
+            self.stats.rolb_calls,
+        );
+
+        // Set I/O PCB status
+        if let Some(ref mut psb) = self.psb {
+            if let Some(io_pcb) = psb.pcbs.first_mut() {
+                io_pcb.set_status(StatusCode::Ok);
+            }
+        }
+
+        Ok(DliResult::ok(stats_str.into_bytes(), ""))
+    }
+
+    /// Get checkpoint IDs recorded by CHKP calls.
+    pub fn checkpoint_ids(&self) -> &[Vec<u8>] {
+        &self.checkpoint_ids
+    }
+
+    /// Get log records written by LOG calls.
+    pub fn log_records(&self) -> &[Vec<u8>] {
+        &self.log_records
+    }
+
+    /// Get runtime statistics.
+    pub fn stats(&self) -> &RuntimeStats {
+        &self.stats
+    }
+
+    /// Schedule a PSB for execution with I/O PCB at index 0.
+    ///
+    /// Per AD-3.0-02, the I/O PCB is automatically created at index 0.
+    /// Existing DB PCBs shift to index 1+.
+    pub fn schedule_psb_with_io_pcb(&mut self, mut psb: ProgramSpecBlock) -> ImsResult<()> {
+        // Create I/O PCB and insert at position 0
+        let io_pcb = ProgramCommBlock::new_io();
+        psb.pcbs.insert(0, io_pcb);
+
+        // Update PCB positions
+        for (i, pcb) in psb.pcbs.iter_mut().enumerate() {
+            pcb.position = i;
+        }
+
+        let pcb_count = psb.pcb_count();
+        self.psb = Some(psb);
+        self.processors = (0..pcb_count).map(|_| DliProcessor::new()).collect();
+
+        // Take initial snapshot as commit point
+        self.snapshots.clear();
+        for (name, store) in &self.databases {
+            self.snapshots.insert(name.clone(), store.snapshot());
+        }
+
+        Ok(())
+    }
+
     /// Terminate PSB.
     pub fn terminate(&mut self) {
         self.psb = None;
         self.processors.clear();
         self.positions.clear();
+        self.snapshots.clear();
     }
 
     /// Reset all positions.
@@ -644,7 +888,7 @@ mod tests {
     fn create_test_runtime() -> ImsRuntime {
         let mut runtime = ImsRuntime::new();
 
-        // Create PSB
+        // Create PSB (without I/O PCB for backward compatibility)
         let mut psb = ProgramSpecBlock::new("TESTPSB", crate::psb::PsbLanguage::Cobol);
         let mut pcb = ProgramCommBlock::new_db("TESTDB", ProcessingOptions::from_str("A"), 50);
         pcb.add_senseg(SensitiveSegment::new("CUSTOMER", "", ProcessingOptions::from_str("A")));
@@ -857,5 +1101,289 @@ mod tests {
         runtime.terminate();
 
         assert!(runtime.get_psb().is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper for system service call tests (uses I/O PCB at index 0)
+    // -----------------------------------------------------------------------
+
+    fn create_io_pcb_runtime() -> ImsRuntime {
+        let mut runtime = ImsRuntime::new();
+
+        // Create PSB with I/O PCB
+        let mut psb = ProgramSpecBlock::new("TESTPSB", crate::psb::PsbLanguage::Cobol);
+        let mut pcb = ProgramCommBlock::new_db("TESTDB", ProcessingOptions::from_str("A"), 50);
+        pcb.add_senseg(SensitiveSegment::new("CUSTOMER", "", ProcessingOptions::from_str("A")));
+        pcb.add_senseg(SensitiveSegment::new("ORDER", "CUSTOMER", ProcessingOptions::from_str("A")));
+        psb.add_pcb(pcb);
+
+        runtime.schedule_psb_with_io_pcb(psb).unwrap();
+
+        // Load test data (PCB is now at index 1 due to I/O PCB at 0)
+        let store = runtime.get_store("TESTDB");
+        let cust1 = store.insert_root("CUSTOMER", b"Customer One".to_vec());
+        store.get_mut(cust1).unwrap().keys.insert("CUSTNO".to_string(), b"C001".to_vec());
+
+        runtime
+    }
+
+    // --- Story 401.1: CHKP Tests ---
+
+    #[test]
+    fn test_chkp_commits_and_records_id() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Insert a new customer (DB PCB is at index 1)
+        let ssa = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C002");
+        runtime.isrt(1, vec![ssa], b"Customer Two".to_vec()).unwrap();
+
+        // Issue CHKP with checkpoint ID
+        let chkp_call = DliCall::new(DliFunction::CHKP, 0)
+            .with_io_area(b"CHKP001".to_vec());
+        let result = runtime.execute(&chkp_call).unwrap();
+        assert!(result.is_ok());
+
+        // Verify checkpoint ID was recorded
+        assert_eq!(runtime.checkpoint_ids().len(), 1);
+        assert_eq!(runtime.checkpoint_ids()[0], b"CHKP001");
+    }
+
+    #[test]
+    fn test_chkp_preserves_data_after_rolb() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Insert 2 customers
+        let ssa1 = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C002");
+        runtime.isrt(1, vec![ssa1], b"Customer Two".to_vec()).unwrap();
+
+        let ssa2 = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C003");
+        runtime.isrt(1, vec![ssa2], b"Customer Three".to_vec()).unwrap();
+
+        // CHKP — commit these inserts
+        let chkp_call = DliCall::new(DliFunction::CHKP, 0)
+            .with_io_area(b"CP01".to_vec());
+        runtime.execute(&chkp_call).unwrap();
+
+        // Insert another customer after checkpoint
+        let ssa3 = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C004");
+        runtime.isrt(1, vec![ssa3], b"Customer Four".to_vec()).unwrap();
+
+        // ROLB — only C004 should be undone
+        let rolb_call = DliCall::new(DliFunction::ROLB, 0);
+        runtime.execute(&rolb_call).unwrap();
+
+        // C002 and C003 should still exist (committed before ROLB)
+        let ssa_check2 = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C002");
+        let result = runtime.gu(1, vec![ssa_check2]).unwrap();
+        assert!(result.is_ok(), "C002 should exist after ROLB (was committed)");
+
+        // C004 should be gone
+        let ssa_check4 = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C004");
+        let result = runtime.gu(1, vec![ssa_check4]).unwrap();
+        assert!(result.is_not_found(), "C004 should be gone after ROLB");
+    }
+
+    // --- Story 401.2: ROLB Tests ---
+
+    #[test]
+    fn test_rolb_undoes_inserts() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Commit the initial test data (C001) so ROLB restores to this state
+        let chkp_call = DliCall::new(DliFunction::CHKP, 0).with_io_area(b"INIT".to_vec());
+        runtime.execute(&chkp_call).unwrap();
+
+        let committed_count = runtime.get_store("TESTDB").len();
+        assert_eq!(committed_count, 1);
+
+        // Insert 3 new customers (uncommitted)
+        for i in 2..=4 {
+            let key = format!("C00{}", i);
+            let data = format!("Customer {}", i);
+            let ssa = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, key.as_bytes());
+            runtime.isrt(1, vec![ssa], data.into_bytes()).unwrap();
+        }
+
+        // Verify inserts happened
+        assert_eq!(runtime.get_store("TESTDB").len(), committed_count + 3);
+
+        // ROLB — undo all 3 inserts, restore to last CHKP
+        let rolb_call = DliCall::new(DliFunction::ROLB, 0);
+        let result = runtime.execute(&rolb_call).unwrap();
+        assert!(result.is_ok());
+
+        // Verify database is back to committed state (1 customer)
+        assert_eq!(runtime.get_store("TESTDB").len(), committed_count);
+    }
+
+    #[test]
+    fn test_rolb_after_chkp_preserves_committed() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Insert C002
+        let ssa = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C002");
+        runtime.isrt(1, vec![ssa], b"Customer Two".to_vec()).unwrap();
+
+        // CHKP
+        let chkp_call = DliCall::new(DliFunction::CHKP, 0).with_io_area(b"CP1".to_vec());
+        runtime.execute(&chkp_call).unwrap();
+
+        // Insert C003 and C004 after checkpoint
+        let ssa3 = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C003");
+        runtime.isrt(1, vec![ssa3], b"Customer Three".to_vec()).unwrap();
+
+        let ssa4 = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C004");
+        runtime.isrt(1, vec![ssa4], b"Customer Four".to_vec()).unwrap();
+
+        // ROLB — only C003 and C004 should be undone
+        let rolb_call = DliCall::new(DliFunction::ROLB, 0);
+        runtime.execute(&rolb_call).unwrap();
+
+        // C001 and C002 should still exist
+        let result = runtime.gu(1, vec![Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C001")]).unwrap();
+        assert!(result.is_ok());
+        let result = runtime.gu(1, vec![Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C002")]).unwrap();
+        assert!(result.is_ok());
+
+        // C003 should be gone
+        let result = runtime.gu(1, vec![Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C003")]).unwrap();
+        assert!(result.is_not_found());
+    }
+
+    // --- Story 401.3: SYNC, LOG, STAT Tests ---
+
+    #[test]
+    fn test_sync_commits_like_chkp() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Insert a customer
+        let ssa = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C002");
+        runtime.isrt(1, vec![ssa], b"Customer Two".to_vec()).unwrap();
+
+        // SYNC — commit without checkpoint ID
+        let sync_call = DliCall::new(DliFunction::SYNC, 0);
+        let result = runtime.execute(&sync_call).unwrap();
+        assert!(result.is_ok());
+
+        // No checkpoint ID recorded
+        assert!(runtime.checkpoint_ids().is_empty());
+
+        // Insert C003 after SYNC
+        let ssa3 = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C003");
+        runtime.isrt(1, vec![ssa3], b"Customer Three".to_vec()).unwrap();
+
+        // ROLB — only C003 undone
+        let rolb_call = DliCall::new(DliFunction::ROLB, 0);
+        runtime.execute(&rolb_call).unwrap();
+
+        // C002 should still exist (committed by SYNC)
+        let result = runtime.gu(1, vec![Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C002")]).unwrap();
+        assert!(result.is_ok());
+
+        // C003 should be gone
+        let result = runtime.gu(1, vec![Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C003")]).unwrap();
+        assert!(result.is_not_found());
+    }
+
+    #[test]
+    fn test_log_writes_record() {
+        let mut runtime = create_io_pcb_runtime();
+
+        let log_call = DliCall::new(DliFunction::LOG, 0)
+            .with_io_area(b"Application log message".to_vec());
+        let result = runtime.execute(&log_call).unwrap();
+        assert!(result.is_ok());
+
+        assert_eq!(runtime.log_records().len(), 1);
+        assert_eq!(runtime.log_records()[0], b"Application log message");
+    }
+
+    #[test]
+    fn test_stat_returns_statistics() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Do some operations
+        runtime.gu(1, vec![Ssa::unqualified("CUSTOMER")]).unwrap();
+        runtime.gn(1, vec![Ssa::unqualified("CUSTOMER")]).unwrap();
+
+        let ssa = Ssa::qualified("CUSTOMER", "CUSTNO", crate::dli::SsaOperator::Eq, b"C002");
+        runtime.isrt(1, vec![ssa], b"New Customer".to_vec()).unwrap();
+
+        // Get statistics
+        let stat_call = DliCall::new(DliFunction::STAT, 0);
+        let result = runtime.execute(&stat_call).unwrap();
+        assert!(result.is_ok());
+
+        // Verify stats are populated
+        let stats = runtime.stats();
+        assert!(stats.total_calls >= 4); // GU + GN + ISRT + STAT
+        assert_eq!(stats.gu_calls, 1);
+        assert_eq!(stats.gn_calls, 1);
+        assert_eq!(stats.isrt_calls, 1);
+    }
+
+    #[test]
+    fn test_dli_function_system_service() {
+        assert!(DliFunction::CHKP.is_system_service());
+        assert!(DliFunction::SYNC.is_system_service());
+        assert!(DliFunction::ROLB.is_system_service());
+        assert!(DliFunction::LOG.is_system_service());
+        assert!(DliFunction::STAT.is_system_service());
+        assert!(!DliFunction::GU.is_system_service());
+        assert!(!DliFunction::ISRT.is_system_service());
+    }
+
+    #[test]
+    fn test_dli_function_parse_new_variants() {
+        assert_eq!(DliFunction::from_str("CHKP"), Some(DliFunction::CHKP));
+        assert_eq!(DliFunction::from_str("SYNC"), Some(DliFunction::SYNC));
+        assert_eq!(DliFunction::from_str("ROLB"), Some(DliFunction::ROLB));
+        assert_eq!(DliFunction::from_str("LOG"), Some(DliFunction::LOG));
+        assert_eq!(DliFunction::from_str("STAT"), Some(DliFunction::STAT));
+    }
+
+    #[test]
+    fn test_io_pcb_at_index_zero() {
+        let runtime = create_io_pcb_runtime();
+        let psb = runtime.get_psb().unwrap();
+
+        // I/O PCB should be at index 0
+        assert_eq!(psb.pcbs[0].pcb_type, crate::psb::PcbType::Io);
+        // DB PCB should be at index 1
+        assert_eq!(psb.pcbs[1].pcb_type, crate::psb::PcbType::Db);
+        assert_eq!(psb.pcbs[1].dbname, "TESTDB");
+    }
+
+    #[test]
+    fn test_multiple_chkp_ids() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Issue multiple checkpoints
+        for i in 1..=3 {
+            let id = format!("CHKP{:03}", i);
+            let chkp_call = DliCall::new(DliFunction::CHKP, 0)
+                .with_io_area(id.into_bytes());
+            runtime.execute(&chkp_call).unwrap();
+        }
+
+        assert_eq!(runtime.checkpoint_ids().len(), 3);
+    }
+
+    #[test]
+    fn test_store_snapshot_and_restore() {
+        let mut store = HierarchicalStore::new("TEST");
+        store.insert_root("SEG1", b"data1".to_vec());
+
+        // Take snapshot
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.len(), 1);
+
+        // Add more data
+        store.insert_root("SEG2", b"data2".to_vec());
+        assert_eq!(store.len(), 2);
+
+        // Restore
+        store.restore_from(&snapshot);
+        assert_eq!(store.len(), 1);
     }
 }

@@ -54,7 +54,7 @@ impl SegmentRecord {
 }
 
 /// In-memory hierarchical database store.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HierarchicalStore {
     /// Database name
     pub name: String,
@@ -471,6 +471,26 @@ impl HierarchicalStore {
     /// Get first root.
     pub fn first_root(&self) -> Option<&SegmentRecord> {
         self.roots.first().and_then(|&id| self.records.get(&id))
+    }
+
+    /// Create a snapshot of the current store state.
+    ///
+    /// The snapshot is a full clone of all data structures.
+    /// Used by CHKP/SYNC to record a commit point.
+    pub fn snapshot(&self) -> HierarchicalStore {
+        self.clone()
+    }
+
+    /// Restore the store from a previously taken snapshot.
+    ///
+    /// Replaces all data with the snapshot's data.
+    /// Used by ROLB to undo changes since last commit point.
+    pub fn restore_from(&mut self, snapshot: &HierarchicalStore) {
+        self.records = snapshot.records.clone();
+        self.by_segment = snapshot.by_segment.clone();
+        self.children = snapshot.children.clone();
+        self.roots = snapshot.roots.clone();
+        self.next_id = snapshot.next_id;
     }
 }
 

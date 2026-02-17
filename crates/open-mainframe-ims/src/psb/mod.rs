@@ -118,6 +118,21 @@ impl ProgramCommBlock {
         }
     }
 
+    /// Create a new I/O PCB for system service calls.
+    pub fn new_io() -> Self {
+        Self {
+            pcb_type: PcbType::Io,
+            dbname: String::new(),
+            procopt: ProcessingOptions::default(),
+            keylen: 0,
+            senseg: Vec::new(),
+            position: 0,
+            status: crate::StatusCode::Ok,
+            segment_level: 0,
+            key_feedback: Vec::new(),
+        }
+    }
+
     /// Create a new GSAM PCB.
     pub fn new_gsam(dbname: &str) -> Self {
         Self {

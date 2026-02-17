@@ -42,6 +42,16 @@ pub enum DliFunction {
     PCB,
     /// Terminate
     TERM,
+    /// Checkpoint — commit and record checkpoint ID
+    CHKP,
+    /// Sync — commit without checkpoint ID
+    SYNC,
+    /// Rollback — undo changes since last commit point
+    ROLB,
+    /// Log — write a log record
+    LOG,
+    /// Statistics — retrieve runtime statistics
+    STAT,
 }
 
 impl DliFunction {
@@ -59,6 +69,11 @@ impl DliFunction {
             "REPL" => Some(DliFunction::REPL),
             "PCB" | "SCHD" => Some(DliFunction::PCB),
             "TERM" => Some(DliFunction::TERM),
+            "CHKP" => Some(DliFunction::CHKP),
+            "SYNC" => Some(DliFunction::SYNC),
+            "ROLB" => Some(DliFunction::ROLB),
+            "LOG" => Some(DliFunction::LOG),
+            "STAT" => Some(DliFunction::STAT),
             _ => None,
         }
     }
@@ -78,6 +93,18 @@ impl DliFunction {
                 | DliFunction::GHU
                 | DliFunction::GHN
                 | DliFunction::GHNP
+        )
+    }
+
+    /// Check if this is a system service call (requires I/O PCB).
+    pub fn is_system_service(&self) -> bool {
+        matches!(
+            self,
+            DliFunction::CHKP
+                | DliFunction::SYNC
+                | DliFunction::ROLB
+                | DliFunction::LOG
+                | DliFunction::STAT
         )
     }
 }
