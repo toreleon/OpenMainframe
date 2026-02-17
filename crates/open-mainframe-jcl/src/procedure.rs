@@ -1,10 +1,11 @@
 //! Procedure expansion for JCL in-stream and cataloged procedures.
 //!
 //! The `ProcedureExpander` runs as a preprocessing pass after parsing,
-//! resolving `ExecType::Procedure` references by expanding in-stream
-//! procedure bodies with symbolic parameter substitution.
+//! resolving `ExecType::Procedure` references by expanding in-stream or
+//! cataloged procedure bodies with symbolic parameter substitution.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use open_mainframe_lang_core::Span;
 
@@ -12,11 +13,112 @@ use crate::ast::*;
 use crate::error::JclError;
 use crate::lexer::{tokenize_operands, Token};
 
+/// Maximum allowed procedure nesting depth (IBM standard).
+const MAX_NESTING_DEPTH: usize = 15;
+
+/// Trait for resolving procedure names to JCL text.
+///
+/// Implementations can load procedures from PDS directories on the filesystem,
+/// from in-memory stores (for testing), or from any other backend.
+pub trait ProcedureLibrary {
+    /// Look up a procedure by name and return its JCL text.
+    ///
+    /// Returns `None` if the procedure is not found in this library.
+    fn find_procedure(&self, name: &str) -> Option<String>;
+}
+
+/// Filesystem-based procedure library that searches PDS directories.
+///
+/// Resolves procedure names by searching directories in order,
+/// looking for files named `<PROCNAME>` or `<PROCNAME>.jcl`.
+pub struct FilesystemProcLib {
+    /// Directories to search, in order.
+    search_dirs: Vec<PathBuf>,
+}
+
+impl FilesystemProcLib {
+    /// Create a new filesystem procedure library.
+    ///
+    /// `base_dir` is the root directory for datasets (e.g., `datasets/`).
+    /// `jcllib_order` contains dataset names like `PROD.PROCLIB` which map
+    /// to directories like `datasets/PROD/PROCLIB/`.
+    pub fn new(base_dir: &Path, jcllib_order: &[String]) -> Self {
+        let search_dirs = jcllib_order
+            .iter()
+            .map(|dsn| {
+                let mut path = base_dir.to_path_buf();
+                for part in dsn.split('.') {
+                    path.push(part);
+                }
+                path
+            })
+            .collect();
+        Self { search_dirs }
+    }
+}
+
+impl ProcedureLibrary for FilesystemProcLib {
+    fn find_procedure(&self, name: &str) -> Option<String> {
+        for dir in &self.search_dirs {
+            // Try exact name
+            let path = dir.join(name);
+            if path.exists() {
+                return std::fs::read_to_string(&path).ok();
+            }
+            // Try with .jcl extension
+            let path_jcl = dir.join(format!("{}.jcl", name));
+            if path_jcl.exists() {
+                return std::fs::read_to_string(&path_jcl).ok();
+            }
+            // Try lowercase
+            let path_lower = dir.join(name.to_lowercase());
+            if path_lower.exists() {
+                return std::fs::read_to_string(&path_lower).ok();
+            }
+        }
+        None
+    }
+}
+
+/// In-memory procedure library for testing.
+pub struct InMemoryProcLib {
+    /// Map of procedure name → JCL text.
+    procedures: HashMap<String, String>,
+}
+
+impl InMemoryProcLib {
+    /// Create a new in-memory procedure library.
+    pub fn new() -> Self {
+        Self {
+            procedures: HashMap::new(),
+        }
+    }
+
+    /// Add a procedure to the library.
+    pub fn add(&mut self, name: &str, jcl: &str) {
+        self.procedures
+            .insert(name.to_uppercase(), jcl.to_string());
+    }
+}
+
+impl Default for InMemoryProcLib {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProcedureLibrary for InMemoryProcLib {
+    fn find_procedure(&self, name: &str) -> Option<String> {
+        self.procedures.get(&name.to_uppercase()).cloned()
+    }
+}
+
 /// Expands procedure references in a parsed JCL job.
 ///
-/// Resolves `ExecType::Procedure(name)` by looking up in-stream procedures,
-/// substituting symbolic parameters, and replacing the procedure call with
-/// the expanded steps.
+/// Resolves `ExecType::Procedure(name)` by looking up in-stream procedures
+/// or cataloged procedures from a `ProcedureLibrary`, substituting symbolic
+/// parameters, applying DD overrides, and replacing the procedure call with
+/// the expanded steps. Supports nesting up to 15 levels.
 pub struct ProcedureExpander {
     /// In-stream procedures available for expansion.
     in_stream_procs: HashMap<String, InStreamProc>,
@@ -24,6 +126,10 @@ pub struct ProcedureExpander {
     global_symbols: SymbolTable,
     /// Counter for generating temporary dataset names.
     temp_counter: u32,
+    /// Cataloged procedure library (optional).
+    proc_library: Option<Box<dyn ProcedureLibrary>>,
+    /// DD overrides from the calling JCL.
+    dd_overrides: Vec<DdOverride>,
 }
 
 impl ProcedureExpander {
@@ -36,7 +142,21 @@ impl ProcedureExpander {
             in_stream_procs,
             global_symbols,
             temp_counter: 0,
+            proc_library: None,
+            dd_overrides: Vec::new(),
         }
+    }
+
+    /// Set the cataloged procedure library for resolving external procedures.
+    pub fn with_library(mut self, library: Box<dyn ProcedureLibrary>) -> Self {
+        self.proc_library = Some(library);
+        self
+    }
+
+    /// Set DD overrides for procedure step expansion.
+    pub fn with_dd_overrides(mut self, overrides: Vec<DdOverride>) -> Self {
+        self.dd_overrides = overrides;
+        self
     }
 
     /// Expand all procedure references in a job.
@@ -49,6 +169,7 @@ impl ProcedureExpander {
         expanded_job.span = job.span;
         expanded_job.symbols = job.symbols.clone();
         expanded_job.in_stream_procs = job.in_stream_procs.clone();
+        expanded_job.jcllib_order = job.jcllib_order.clone();
 
         for step in &job.steps {
             match &step.exec {
@@ -56,8 +177,13 @@ impl ProcedureExpander {
                     expanded_job.add_step(step.clone());
                 }
                 ExecType::Procedure(proc_name) => {
-                    let expanded_steps =
-                        self.expand_procedure(proc_name, &step.params, &step.name, step.span)?;
+                    let expanded_steps = self.expand_procedure_recursive(
+                        proc_name,
+                        &step.params,
+                        &step.name,
+                        step.span,
+                        0, // depth
+                    )?;
                     for expanded_step in expanded_steps {
                         expanded_job.span = expanded_job.span.extend(expanded_step.span);
                         expanded_job.add_step(expanded_step);
@@ -69,21 +195,115 @@ impl ProcedureExpander {
         Ok(expanded_job)
     }
 
-    /// Expand a single procedure reference into its constituent steps.
-    fn expand_procedure(
+    /// Resolve a procedure by name — checks in-stream first, then cataloged library.
+    fn resolve_procedure(&self, proc_name: &str) -> Result<InStreamProc, JclError> {
+        // Check in-stream procedures first
+        if let Some(proc) = self.in_stream_procs.get(proc_name) {
+            return Ok(proc.clone());
+        }
+
+        // Check cataloged procedure library
+        if let Some(ref library) = self.proc_library {
+            if let Some(jcl_text) = library.find_procedure(proc_name) {
+                return self.parse_cataloged_proc(proc_name, &jcl_text);
+            }
+        }
+
+        Err(JclError::ParseError {
+            message: format!("Procedure '{}' not found", proc_name),
+        })
+    }
+
+    /// Parse a cataloged procedure JCL text into an InStreamProc.
+    ///
+    /// Cataloged procedures may or may not have PROC/PEND wrappers.
+    fn parse_cataloged_proc(
+        &self,
+        name: &str,
+        jcl_text: &str,
+    ) -> Result<InStreamProc, JclError> {
+        let mut defaults = SymbolTable::new();
+        let mut statements = Vec::new();
+
+        // Parse line by line
+        for line in jcl_text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with("//*") || trimmed.starts_with("/*") {
+                continue;
+            }
+            if !trimmed.starts_with("//") {
+                continue;
+            }
+            let content = &trimmed[2..];
+            if content.trim().is_empty() {
+                continue;
+            }
+
+            // Parse name and operation
+            let (stmt_name, rest) = parse_name_field(content);
+            let rest_trimmed = rest.trim_start();
+            if rest_trimmed.is_empty() {
+                continue;
+            }
+
+            let (operation, operands) = split_operation(rest_trimmed);
+            let operation_upper = operation.to_uppercase();
+
+            match operation_upper.as_str() {
+                "PROC" => {
+                    // Parse defaults from PROC statement
+                    for assignment in operands.split(',') {
+                        let assignment = assignment.trim();
+                        if assignment.is_empty() {
+                            continue;
+                        }
+                        if let Some(eq_pos) = assignment.find('=') {
+                            let k = assignment[..eq_pos].trim().to_uppercase();
+                            let v = assignment[eq_pos + 1..].trim().to_string();
+                            defaults.insert(k, v);
+                        }
+                    }
+                }
+                "PEND" => {
+                    // End of procedure
+                    break;
+                }
+                _ => {
+                    statements.push(ProcStatement {
+                        name: stmt_name,
+                        operation: operation_upper,
+                        operands: operands.to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(InStreamProc {
+            name: name.to_string(),
+            defaults,
+            statements,
+        })
+    }
+
+    /// Expand a procedure with nesting depth tracking.
+    fn expand_procedure_recursive(
         &mut self,
         proc_name: &str,
         exec_params: &ExecParams,
         caller_name: &Option<String>,
         span: Span,
+        depth: usize,
     ) -> Result<Vec<Step>, JclError> {
-        let proc = self
-            .in_stream_procs
-            .get(proc_name)
-            .ok_or_else(|| JclError::ParseError {
-                message: format!("Procedure '{}' not found", proc_name),
-            })?
-            .clone();
+        if depth >= MAX_NESTING_DEPTH {
+            return Err(JclError::ParseError {
+                message: format!(
+                    "Procedure nesting exceeds maximum depth of {}",
+                    MAX_NESTING_DEPTH
+                ),
+            });
+        }
+
+        let proc = self.resolve_procedure(proc_name)?;
 
         // Build effective symbol table:
         // 1. Start with global symbols (SET statements)
@@ -102,7 +322,8 @@ impl ProcedureExpander {
         let mut current_step: Option<Step> = None;
 
         for proc_stmt in &proc.statements {
-            let substituted_operands = substitute_symbols_with_table(&symbols, &proc_stmt.operands, &mut self.temp_counter);
+            let substituted_operands =
+                substitute_symbols_with_table(&symbols, &proc_stmt.operands, &mut self.temp_counter);
 
             match proc_stmt.operation.as_str() {
                 "EXEC" => {
@@ -113,64 +334,9 @@ impl ProcedureExpander {
 
                     // Parse the EXEC operands
                     let tokens = tokenize_operands(&substituted_operands)?;
-                    let mut idx = 0;
-                    let mut exec_type = None;
-                    let mut params = ExecParams::default();
+                    let (exec_type, params) = parse_exec_tokens(&tokens, proc_name)?;
 
-                    while idx < tokens.len() {
-                        if let Token::Ident(key) = &tokens[idx] {
-                            idx += 1;
-                            if idx < tokens.len() && matches!(tokens[idx], Token::Equals) {
-                                idx += 1;
-                                if idx < tokens.len() {
-                                    match key.as_str() {
-                                        "PGM" => {
-                                            if let Token::Ident(v) = &tokens[idx] {
-                                                exec_type =
-                                                    Some(ExecType::Program(v.clone()));
-                                            }
-                                        }
-                                        "PARM" => {
-                                            if let Token::String(v) = &tokens[idx] {
-                                                params.parm = Some(v.clone());
-                                            } else if let Token::Ident(v) = &tokens[idx] {
-                                                params.parm = Some(v.clone());
-                                            }
-                                        }
-                                        "REGION" => {
-                                            if let Token::Number(n) = &tokens[idx] {
-                                                params.region = Some(*n as u32);
-                                            }
-                                        }
-                                        _ => {
-                                            if let Token::Ident(v) | Token::String(v) =
-                                                &tokens[idx]
-                                            {
-                                                params.other.insert(key.clone(), v.clone());
-                                            }
-                                        }
-                                    }
-                                    idx += 1;
-                                }
-                            } else if exec_type.is_none() {
-                                exec_type = Some(ExecType::Procedure(key.clone()));
-                            }
-                        } else {
-                            idx += 1;
-                        }
-                        if idx < tokens.len() && matches!(tokens[idx], Token::Comma) {
-                            idx += 1;
-                        }
-                    }
-
-                    let exec_type = exec_type.ok_or_else(|| JclError::ParseError {
-                        message: format!(
-                            "EXEC in procedure '{}' missing PGM",
-                            proc_name
-                        ),
-                    })?;
-
-                    // Prefix step name with caller name if available
+                    // Check if this is a nested procedure call
                     let step_name = proc_stmt.name.as_ref().map(|n| {
                         if let Some(ref caller) = caller_name {
                             format!("{}.{}", caller, n)
@@ -179,13 +345,31 @@ impl ProcedureExpander {
                         }
                     });
 
-                    current_step = Some(Step {
-                        name: step_name,
-                        exec: exec_type,
-                        params,
-                        dd_statements: Vec::new(),
-                        span,
-                    });
+                    match &exec_type {
+                        ExecType::Procedure(nested_proc) => {
+                            // Recursively expand nested procedure
+                            let nested_steps = self.expand_procedure_recursive(
+                                nested_proc,
+                                &params,
+                                &step_name,
+                                span,
+                                depth + 1,
+                            )?;
+                            for ns in nested_steps {
+                                steps.push(ns);
+                            }
+                            // Don't set current_step since nested expansion already produced steps
+                        }
+                        ExecType::Program(_) => {
+                            current_step = Some(Step {
+                                name: step_name,
+                                exec: exec_type,
+                                params,
+                                dd_statements: Vec::new(),
+                                span,
+                            });
+                        }
+                    }
                 }
                 "DD" => {
                     if let Some(ref mut step) = current_step {
@@ -208,13 +392,131 @@ impl ProcedureExpander {
             steps.push(step);
         }
 
+        // Apply DD overrides
+        self.apply_dd_overrides(&mut steps);
+
         Ok(steps)
+    }
+
+    /// Apply DD overrides from the calling JCL to expanded steps.
+    fn apply_dd_overrides(&self, steps: &mut [Step]) {
+        for dd_override in &self.dd_overrides {
+            for step in steps.iter_mut() {
+                // Match step name — the override step_name may match the raw step name
+                // or the qualified name (caller.step)
+                let matches = step.name.as_ref().map_or(false, |name| {
+                    name == &dd_override.step_name
+                        || name.ends_with(&format!(".{}", dd_override.step_name))
+                });
+
+                if matches {
+                    // Look for existing DD with same name to replace
+                    let dd_name = &dd_override.dd.name;
+                    let mut found = false;
+                    for dd in step.dd_statements.iter_mut() {
+                        if dd.name == *dd_name {
+                            dd.definition = dd_override.dd.definition.clone();
+                            found = true;
+                            break;
+                        }
+                    }
+                    // If not found, add as new DD
+                    if !found {
+                        step.dd_statements.push(dd_override.dd.clone());
+                    }
+                }
+            }
+        }
     }
 }
 
+/// Parse EXEC tokens into ExecType and ExecParams.
+fn parse_exec_tokens(tokens: &[Token], context: &str) -> Result<(ExecType, ExecParams), JclError> {
+    let mut idx = 0;
+    let mut exec_type = None;
+    let mut params = ExecParams::default();
+
+    while idx < tokens.len() {
+        if let Token::Ident(key) = &tokens[idx] {
+            idx += 1;
+            if idx < tokens.len() && matches!(tokens[idx], Token::Equals) {
+                idx += 1;
+                if idx < tokens.len() {
+                    match key.as_str() {
+                        "PGM" => {
+                            if let Token::Ident(v) = &tokens[idx] {
+                                exec_type = Some(ExecType::Program(v.clone()));
+                            }
+                        }
+                        "PROC" => {
+                            if let Token::Ident(v) = &tokens[idx] {
+                                exec_type = Some(ExecType::Procedure(v.clone()));
+                            }
+                        }
+                        "PARM" => {
+                            if let Token::String(v) = &tokens[idx] {
+                                params.parm = Some(v.clone());
+                            } else if let Token::Ident(v) = &tokens[idx] {
+                                params.parm = Some(v.clone());
+                            }
+                        }
+                        "REGION" => {
+                            if let Token::Number(n) = &tokens[idx] {
+                                params.region = Some(*n as u32);
+                            }
+                        }
+                        _ => {
+                            if let Token::Ident(v) | Token::String(v) = &tokens[idx] {
+                                params.other.insert(key.clone(), v.clone());
+                            }
+                        }
+                    }
+                    idx += 1;
+                }
+            } else if exec_type.is_none() {
+                // Bare name = procedure name
+                exec_type = Some(ExecType::Procedure(key.clone()));
+            }
+        } else {
+            idx += 1;
+        }
+        if idx < tokens.len() && matches!(tokens[idx], Token::Comma) {
+            idx += 1;
+        }
+    }
+
+    let exec_type = exec_type.ok_or_else(|| JclError::ParseError {
+        message: format!("EXEC in procedure '{}' missing PGM or PROC", context),
+    })?;
+
+    Ok((exec_type, params))
+}
+
+/// Parse name field from JCL content (used for cataloged procedure parsing).
+fn parse_name_field(content: &str) -> (Option<String>, &str) {
+    if content.is_empty() || content.starts_with(' ') {
+        return (None, content.trim_start());
+    }
+    let name_end = content
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '@' && c != '#' && c != '$')
+        .unwrap_or(content.len())
+        .min(8);
+    let name = &content[..name_end];
+    let rest = &content[name_end..];
+    (Some(name.to_string()), rest)
+}
+
+/// Split operation from operands (used for cataloged procedure parsing).
+fn split_operation(content: &str) -> (&str, &str) {
+    let op_end = content
+        .find(|c: char| c.is_whitespace())
+        .unwrap_or(content.len());
+    let operation = &content[..op_end];
+    let operands = content[op_end..].trim_start();
+    (operation, operands)
+}
+
 /// Perform symbolic substitution on text using a given symbol table.
-///
-/// This is a standalone function used by the procedure expander.
 fn substitute_symbols_with_table(
     symbols: &SymbolTable,
     text: &str,
@@ -240,9 +542,9 @@ fn substitute_symbols_with_table(
                     i += 1;
                 }
                 *temp_counter += 1;
-                let temp_name = format!("SYS{:05}.T{:06}.TEMP", *temp_counter, *temp_counter);
+                let temp_name =
+                    format!("SYS{:05}.T{:06}.TEMP", *temp_counter, *temp_counter);
                 result.push_str(&temp_name);
-                // Handle period after temp name
                 if i < chars.len() && chars[i] == '.' {
                     i += 1;
                     if i < chars.len() && chars[i] == '.' {
@@ -306,7 +608,6 @@ fn parse_dd_from_operands(
         });
     }
 
-    // Check for DUMMY
     if matches!(&tokens[0], Token::Ident(s) if s == "DUMMY") {
         return Ok(DdStatement {
             name: dd_name.to_string(),
@@ -315,7 +616,6 @@ fn parse_dd_from_operands(
         });
     }
 
-    // Check for inline data (*)
     if matches!(&tokens[0], Token::Asterisk) {
         return Ok(DdStatement {
             name: dd_name.to_string(),
@@ -327,7 +627,6 @@ fn parse_dd_from_operands(
         });
     }
 
-    // Check for SYSOUT
     if matches!(&tokens[0], Token::Ident(s) if s == "SYSOUT") {
         let mut class = '*';
         let mut idx = 0;
@@ -360,7 +659,7 @@ fn parse_dd_from_operands(
         });
     }
 
-    // Parse as dataset DD (simplified for procedure expansion)
+    // Parse as dataset DD
     let mut dsn = String::new();
     let mut disp = None;
     let mut idx = 0;
@@ -373,7 +672,6 @@ fn parse_dd_from_operands(
                 if idx < tokens.len() {
                     match key.as_str() {
                         "DSN" | "DSNAME" => {
-                            // Collect DSN value
                             while idx < tokens.len() {
                                 match &tokens[idx] {
                                     Token::Ident(s) => dsn.push_str(s),
@@ -407,7 +705,6 @@ fn parse_dd_from_operands(
                             continue;
                         }
                         "DISP" => {
-                            // Simplified disposition parsing
                             let mut status = DispStatus::Shr;
                             if matches!(tokens[idx], Token::LParen) {
                                 idx += 1;
@@ -422,7 +719,6 @@ fn parse_dd_from_operands(
                                 };
                                 idx += 1;
                             }
-                            // Skip remaining DISP params
                             while idx < tokens.len() && !matches!(tokens[idx], Token::RParen) {
                                 idx += 1;
                             }
@@ -503,6 +799,338 @@ mod tests {
         assert_eq!(result, "PGM=&UNKNOWN");
     }
 
+    // === Story 102.1: JCLLIB parsing (tested in parser module) ===
+
+    // === Story 102.2: ProcedureLibrary trait ===
+
+    #[test]
+    fn test_in_memory_proc_lib() {
+        let mut lib = InMemoryProcLib::new();
+        lib.add(
+            "MYPROC",
+            "//STEP1  EXEC PGM=MYPROG\n//INPUT  DD DSN=DEFAULT.DATA,DISP=SHR\n",
+        );
+
+        assert!(lib.find_procedure("MYPROC").is_some());
+        assert!(lib.find_procedure("myproc").is_some()); // case-insensitive
+        assert!(lib.find_procedure("NOTFOUND").is_none());
+    }
+
+    #[test]
+    fn test_filesystem_proc_lib() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join("jcl_proc_lib_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Create PROD/PROCLIB directory
+        let proclib_dir = temp_dir.join("PROD").join("PROCLIB");
+        fs::create_dir_all(&proclib_dir).unwrap();
+
+        // Create a procedure file
+        fs::write(
+            proclib_dir.join("MYPROC"),
+            "//STEP1  EXEC PGM=MYPROG\n//INPUT  DD DSN=DEFAULT.DATA,DISP=SHR\n",
+        )
+        .unwrap();
+
+        let lib = FilesystemProcLib::new(
+            &temp_dir,
+            &["PROD.PROCLIB".to_string()],
+        );
+
+        assert!(lib.find_procedure("MYPROC").is_some());
+        assert!(lib.find_procedure("NOTFOUND").is_none());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_filesystem_proc_lib_search_order() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join("jcl_proc_lib_order_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Create two proc libraries
+        let lib1 = temp_dir.join("PROD").join("PROCLIB");
+        let lib2 = temp_dir.join("TEST").join("PROCLIB");
+        fs::create_dir_all(&lib1).unwrap();
+        fs::create_dir_all(&lib2).unwrap();
+
+        // MYPROC only in TEST.PROCLIB
+        fs::write(
+            lib2.join("MYPROC"),
+            "//STEP1  EXEC PGM=TESTPROG\n",
+        )
+        .unwrap();
+
+        let lib = FilesystemProcLib::new(
+            &temp_dir,
+            &["PROD.PROCLIB".to_string(), "TEST.PROCLIB".to_string()],
+        );
+
+        // Should find it in the second library
+        let jcl = lib.find_procedure("MYPROC");
+        assert!(jcl.is_some());
+        assert!(jcl.unwrap().contains("TESTPROG"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    // === Story 102.2: Cataloged procedure expansion ===
+
+    #[test]
+    fn test_expand_cataloged_procedure() {
+        let mut lib = InMemoryProcLib::new();
+        lib.add(
+            "MYPROC",
+            "//MYPROC PROC HLQ=TEST\n//STEP1  EXEC PGM=MYPROG\n//INPUT  DD DSN=&HLQ..DATA,DISP=SHR\n// PEND\n",
+        );
+
+        let in_stream_procs = HashMap::new();
+        let global_symbols = SymbolTable::new();
+        let mut expander = ProcedureExpander::new(in_stream_procs, global_symbols)
+            .with_library(Box::new(lib));
+
+        let mut job = Job::new("TESTJOB");
+        let mut step = Step::procedure(Some("RUN".to_string()), "MYPROC");
+        step.params.other.insert("HLQ".to_string(), "PROD".to_string());
+        job.add_step(step);
+
+        let expanded = expander.expand(&job).unwrap();
+
+        assert_eq!(expanded.steps.len(), 1);
+        if let ExecType::Program(ref pgm) = expanded.steps[0].exec {
+            assert_eq!(pgm, "MYPROG");
+        } else {
+            panic!("Expected Program after expansion");
+        }
+
+        let dd = &expanded.steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "PROD.DATA");
+        } else {
+            panic!("Expected Dataset");
+        }
+    }
+
+    // === Story 102.3: DD overrides ===
+
+    #[test]
+    fn test_dd_override_replace() {
+        let mut procs = HashMap::new();
+        procs.insert(
+            "MYPROC".to_string(),
+            InStreamProc {
+                name: "MYPROC".to_string(),
+                defaults: SymbolTable::new(),
+                statements: vec![
+                    ProcStatement {
+                        name: Some("STEP1".to_string()),
+                        operation: "EXEC".to_string(),
+                        operands: "PGM=MYPROG".to_string(),
+                    },
+                    ProcStatement {
+                        name: Some("INPUT".to_string()),
+                        operation: "DD".to_string(),
+                        operands: "DSN=DEFAULT.DATA,DISP=SHR".to_string(),
+                    },
+                ],
+            },
+        );
+
+        let override_dd = DdStatement::dataset("INPUT", "OVERRIDE.DATA");
+        let overrides = vec![DdOverride {
+            step_name: "STEP1".to_string(),
+            dd: override_dd,
+        }];
+
+        let mut expander = ProcedureExpander::new(procs, SymbolTable::new())
+            .with_dd_overrides(overrides);
+
+        let mut job = Job::new("TESTJOB");
+        job.add_step(Step::procedure(Some("RUN".to_string()), "MYPROC"));
+        job.in_stream_procs = expander.in_stream_procs.clone();
+
+        let expanded = expander.expand(&job).unwrap();
+
+        let dd = &expanded.steps[0].dd_statements[0];
+        assert_eq!(dd.name, "INPUT");
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "OVERRIDE.DATA");
+        } else {
+            panic!("Expected Dataset");
+        }
+    }
+
+    #[test]
+    fn test_dd_override_add_new() {
+        let mut procs = HashMap::new();
+        procs.insert(
+            "MYPROC".to_string(),
+            InStreamProc {
+                name: "MYPROC".to_string(),
+                defaults: SymbolTable::new(),
+                statements: vec![
+                    ProcStatement {
+                        name: Some("STEP1".to_string()),
+                        operation: "EXEC".to_string(),
+                        operands: "PGM=MYPROG".to_string(),
+                    },
+                    ProcStatement {
+                        name: Some("INPUT".to_string()),
+                        operation: "DD".to_string(),
+                        operands: "DSN=DEFAULT.DATA,DISP=SHR".to_string(),
+                    },
+                ],
+            },
+        );
+
+        let extra_dd = DdStatement::dataset("EXTRA", "NEW.DATA");
+        let overrides = vec![DdOverride {
+            step_name: "STEP1".to_string(),
+            dd: extra_dd,
+        }];
+
+        let mut expander = ProcedureExpander::new(procs, SymbolTable::new())
+            .with_dd_overrides(overrides);
+
+        let mut job = Job::new("TESTJOB");
+        job.add_step(Step::procedure(Some("RUN".to_string()), "MYPROC"));
+        job.in_stream_procs = expander.in_stream_procs.clone();
+
+        let expanded = expander.expand(&job).unwrap();
+
+        // Should have original INPUT DD plus new EXTRA DD
+        assert_eq!(expanded.steps[0].dd_statements.len(), 2);
+        assert_eq!(expanded.steps[0].dd_statements[0].name, "INPUT");
+        assert_eq!(expanded.steps[0].dd_statements[1].name, "EXTRA");
+        if let DdDefinition::Dataset(ref def) = expanded.steps[0].dd_statements[1].definition {
+            assert_eq!(def.dsn, "NEW.DATA");
+        } else {
+            panic!("Expected Dataset");
+        }
+    }
+
+    // === Story 102.4: Nested procedure expansion ===
+
+    #[test]
+    fn test_nested_procedure_expansion() {
+        let mut procs = HashMap::new();
+
+        // PROC-C is the innermost
+        procs.insert(
+            "PROCC".to_string(),
+            InStreamProc {
+                name: "PROCC".to_string(),
+                defaults: {
+                    let mut d = SymbolTable::new();
+                    d.insert("MSG".to_string(), "HELLO".to_string());
+                    d
+                },
+                statements: vec![
+                    ProcStatement {
+                        name: Some("STEP1".to_string()),
+                        operation: "EXEC".to_string(),
+                        operands: "PGM=PROGC".to_string(),
+                    },
+                ],
+            },
+        );
+
+        // PROC-B calls PROC-C
+        procs.insert(
+            "PROCB".to_string(),
+            InStreamProc {
+                name: "PROCB".to_string(),
+                defaults: SymbolTable::new(),
+                statements: vec![
+                    ProcStatement {
+                        name: Some("STEP1".to_string()),
+                        operation: "EXEC".to_string(),
+                        operands: "PROCC".to_string(), // Bare name = procedure call
+                    },
+                ],
+            },
+        );
+
+        // PROC-A calls PROC-B
+        procs.insert(
+            "PROCA".to_string(),
+            InStreamProc {
+                name: "PROCA".to_string(),
+                defaults: SymbolTable::new(),
+                statements: vec![
+                    ProcStatement {
+                        name: Some("STEP1".to_string()),
+                        operation: "EXEC".to_string(),
+                        operands: "PROCB".to_string(),
+                    },
+                ],
+            },
+        );
+
+        let mut expander = ProcedureExpander::new(procs, SymbolTable::new());
+
+        let mut job = Job::new("TESTJOB");
+        job.add_step(Step::procedure(Some("RUN".to_string()), "PROCA"));
+        job.in_stream_procs = expander.in_stream_procs.clone();
+
+        let expanded = expander.expand(&job).unwrap();
+
+        // Should resolve all the way down to PGM=PROGC
+        assert_eq!(expanded.steps.len(), 1);
+        if let ExecType::Program(ref pgm) = expanded.steps[0].exec {
+            assert_eq!(pgm, "PROGC");
+        } else {
+            panic!("Expected Program PROGC after nested expansion");
+        }
+    }
+
+    #[test]
+    fn test_nesting_depth_limit() {
+        // Create a chain that exceeds 15 levels
+        let mut procs = HashMap::new();
+        for i in 0..=MAX_NESTING_DEPTH {
+            let name = format!("PROC{}", i);
+            let next = if i < MAX_NESTING_DEPTH {
+                format!("PROC{}", i + 1)
+            } else {
+                "PGM=FINAL".to_string()
+            };
+            procs.insert(
+                name.clone(),
+                InStreamProc {
+                    name: name.clone(),
+                    defaults: SymbolTable::new(),
+                    statements: vec![ProcStatement {
+                        name: Some("STEP1".to_string()),
+                        operation: "EXEC".to_string(),
+                        operands: next,
+                    }],
+                },
+            );
+        }
+
+        let mut expander = ProcedureExpander::new(procs, SymbolTable::new());
+
+        let mut job = Job::new("TESTJOB");
+        job.add_step(Step::procedure(Some("RUN".to_string()), "PROC0"));
+        job.in_stream_procs = expander.in_stream_procs.clone();
+
+        let result = expander.expand(&job);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("maximum depth of 15"),
+            "Error should mention depth limit: {}",
+            err
+        );
+    }
+
+    // === In-stream procedure expansion (from Batch 5) ===
+
     #[test]
     fn test_expand_in_stream_procedure() {
         let mut procs = HashMap::new();
@@ -533,13 +1161,10 @@ mod tests {
         let global_symbols = SymbolTable::new();
         let mut expander = ProcedureExpander::new(procs, global_symbols);
 
-        // Build a job with a procedure call
         let mut job = Job::new("TESTJOB");
         let mut step = Step::procedure(Some("RUN".to_string()), "MYPROC");
         step.params.other.insert("HLQ".to_string(), "PROD".to_string());
         job.add_step(step);
-
-        // Also give the job the in_stream_procs
         job.in_stream_procs = expander.in_stream_procs.clone();
 
         let expanded = expander.expand(&job).unwrap();
@@ -551,7 +1176,6 @@ mod tests {
             panic!("Expected Program after expansion");
         }
 
-        // Check DD has expanded DSN
         assert_eq!(expanded.steps[0].dd_statements.len(), 1);
         if let DdDefinition::Dataset(ref def) = expanded.steps[0].dd_statements[0].definition {
             assert_eq!(def.dsn, "PROD.DATA");
@@ -590,7 +1214,6 @@ mod tests {
         let global_symbols = SymbolTable::new();
         let mut expander = ProcedureExpander::new(procs, global_symbols);
 
-        // Build a job calling procedure with NO overrides
         let mut job = Job::new("TESTJOB");
         let step = Step::procedure(Some("RUN".to_string()), "MYPROC");
         job.add_step(step);

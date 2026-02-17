@@ -52,6 +52,22 @@ pub struct Job {
     pub symbols: SymbolTable,
     /// In-stream procedures defined in this job (PROC...PEND blocks).
     pub in_stream_procs: HashMap<String, InStreamProc>,
+    /// JCLLIB ORDER — procedure library search order (dataset names).
+    pub jcllib_order: Vec<String>,
+    /// DD overrides for procedure steps (stepname.ddname → DdStatement).
+    pub dd_overrides: Vec<DdOverride>,
+}
+
+/// A DD override for a procedure step.
+///
+/// When a calling JCL specifies `//STEP1.INPUT DD DSN=OVERRIDE.DATA`,
+/// this overrides or adds the INPUT DD on STEP1 within the procedure.
+#[derive(Debug, Clone)]
+pub struct DdOverride {
+    /// The procedure step name to apply the override to.
+    pub step_name: String,
+    /// The DD statement (name is the DD name, definition is the override).
+    pub dd: DdStatement,
 }
 
 impl AstNode for Job {
@@ -354,6 +370,8 @@ impl Job {
             span: Span::dummy(),
             symbols: SymbolTable::new(),
             in_stream_procs: HashMap::new(),
+            jcllib_order: Vec::new(),
+            dd_overrides: Vec::new(),
         }
     }
 

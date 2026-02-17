@@ -27,6 +27,10 @@ pub struct Parser<'a> {
     in_stream_procs: HashMap<String, InStreamProc>,
     /// Counter for generating temporary dataset names.
     temp_counter: u32,
+    /// JCLLIB ORDER — procedure library search order.
+    jcllib_order: Vec<String>,
+    /// DD overrides for procedure steps (stepname.ddname).
+    dd_overrides: Vec<DdOverride>,
 }
 
 impl<'a> Parser<'a> {
@@ -40,6 +44,8 @@ impl<'a> Parser<'a> {
             symbols: SymbolTable::new(),
             in_stream_procs: HashMap::new(),
             temp_counter: 0,
+            jcllib_order: Vec::new(),
+            dd_overrides: Vec::new(),
         }
     }
 
@@ -102,7 +108,37 @@ impl<'a> Parser<'a> {
                     job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
                     self.skip_proc_block()?;
                 }
-                "IF" | "ENDIF" | "INCLUDE" | "JCLLIB" => {
+                "JCLLIB" => {
+                    // Already processed in first pass, skip
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    self.current += 1;
+                }
+                "DD" => {
+                    // DD statement outside of a step — could be a procedure DD override
+                    // Format: //STEP1.INPUT DD DSN=OVERRIDE.DATA,DISP=SHR
+                    let dd_name = stmt.name.clone().unwrap_or_default();
+                    if dd_name.contains('.') {
+                        // This is a DD override for a procedure step
+                        let parts: Vec<&str> = dd_name.splitn(2, '.').collect();
+                        let step_name = parts[0].to_string();
+                        let override_dd_name = parts[1].to_string();
+                        let dd_span = Span::main(stmt.byte_offset, stmt.byte_end);
+                        let raw_operands = stmt.operands.clone();
+                        let substituted_operands = self.substitute_symbols(&raw_operands);
+                        let tokens = tokenize_operands(&substituted_operands)?;
+
+                        let dd = self.parse_dd_from_tokens(&override_dd_name, &tokens, dd_span)?;
+                        self.dd_overrides.push(DdOverride {
+                            step_name,
+                            dd,
+                        });
+                        job.span = job.span.extend(dd_span);
+                    } else {
+                        job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    }
+                    self.current += 1;
+                }
+                "IF" | "ENDIF" | "INCLUDE" => {
                     // Skip these for now but extend span
                     job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
                     self.current += 1;
@@ -119,14 +155,16 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Transfer collected symbols and procs to the job
+        // Transfer collected symbols, procs, jcllib, and overrides to the job
         job.symbols = self.symbols.clone();
         job.in_stream_procs = self.in_stream_procs.clone();
+        job.jcllib_order = self.jcllib_order.clone();
+        job.dd_overrides = self.dd_overrides.clone();
 
         Ok(job)
     }
 
-    /// First pass: collect SET statement values and PROC/PEND blocks.
+    /// First pass: collect SET statement values, JCLLIB ORDER, and PROC/PEND blocks.
     fn collect_symbols_and_procs(&mut self) -> Result<(), JclError> {
         let mut idx = 1; // Skip JOB statement
         while idx < self.statements.len() {
@@ -135,6 +173,11 @@ impl<'a> Parser<'a> {
                 "SET" => {
                     let operands = stmt.operands.clone();
                     self.parse_set_operands(&operands)?;
+                    idx += 1;
+                }
+                "JCLLIB" => {
+                    let operands = stmt.operands.clone();
+                    self.jcllib_order = Self::parse_jcllib_operands(&operands);
                     idx += 1;
                 }
                 "PROC" => {
@@ -252,6 +295,95 @@ impl<'a> Parser<'a> {
         }
         Err(JclError::ParseError {
             message: "PROC without matching PEND".to_string(),
+        })
+    }
+
+    /// Parse JCLLIB ORDER operands into a list of library dataset names.
+    ///
+    /// Handles: `ORDER=(PROD.PROCLIB,TEST.PROCLIB)` or `ORDER=SINGLE.PROCLIB`
+    fn parse_jcllib_operands(operands: &str) -> Vec<String> {
+        let mut libs = Vec::new();
+        // Look for ORDER= keyword
+        let upper = operands.to_uppercase();
+        if let Some(pos) = upper.find("ORDER=") {
+            let value_start = pos + 6;
+            let rest = &operands[value_start..].trim();
+            if rest.starts_with('(') {
+                // Multiple libraries in parens
+                let end = rest.find(')').unwrap_or(rest.len());
+                let inner = &rest[1..end];
+                for lib in inner.split(',') {
+                    let lib = lib.trim();
+                    if !lib.is_empty() {
+                        libs.push(lib.to_string());
+                    }
+                }
+            } else {
+                // Single library
+                let end = rest
+                    .find(|c: char| c == ',' || c.is_whitespace())
+                    .unwrap_or(rest.len());
+                let lib = rest[..end].trim();
+                if !lib.is_empty() {
+                    libs.push(lib.to_string());
+                }
+            }
+        }
+        libs
+    }
+
+    /// Parse a DD statement from pre-tokenized tokens (for DD overrides).
+    fn parse_dd_from_tokens(
+        &self,
+        dd_name: &str,
+        tokens: &[Token],
+        span: Span,
+    ) -> Result<DdStatement, JclError> {
+        if tokens.is_empty() {
+            return Ok(DdStatement {
+                name: dd_name.to_string(),
+                definition: DdDefinition::Dummy,
+                span,
+            });
+        }
+
+        if matches!(&tokens[0], Token::Ident(s) if s == "DUMMY") {
+            return Ok(DdStatement {
+                name: dd_name.to_string(),
+                definition: DdDefinition::Dummy,
+                span,
+            });
+        }
+
+        if matches!(&tokens[0], Token::Asterisk) {
+            return Ok(DdStatement {
+                name: dd_name.to_string(),
+                definition: DdDefinition::Inline(InlineDef {
+                    delimiter: None,
+                    data: Vec::new(),
+                }),
+                span,
+            });
+        }
+
+        if matches!(&tokens[0], Token::Ident(s) if s == "SYSOUT") {
+            let class = self.parse_sysout_class(tokens)?;
+            return Ok(DdStatement {
+                name: dd_name.to_string(),
+                definition: DdDefinition::Sysout(SysoutDef {
+                    class,
+                    writer: None,
+                    form: None,
+                }),
+                span,
+            });
+        }
+
+        let def = self.parse_dataset_def(tokens)?;
+        Ok(DdStatement {
+            name: dd_name.to_string(),
+            definition: DdDefinition::Dataset(def),
+            span,
         })
     }
 
