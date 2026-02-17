@@ -29,6 +29,7 @@ mod btree;
 mod cluster;
 mod esds;
 mod ksds;
+pub mod lds;
 mod rrds;
 
 pub use aix::{AixDefinition, AlternateIndex, VsamPath};
@@ -36,4 +37,5 @@ pub use btree::{BPlusTree, DEFAULT_ORDER};
 pub use cluster::{ClusterParams, KeySpec, VsamCluster, VsamType};
 pub use esds::{Esds, EsdsResult};
 pub use ksds::{FileStatus, Ksds, KsdsResult};
+pub use lds::{Lds, LDS_PAGE_SIZE};
 pub use rrds::{Rrds, RrdsResult};

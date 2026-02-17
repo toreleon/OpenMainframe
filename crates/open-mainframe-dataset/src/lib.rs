@@ -31,6 +31,7 @@ pub mod catalog;
 pub mod error;
 pub mod gdg;
 pub mod idcams;
+pub mod locking;
 pub mod pds;
 pub mod qsam;
 pub mod types;
@@ -40,6 +41,7 @@ pub use catalog::{Catalog, CatalogEntry};
 pub use error::DatasetError;
 pub use gdg::{GdgBase, GdgGeneration, GdgGenerationInfo, GdgListInfo, GdgOptions, GenerationNumber};
 pub use idcams::{Idcams, IdcamsCommand, IdcamsResult};
+pub use locking::{DatasetLockManager, LockEntry, LockManager, LockMode};
 pub use pds::{IspfStats, Pds, PdsMember};
 pub use qsam::{read_all_records, write_records, OpenMode, QsamReader, QsamWriter};
 pub use types::{
@@ -47,5 +49,6 @@ pub use types::{
 };
 pub use vsam::{
     AixDefinition, AlternateIndex, BPlusTree, ClusterParams, Esds, EsdsResult, FileStatus, KeySpec,
-    Ksds, KsdsResult, Rrds, RrdsResult, VsamCluster, VsamPath, VsamType, DEFAULT_ORDER,
+    Ksds, KsdsResult, Lds, Rrds, RrdsResult, VsamCluster, VsamPath, VsamType, DEFAULT_ORDER,
+    LDS_PAGE_SIZE,
 };
