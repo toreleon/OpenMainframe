@@ -91,3 +91,13 @@
   - crates/open-mainframe/src/main.rs (updated — Assess variant in Commands enum + dispatch)
   - crates/open-mainframe/Cargo.toml (updated — added open-mainframe-assess dependency)
 - Notes: Wires existing open-mainframe-assess crate (Scanner, Analyzer, Report) into the CLI. `assess scan <dir>` discovers COBOL files, runs analysis, produces aggregated report. `assess file <path>` analyzes a single file. Both support --format json for agent tool integration. Scan supports -I for copybook paths, --pattern for glob filtering, --no-recursive. Compiles cleanly with cargo check.
+
+## Batch 8: Assessment Agent (E-400)
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - agent/src/nodes/assess.py (assessment node with assess_scan + assess_file tools)
+  - agent/src/nodes/router.py (updated — ASSESS intent routes to assess node, all 6 intents now have dedicated nodes)
+  - agent/src/nodes/__init__.py (updated — exports assess_node)
+  - agent/src/agent.py (updated — assess node added, full graph complete: router → 6 capability nodes + ToolNode)
+- Notes: Completes the full agent graph. All 6 capability nodes are wired: assess, compile, execute, explain, dataset, chat. Router dispatches all intents to dedicated nodes — no more chat fallback for unhandled intents. Assess node presents executive summaries, groups findings by category, and offers drill-down from scan to individual files.

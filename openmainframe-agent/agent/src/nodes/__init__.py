@@ -5,6 +5,7 @@ Each node handles a specific intent category dispatched by the router.
 
 from .router import router_node
 from .chat import chat_node
+from .assess import assess_node
 from .compile import compile_node
 from .execute import execute_node
 from .explain import explain_node
@@ -13,6 +14,7 @@ from .dataset import dataset_node
 __all__ = [
     "router_node",
     "chat_node",
+    "assess_node",
     "compile_node",
     "execute_node",
     "explain_node",
