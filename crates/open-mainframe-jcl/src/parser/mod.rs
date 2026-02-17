@@ -83,77 +83,9 @@ impl<'a> Parser<'a> {
         // Reset to parse steps
         self.current = 1; // After JOB statement
 
-        // Parse steps (EXEC + DD statements)
-        while self.current < self.statements.len() {
-            let stmt = &self.statements[self.current];
-            match stmt.operation.as_str() {
-                "EXEC" => {
-                    let step = self.parse_step()?;
-                    // Extend job span to cover this step
-                    job.span = job.span.extend(step.span);
-                    job.add_step(step);
-                }
-                "NULL" => {
-                    // Null statement marks end of JCL — extend span to cover it
-                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
-                    break;
-                }
-                "SET" => {
-                    // Already processed in first pass, skip
-                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
-                    self.current += 1;
-                }
-                "PROC" => {
-                    // Skip PROC/PEND blocks (already collected)
-                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
-                    self.skip_proc_block()?;
-                }
-                "JCLLIB" => {
-                    // Already processed in first pass, skip
-                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
-                    self.current += 1;
-                }
-                "DD" => {
-                    // DD statement outside of a step — could be a procedure DD override
-                    // Format: //STEP1.INPUT DD DSN=OVERRIDE.DATA,DISP=SHR
-                    let dd_name = stmt.name.clone().unwrap_or_default();
-                    if dd_name.contains('.') {
-                        // This is a DD override for a procedure step
-                        let parts: Vec<&str> = dd_name.splitn(2, '.').collect();
-                        let step_name = parts[0].to_string();
-                        let override_dd_name = parts[1].to_string();
-                        let dd_span = Span::main(stmt.byte_offset, stmt.byte_end);
-                        let raw_operands = stmt.operands.clone();
-                        let substituted_operands = self.substitute_symbols(&raw_operands);
-                        let tokens = tokenize_operands(&substituted_operands)?;
-
-                        let dd = self.parse_dd_from_tokens(&override_dd_name, &tokens, dd_span)?;
-                        self.dd_overrides.push(DdOverride {
-                            step_name,
-                            dd,
-                        });
-                        job.span = job.span.extend(dd_span);
-                    } else {
-                        job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
-                    }
-                    self.current += 1;
-                }
-                "IF" | "ENDIF" | "INCLUDE" => {
-                    // Skip these for now but extend span
-                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
-                    self.current += 1;
-                }
-                _ => {
-                    // Unexpected statement
-                    return Err(JclError::ParseError {
-                        message: format!(
-                            "Unexpected {} statement at line {}",
-                            stmt.operation, stmt.line
-                        ),
-                    });
-                }
-            }
-        }
+        // Parse entries (EXEC + DD statements, IF/THEN/ELSE/ENDIF)
+        let entries = self.parse_entries(&mut job, 0)?;
+        job.entries = entries;
 
         // Transfer collected symbols, procs, jcllib, and overrides to the job
         job.symbols = self.symbols.clone();
@@ -576,6 +508,349 @@ impl<'a> Parser<'a> {
         }
 
         result
+    }
+
+    /// Parse job entries until a terminator is reached.
+    ///
+    /// `depth` tracks IF nesting (max 15). Returns entries and stops at
+    /// NULL, ELSE, ENDIF, or end of statements.
+    fn parse_entries(
+        &mut self,
+        job: &mut Job,
+        depth: usize,
+    ) -> Result<Vec<JobEntry>, JclError> {
+        let mut entries = Vec::new();
+
+        while self.current < self.statements.len() {
+            let stmt = &self.statements[self.current];
+            match stmt.operation.as_str() {
+                "EXEC" => {
+                    let step = self.parse_step()?;
+                    job.span = job.span.extend(step.span);
+                    entries.push(JobEntry::Step(Box::new(step)));
+                }
+                "NULL" => {
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    break;
+                }
+                "SET" => {
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    self.current += 1;
+                }
+                "PROC" => {
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    self.skip_proc_block()?;
+                }
+                "JCLLIB" => {
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    self.current += 1;
+                }
+                "DD" => {
+                    let dd_name = stmt.name.clone().unwrap_or_default();
+                    if dd_name.contains('.') {
+                        let parts: Vec<&str> = dd_name.splitn(2, '.').collect();
+                        let step_name = parts[0].to_string();
+                        let override_dd_name = parts[1].to_string();
+                        let dd_span = Span::main(stmt.byte_offset, stmt.byte_end);
+                        let raw_operands = stmt.operands.clone();
+                        let substituted_operands = self.substitute_symbols(&raw_operands);
+                        let tokens = tokenize_operands(&substituted_operands)?;
+
+                        let dd = self.parse_dd_from_tokens(&override_dd_name, &tokens, dd_span)?;
+                        self.dd_overrides.push(DdOverride {
+                            step_name,
+                            dd,
+                        });
+                        job.span = job.span.extend(dd_span);
+                    } else {
+                        job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    }
+                    self.current += 1;
+                }
+                "IF" => {
+                    if depth >= 15 {
+                        return Err(JclError::ParseError {
+                            message: format!(
+                                "IF nesting exceeds maximum depth of 15 at line {}",
+                                stmt.line
+                            ),
+                        });
+                    }
+                    let if_construct = self.parse_if_construct(job, depth)?;
+                    job.span = job.span.extend(if_construct.span);
+                    entries.push(JobEntry::If(if_construct));
+                }
+                "ELSE" | "ENDIF" => {
+                    // These terminate the current entry list — caller handles them
+                    break;
+                }
+                "INCLUDE" => {
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    self.current += 1;
+                }
+                _ => {
+                    return Err(JclError::ParseError {
+                        message: format!(
+                            "Unexpected {} statement at line {}",
+                            stmt.operation, stmt.line
+                        ),
+                    });
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    /// Parse an IF/THEN/ELSE/ENDIF construct.
+    fn parse_if_construct(
+        &mut self,
+        job: &mut Job,
+        depth: usize,
+    ) -> Result<IfConstruct, JclError> {
+        let if_stmt = &self.statements[self.current];
+        let if_span_start = if_stmt.byte_offset;
+        let raw_operands = if_stmt.operands.clone();
+        let if_line = if_stmt.line;
+        self.current += 1;
+
+        // Parse the condition expression from the IF operands
+        let condition = Self::parse_condition_expr(&raw_operands).map_err(|_| {
+            JclError::ParseError {
+                message: format!("Invalid IF condition at line {}", if_line),
+            }
+        })?;
+
+        // Parse THEN branch entries
+        let then_entries = self.parse_entries(job, depth + 1)?;
+
+        // Check for ELSE or ENDIF
+        let mut else_entries = Vec::new();
+        if self.current < self.statements.len() {
+            let stmt = &self.statements[self.current];
+            if stmt.operation == "ELSE" {
+                self.current += 1;
+                else_entries = self.parse_entries(job, depth + 1)?;
+            }
+        }
+
+        // Expect ENDIF
+        let span_end = if self.current < self.statements.len() {
+            let stmt = &self.statements[self.current];
+            if stmt.operation == "ENDIF" {
+                let end = stmt.byte_end;
+                self.current += 1;
+                end
+            } else {
+                return Err(JclError::ParseError {
+                    message: format!(
+                        "Expected ENDIF for IF at line {}, found {} at line {}",
+                        if_line, stmt.operation, stmt.line
+                    ),
+                });
+            }
+        } else {
+            return Err(JclError::ParseError {
+                message: format!("Missing ENDIF for IF at line {}", if_line),
+            });
+        };
+
+        Ok(IfConstruct {
+            condition,
+            then_entries,
+            else_entries,
+            span: Span::main(if_span_start, span_end),
+        })
+    }
+
+    /// Parse a condition expression string into a `ConditionExpr`.
+    ///
+    /// Handles formats like:
+    /// - `(STEP1.RC = 0) THEN`
+    /// - `(STEP1.RC <= 4 & STEP2.RC = 0) | STEP3.ABEND THEN`
+    /// - `STEP1.ABEND THEN`
+    /// - `NOT (STEP1.RC > 4) THEN`
+    fn parse_condition_expr(operands: &str) -> Result<ConditionExpr, String> {
+        // Strip trailing THEN and surrounding whitespace
+        let text = operands.trim();
+        let text = if text.to_uppercase().ends_with("THEN") {
+            text[..text.len() - 4].trim()
+        } else {
+            text
+        };
+
+        Self::parse_or_expr(text)
+    }
+
+    /// Parse OR-level expression: `expr | expr | ...`
+    fn parse_or_expr(text: &str) -> Result<ConditionExpr, String> {
+        let parts = Self::split_logical(text, '|');
+        if parts.len() == 1 {
+            Self::parse_and_expr(parts[0].trim())
+        } else {
+            let mut exprs = Vec::new();
+            for part in parts {
+                exprs.push(Self::parse_and_expr(part.trim())?);
+            }
+            Ok(ConditionExpr::Or(exprs))
+        }
+    }
+
+    /// Parse AND-level expression: `expr & expr & ...`
+    fn parse_and_expr(text: &str) -> Result<ConditionExpr, String> {
+        let parts = Self::split_logical(text, '&');
+        if parts.len() == 1 {
+            Self::parse_primary_expr(parts[0].trim())
+        } else {
+            let mut exprs = Vec::new();
+            for part in parts {
+                exprs.push(Self::parse_primary_expr(part.trim())?);
+            }
+            Ok(ConditionExpr::And(exprs))
+        }
+    }
+
+    /// Split text on a logical operator, respecting parentheses.
+    fn split_logical(text: &str, op: char) -> Vec<&str> {
+        let mut parts = Vec::new();
+        let mut depth = 0;
+        let mut start = 0;
+        let bytes = text.as_bytes();
+
+        for (i, &b) in bytes.iter().enumerate() {
+            match b {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ if b == op as u8 && depth == 0 => {
+                    parts.push(&text[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        parts.push(&text[start..]);
+        parts
+    }
+
+    /// Parse a primary expression (possibly parenthesized or NOT).
+    fn parse_primary_expr(text: &str) -> Result<ConditionExpr, String> {
+        let text = text.trim();
+
+        // Handle NOT
+        if text.to_uppercase().starts_with("NOT ") || text.to_uppercase().starts_with("NOT(") {
+            let inner = if text.to_uppercase().starts_with("NOT ") {
+                text[4..].trim()
+            } else {
+                text[3..].trim()
+            };
+            let expr = Self::parse_primary_expr(inner)?;
+            return Ok(ConditionExpr::Not(Box::new(expr)));
+        }
+
+        // Handle parenthesized expression
+        if text.starts_with('(') {
+            // Find matching close paren
+            let mut depth = 0;
+            let mut end = 0;
+            for (i, c) in text.chars().enumerate() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if end == 0 {
+                return Err("Unmatched parenthesis".to_string());
+            }
+            let inner = &text[1..end];
+            return Self::parse_or_expr(inner);
+        }
+
+        // Parse atomic condition: STEP1.RC op value, STEP1.ABEND, STEP1.RUN
+        Self::parse_atomic_condition(text)
+    }
+
+    /// Parse an atomic condition like `STEP1.RC = 0` or `STEP1.ABEND`.
+    fn parse_atomic_condition(text: &str) -> Result<ConditionExpr, String> {
+        let text = text.trim();
+
+        // Split on first '.' to get step name and property
+        let dot_pos = text.find('.').ok_or_else(|| {
+            format!("Invalid condition: expected STEP.property, got '{}'", text)
+        })?;
+
+        let step_name = text[..dot_pos].trim().to_string();
+        let rest = text[dot_pos + 1..].trim();
+
+        // Check what follows the dot
+        let rest_upper = rest.to_uppercase();
+
+        if rest_upper == "ABEND" {
+            return Ok(ConditionExpr::Abend { step_name });
+        }
+
+        if rest_upper == "RUN" {
+            return Ok(ConditionExpr::Run { step_name });
+        }
+
+        // Must be RC comparison or ABENDCC comparison
+        // Find the comparison operator
+        let (property, op_and_value) = if rest_upper.starts_with("RC") {
+            ("RC", rest[2..].trim())
+        } else if rest_upper.starts_with("ABENDCC") {
+            ("ABENDCC", rest[7..].trim())
+        } else {
+            return Err(format!(
+                "Unknown property in condition: '{}'",
+                rest
+            ));
+        };
+
+        // Parse operator
+        let (operator, value_str) = if let Some(rest) = op_and_value.strip_prefix("<=") {
+            (ConditionOperator::Le, rest.trim())
+        } else if let Some(rest) = op_and_value.strip_prefix(">=") {
+            (ConditionOperator::Ge, rest.trim())
+        } else if let Some(rest) = op_and_value.strip_prefix("!=") {
+            (ConditionOperator::Ne, rest.trim())
+        } else if let Some(rest) = op_and_value.strip_prefix("<>") {
+            (ConditionOperator::Ne, rest.trim())
+        } else if let Some(rest) = op_and_value.strip_prefix('<') {
+            (ConditionOperator::Lt, rest.trim())
+        } else if let Some(rest) = op_and_value.strip_prefix('>') {
+            (ConditionOperator::Gt, rest.trim())
+        } else if let Some(rest) = op_and_value.strip_prefix('=') {
+            (ConditionOperator::Eq, rest.trim())
+        } else {
+            return Err(format!(
+                "Invalid operator in condition: '{}'",
+                op_and_value
+            ));
+        };
+
+        if property == "RC" {
+            let value: u32 = value_str
+                .parse()
+                .map_err(|_| format!("Invalid RC value: '{}'", value_str))?;
+            Ok(ConditionExpr::RcCompare {
+                step_name,
+                operator,
+                value,
+            })
+        } else {
+            // ABENDCC
+            Ok(ConditionExpr::AbendCc {
+                step_name,
+                operator,
+                value: value_str.to_string(),
+            })
+        }
     }
 
     /// Parse an EXEC statement and its associated DDs.
@@ -1257,9 +1532,10 @@ mod tests {
         let job = parse(jcl).unwrap();
         assert_eq!(job.name, "TESTJOB");
         assert_eq!(job.params.class, Some('A'));
-        assert_eq!(job.steps.len(), 1);
+        let steps = job.steps();
+        assert_eq!(steps.len(), 1);
 
-        let step = &job.steps[0];
+        let step = steps[0];
         assert_eq!(step.name, Some("STEP1".to_string()));
         if let ExecType::Program(ref pgm) = step.exec {
             assert_eq!(pgm, "IEFBR14");
@@ -1278,9 +1554,10 @@ mod tests {
 //"#;
 
         let job = parse(jcl).unwrap();
-        assert_eq!(job.steps.len(), 1);
+        let steps = job.steps();
+        assert_eq!(steps.len(), 1);
 
-        let step = &job.steps[0];
+        let step = steps[0];
         assert_eq!(step.dd_statements.len(), 3);
 
         // Check INPUT DD
@@ -1310,7 +1587,7 @@ mod tests {
 //"#;
 
         let job = parse(jcl).unwrap();
-        let step = &job.steps[0];
+        let step = job.steps()[0];
         assert_eq!(step.params.parm, Some("OPTION1,OPTION2".to_string()));
     }
 
@@ -1322,7 +1599,7 @@ mod tests {
 //"#;
 
         let job = parse(jcl).unwrap();
-        let dd = &job.steps[0].dd_statements[0];
+        let dd = &job.steps()[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             assert_eq!(def.dsn, "MY.PDS(MEMBER)");
         } else {
@@ -1340,7 +1617,7 @@ mod tests {
 //"#;
 
         let job = parse(jcl).unwrap();
-        let dd = &job.steps[0].dd_statements[0];
+        let dd = &job.steps()[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             assert_eq!(def.dsn, "NEW.DATA.SET");
             let disp = def.disp.as_ref().unwrap();
@@ -1372,7 +1649,8 @@ mod tests {
         assert!(job.span.end > 0, "Job span end should be non-zero");
 
         // Step span covers EXEC through last DD
-        let step = &job.steps[0];
+        let steps = job.steps();
+        let step = steps[0];
         assert_eq!(step.span.start, line2_start);
         assert!(step.span.end > step.span.start);
 
@@ -1396,7 +1674,8 @@ mod tests {
 //"#;
 
         let job = parse(jcl).unwrap();
-        let step = &job.steps[0];
+        let steps = job.steps();
+        let step = steps[0];
         assert_eq!(step.dd_statements.len(), 1);
         let dd = &step.dd_statements[0];
         assert_eq!(dd.name, "VSAMDD");
@@ -1425,8 +1704,9 @@ mod tests {
 //"#;
 
         let job = parse(jcl).unwrap();
-        assert_eq!(job.steps.len(), 1);
-        if let ExecType::Program(ref pgm) = job.steps[0].exec {
+        let steps = job.steps();
+        assert_eq!(steps.len(), 1);
+        if let ExecType::Program(ref pgm) = steps[0].exec {
             assert_eq!(pgm, "MYAPP");
         } else {
             panic!("Expected Program after symbolic substitution");
@@ -1443,7 +1723,7 @@ mod tests {
 //"#;
 
         let job = parse(jcl).unwrap();
-        let dd = &job.steps[0].dd_statements[0];
+        let dd = &job.steps()[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             assert_eq!(def.dsn, "PROD.DATA.DAILY");
         } else {
@@ -1460,7 +1740,7 @@ mod tests {
 //"#;
 
         let job = parse(jcl).unwrap();
-        let dd = &job.steps[0].dd_statements[0];
+        let dd = &job.steps()[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             // Should be a system-generated temp name, not &&TEMP
             assert!(!def.dsn.contains("&&"), "&&TEMP should be resolved: {}", def.dsn);
@@ -1499,7 +1779,7 @@ mod tests {
         assert_eq!(job.symbols.get("HLQ"), Some(&"PROD".to_string()));
 
         // The substituted DSN should use PROD
-        let dd = &job.steps[0].dd_statements[0];
+        let dd = &job.steps()[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             assert_eq!(def.dsn, "PROD.DATA");
         } else {
@@ -1517,7 +1797,7 @@ mod tests {
 //"#;
 
         let job = parse(jcl).unwrap();
-        let dd = &job.steps[0].dd_statements[0];
+        let dd = &job.steps()[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             assert_eq!(def.dsn, "PROD.BATCH.TEST.DATA");
         } else {
@@ -1564,7 +1844,7 @@ mod tests {
         let job = parse(jcl).unwrap();
 
         // The job should have one step (the procedure call)
-        assert_eq!(job.steps.len(), 1);
+        assert_eq!(job.steps().len(), 1);
 
         // Expand the procedure
         let mut expander = crate::procedure::ProcedureExpander::new(
@@ -1574,15 +1854,16 @@ mod tests {
         let expanded = expander.expand(&job).unwrap();
 
         // Should have one expanded step with PGM=MYPROG
-        assert_eq!(expanded.steps.len(), 1);
-        if let ExecType::Program(ref pgm) = expanded.steps[0].exec {
+        let exp_steps = expanded.steps();
+        assert_eq!(exp_steps.len(), 1);
+        if let ExecType::Program(ref pgm) = exp_steps[0].exec {
             assert_eq!(pgm, "MYPROG");
         } else {
             panic!("Expected Program after expansion");
         }
 
         // DD should have DSN=PROD.DATA (HLQ overridden to PROD)
-        let dd = &expanded.steps[0].dd_statements[0];
+        let dd = &exp_steps[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             assert_eq!(def.dsn, "PROD.DATA");
         } else {
@@ -1610,7 +1891,7 @@ mod tests {
         let expanded = expander.expand(&job).unwrap();
 
         // DD should have DSN=TEST.DATA (default HLQ=TEST from PROC)
-        let dd = &expanded.steps[0].dd_statements[0];
+        let dd = &expanded.steps()[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             assert_eq!(def.dsn, "TEST.DATA");
         } else {
@@ -1656,7 +1937,7 @@ mod tests {
             job.symbols.clone(),
         );
         let expanded = expander.expand(&job).unwrap();
-        let dd = &expanded.steps[0].dd_statements[0];
+        let dd = &expanded.steps()[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             // HLQ=PROD (overridden), APP=BATCH (default), ENV=DEV (default)
             assert_eq!(def.dsn, "PROD.BATCH.DEV");
@@ -1685,7 +1966,7 @@ mod tests {
         );
         let expanded = expander.expand(&job).unwrap();
 
-        let dd = &expanded.steps[0].dd_statements[0];
+        let dd = &expanded.steps()[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             assert_eq!(def.dsn, "SHARED.TEST.DATA");
         } else {
@@ -1712,13 +1993,258 @@ mod tests {
         );
         let expanded = expander.expand(&job).unwrap();
 
-        assert_eq!(expanded.steps.len(), 1);
-        let dd = &expanded.steps[0].dd_statements[0];
+        let exp_steps = expanded.steps();
+        assert_eq!(exp_steps.len(), 1);
+        let dd = &exp_steps[0].dd_statements[0];
         assert_eq!(dd.name, "SYSOUT");
         if let DdDefinition::Sysout(ref def) = dd.definition {
             assert_eq!(def.class, '*');
         } else {
             panic!("Expected Sysout definition, got {:?}", dd.definition);
         }
+    }
+
+    // ======================================================================
+    // Epic 103: IF/THEN/ELSE/ENDIF Conditional Processing
+    // ======================================================================
+
+    /// Story 103.1: Simple RC comparison condition expression.
+    #[test]
+    fn test_parse_condition_expr_rc_eq() {
+        let expr =
+            Parser::parse_condition_expr("(STEP1.RC = 0) THEN").unwrap();
+        if let ConditionExpr::RcCompare {
+            step_name,
+            operator,
+            value,
+        } = &expr
+        {
+            assert_eq!(step_name, "STEP1");
+            assert_eq!(*operator, ConditionOperator::Eq);
+            assert_eq!(*value, 0);
+        } else {
+            panic!("Expected RcCompare, got {:?}", expr);
+        }
+    }
+
+    /// Story 103.1: Complex condition with AND and OR.
+    #[test]
+    fn test_parse_condition_expr_complex() {
+        let expr = Parser::parse_condition_expr(
+            "(STEP1.RC <= 4 & STEP2.RC = 0) | STEP3.ABEND THEN",
+        )
+        .unwrap();
+        if let ConditionExpr::Or(parts) = &expr {
+            assert_eq!(parts.len(), 2);
+            if let ConditionExpr::And(and_parts) = &parts[0] {
+                assert_eq!(and_parts.len(), 2);
+                // Check first AND operand: STEP1.RC <= 4
+                if let ConditionExpr::RcCompare {
+                    step_name,
+                    operator,
+                    value,
+                } = &and_parts[0]
+                {
+                    assert_eq!(step_name, "STEP1");
+                    assert_eq!(*operator, ConditionOperator::Le);
+                    assert_eq!(*value, 4);
+                } else {
+                    panic!("Expected RcCompare for STEP1");
+                }
+                // Check second AND operand: STEP2.RC = 0
+                if let ConditionExpr::RcCompare {
+                    step_name,
+                    operator,
+                    value,
+                } = &and_parts[1]
+                {
+                    assert_eq!(step_name, "STEP2");
+                    assert_eq!(*operator, ConditionOperator::Eq);
+                    assert_eq!(*value, 0);
+                } else {
+                    panic!("Expected RcCompare for STEP2");
+                }
+            } else {
+                panic!("Expected And expression");
+            }
+            // Check OR operand: STEP3.ABEND
+            if let ConditionExpr::Abend { step_name } = &parts[1] {
+                assert_eq!(step_name, "STEP3");
+            } else {
+                panic!("Expected Abend for STEP3");
+            }
+        } else {
+            panic!("Expected Or expression, got {:?}", expr);
+        }
+    }
+
+    /// Story 103.2: Parse IF/THEN/ELSE/ENDIF into AST.
+    #[test]
+    fn test_parse_if_then_else_endif() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=PROG1
+// IF (STEP1.RC = 0) THEN
+//STEP2    EXEC PGM=PROG2
+// ELSE
+//STEP3    EXEC PGM=PROG3
+// ENDIF
+//"#;
+
+        let job = parse(jcl).unwrap();
+
+        // Should have 2 entries: STEP1 (Step) and IF construct
+        assert_eq!(job.entries.len(), 2);
+
+        // First entry is a regular step
+        if let JobEntry::Step(ref step) = job.entries[0] {
+            assert_eq!(step.name, Some("STEP1".to_string()));
+        } else {
+            panic!("Expected Step for first entry");
+        }
+
+        // Second entry is an IF construct
+        if let JobEntry::If(ref if_construct) = job.entries[1] {
+            assert_eq!(if_construct.then_entries.len(), 1);
+            assert_eq!(if_construct.else_entries.len(), 1);
+
+            // THEN branch has STEP2
+            if let JobEntry::Step(ref step) = if_construct.then_entries[0] {
+                assert_eq!(step.name, Some("STEP2".to_string()));
+                if let ExecType::Program(ref pgm) = step.exec {
+                    assert_eq!(pgm, "PROG2");
+                }
+            } else {
+                panic!("Expected Step in THEN branch");
+            }
+
+            // ELSE branch has STEP3
+            if let JobEntry::Step(ref step) = if_construct.else_entries[0] {
+                assert_eq!(step.name, Some("STEP3".to_string()));
+                if let ExecType::Program(ref pgm) = step.exec {
+                    assert_eq!(pgm, "PROG3");
+                }
+            } else {
+                panic!("Expected Step in ELSE branch");
+            }
+        } else {
+            panic!("Expected If construct for second entry");
+        }
+    }
+
+    /// Story 103.2: Parse IF/THEN/ENDIF without ELSE.
+    #[test]
+    fn test_parse_if_then_endif_no_else() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=PROG1
+// IF (STEP1.RC = 0) THEN
+//STEP2    EXEC PGM=PROG2
+// ENDIF
+//"#;
+
+        let job = parse(jcl).unwrap();
+
+        assert_eq!(job.entries.len(), 2);
+        if let JobEntry::If(ref if_construct) = job.entries[1] {
+            assert_eq!(if_construct.then_entries.len(), 1);
+            assert!(if_construct.else_entries.is_empty());
+        } else {
+            panic!("Expected If construct");
+        }
+    }
+
+    /// Story 103.2: Nested IF/THEN/ELSE/ENDIF.
+    #[test]
+    fn test_parse_nested_if() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=PROG1
+// IF (STEP1.RC = 0) THEN
+// IF (STEP1.RC <= 4) THEN
+//STEP2    EXEC PGM=PROG2
+// ENDIF
+// ELSE
+//STEP3    EXEC PGM=PROG3
+// ENDIF
+//"#;
+
+        let job = parse(jcl).unwrap();
+
+        assert_eq!(job.entries.len(), 2);
+        if let JobEntry::If(ref outer) = job.entries[1] {
+            // THEN branch contains nested IF
+            assert_eq!(outer.then_entries.len(), 1);
+            if let JobEntry::If(ref inner) = outer.then_entries[0] {
+                assert_eq!(inner.then_entries.len(), 1);
+                if let JobEntry::Step(ref step) = inner.then_entries[0] {
+                    assert_eq!(step.name, Some("STEP2".to_string()));
+                }
+            } else {
+                panic!("Expected nested If");
+            }
+            // ELSE has STEP3
+            assert_eq!(outer.else_entries.len(), 1);
+            if let JobEntry::Step(ref step) = outer.else_entries[0] {
+                assert_eq!(step.name, Some("STEP3".to_string()));
+            }
+        } else {
+            panic!("Expected If construct");
+        }
+    }
+
+    /// Story 103.1: ABEND condition keyword.
+    #[test]
+    fn test_parse_condition_abend() {
+        let expr = Parser::parse_condition_expr("STEP1.ABEND THEN").unwrap();
+        if let ConditionExpr::Abend { step_name } = &expr {
+            assert_eq!(step_name, "STEP1");
+        } else {
+            panic!("Expected Abend, got {:?}", expr);
+        }
+    }
+
+    /// Story 103.1: RUN condition keyword.
+    #[test]
+    fn test_parse_condition_run() {
+        let expr = Parser::parse_condition_expr("STEP1.RUN THEN").unwrap();
+        if let ConditionExpr::Run { step_name } = &expr {
+            assert_eq!(step_name, "STEP1");
+        } else {
+            panic!("Expected Run, got {:?}", expr);
+        }
+    }
+
+    /// Story 103.1: NOT condition.
+    #[test]
+    fn test_parse_condition_not() {
+        let expr =
+            Parser::parse_condition_expr("NOT (STEP1.RC > 4) THEN").unwrap();
+        if let ConditionExpr::Not(inner) = &expr {
+            if let ConditionExpr::RcCompare { step_name, operator, value } = inner.as_ref() {
+                assert_eq!(step_name, "STEP1");
+                assert_eq!(*operator, ConditionOperator::Gt);
+                assert_eq!(*value, 4);
+            } else {
+                panic!("Expected RcCompare inside NOT");
+            }
+        } else {
+            panic!("Expected Not, got {:?}", expr);
+        }
+    }
+
+    /// Story 103.2: Missing ENDIF produces error.
+    #[test]
+    fn test_parse_missing_endif_error() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+// IF (STEP1.RC = 0) THEN
+//STEP1    EXEC PGM=PROG1
+//"#;
+
+        let result = parse(jcl);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("ENDIF"),
+            "Error should mention ENDIF: {}",
+            err
+        );
     }
 }

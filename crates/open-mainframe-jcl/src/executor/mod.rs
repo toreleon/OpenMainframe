@@ -96,18 +96,15 @@ impl JobExecutor {
         let mut step_results = Vec::new();
         let mut max_rc = 0u32;
         let mut all_success = true;
+        let mut step_idx = 0;
 
-        for (step_idx, step) in job.steps.iter().enumerate() {
-            // Check conditions (simplified)
-            if !self.should_execute_step(step, &step_results) {
-                continue;
-            }
-
-            let result = self.execute_step(step, step_idx)?;
-            max_rc = max_rc.max(result.return_code);
-            all_success = all_success && result.success;
-            step_results.push(result);
-        }
+        self.execute_entries(
+            &job.entries,
+            &mut step_results,
+            &mut max_rc,
+            &mut all_success,
+            &mut step_idx,
+        )?;
 
         Ok(JobResult {
             name: job.name.clone(),
@@ -115,6 +112,121 @@ impl JobExecutor {
             return_code: max_rc,
             success: all_success,
         })
+    }
+
+    /// Execute a list of job entries (steps and IF constructs).
+    fn execute_entries(
+        &mut self,
+        entries: &[JobEntry],
+        step_results: &mut Vec<StepResult>,
+        max_rc: &mut u32,
+        all_success: &mut bool,
+        step_idx: &mut usize,
+    ) -> Result<(), JclError> {
+        for entry in entries {
+            match entry {
+                JobEntry::Step(ref step) => {
+                    if !self.should_execute_step(step, step_results) {
+                        *step_idx += 1;
+                        continue;
+                    }
+
+                    let result = self.execute_step(step, *step_idx)?;
+                    *max_rc = (*max_rc).max(result.return_code);
+                    *all_success = *all_success && result.success;
+                    step_results.push(result);
+                    *step_idx += 1;
+                }
+                JobEntry::If(if_construct) => {
+                    let condition_met =
+                        self.evaluate_condition(&if_construct.condition, step_results);
+                    let branch = if condition_met {
+                        &if_construct.then_entries
+                    } else {
+                        &if_construct.else_entries
+                    };
+                    self.execute_entries(
+                        branch,
+                        step_results,
+                        max_rc,
+                        all_success,
+                        step_idx,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Evaluate an IF condition expression against step results.
+    fn evaluate_condition(
+        &self,
+        condition: &ConditionExpr,
+        step_results: &[StepResult],
+    ) -> bool {
+        Self::eval_condition(condition, step_results)
+    }
+
+    /// Recursive condition evaluator (static to avoid clippy only_used_in_recursion).
+    fn eval_condition(
+        condition: &ConditionExpr,
+        step_results: &[StepResult],
+    ) -> bool {
+        match condition {
+            ConditionExpr::RcCompare {
+                step_name,
+                operator,
+                value,
+            } => {
+                let rc = step_results
+                    .iter()
+                    .find(|r| r.name.as_deref() == Some(step_name))
+                    .map(|r| r.return_code);
+
+                if let Some(rc) = rc {
+                    match operator {
+                        ConditionOperator::Gt => rc > *value,
+                        ConditionOperator::Ge => rc >= *value,
+                        ConditionOperator::Eq => rc == *value,
+                        ConditionOperator::Ne => rc != *value,
+                        ConditionOperator::Lt => rc < *value,
+                        ConditionOperator::Le => rc <= *value,
+                    }
+                } else {
+                    false
+                }
+            }
+            ConditionExpr::Abend { step_name } => {
+                step_results
+                    .iter()
+                    .find(|r| r.name.as_deref() == Some(step_name))
+                    .map(|r| !r.success && r.return_code > 4095)
+                    .unwrap_or(false)
+            }
+            ConditionExpr::AbendCc {
+                step_name,
+                operator: _,
+                value: _,
+            } => {
+                step_results
+                    .iter()
+                    .find(|r| r.name.as_deref() == Some(step_name))
+                    .map(|r| !r.success && r.return_code > 4095)
+                    .unwrap_or(false)
+            }
+            ConditionExpr::Run { step_name } => {
+                step_results
+                    .iter()
+                    .any(|r| r.name.as_deref() == Some(step_name))
+            }
+            ConditionExpr::Not(expr) => !Self::eval_condition(expr, step_results),
+            ConditionExpr::And(exprs) => exprs
+                .iter()
+                .all(|e| Self::eval_condition(e, step_results)),
+            ConditionExpr::Or(exprs) => exprs
+                .iter()
+                .any(|e| Self::eval_condition(e, step_results)),
+        }
     }
 
     /// Create necessary directories.
@@ -620,5 +732,175 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    // ======================================================================
+    // Epic 103: IF/THEN/ELSE/ENDIF — Story 103.3: Condition Evaluation
+    // ======================================================================
+
+    /// Story 103.3: RC=0 condition evaluates to true when step returns 0.
+    #[test]
+    fn test_evaluate_condition_rc_eq_true() {
+        let executor = JobExecutor::new();
+        let condition = ConditionExpr::RcCompare {
+            step_name: "STEP1".to_string(),
+            operator: ConditionOperator::Eq,
+            value: 0,
+        };
+        let results = vec![StepResult {
+            name: Some("STEP1".to_string()),
+            return_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        }];
+
+        assert!(executor.evaluate_condition(&condition, &results));
+    }
+
+    /// Story 103.3: RC=0 condition evaluates to false when step returns 4.
+    #[test]
+    fn test_evaluate_condition_rc_eq_false() {
+        let executor = JobExecutor::new();
+        let condition = ConditionExpr::RcCompare {
+            step_name: "STEP1".to_string(),
+            operator: ConditionOperator::Eq,
+            value: 0,
+        };
+        let results = vec![StepResult {
+            name: Some("STEP1".to_string()),
+            return_code: 4,
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        }];
+
+        assert!(!executor.evaluate_condition(&condition, &results));
+    }
+
+    /// Story 103.3: ABEND condition is true for abended step.
+    #[test]
+    fn test_evaluate_condition_abend() {
+        let executor = JobExecutor::new();
+        let condition = ConditionExpr::Abend {
+            step_name: "STEP1".to_string(),
+        };
+        // An abended step has high RC and not successful
+        let results = vec![StepResult {
+            name: Some("STEP1".to_string()),
+            return_code: 4096, // > 4095 = abend
+            stdout: String::new(),
+            stderr: String::new(),
+            success: false,
+        }];
+
+        assert!(executor.evaluate_condition(&condition, &results));
+    }
+
+    /// Story 103.3: RUN condition is true when step exists in results.
+    #[test]
+    fn test_evaluate_condition_run() {
+        let executor = JobExecutor::new();
+        let condition = ConditionExpr::Run {
+            step_name: "STEP1".to_string(),
+        };
+        let results = vec![StepResult {
+            name: Some("STEP1".to_string()),
+            return_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        }];
+
+        assert!(executor.evaluate_condition(&condition, &results));
+        // Step that didn't run
+        assert!(!executor.evaluate_condition(
+            &ConditionExpr::Run {
+                step_name: "STEP2".to_string()
+            },
+            &results
+        ));
+    }
+
+    /// Story 103.3: AND condition — both must be true.
+    #[test]
+    fn test_evaluate_condition_and() {
+        let executor = JobExecutor::new();
+        let condition = ConditionExpr::And(vec![
+            ConditionExpr::RcCompare {
+                step_name: "STEP1".to_string(),
+                operator: ConditionOperator::Eq,
+                value: 0,
+            },
+            ConditionExpr::RcCompare {
+                step_name: "STEP2".to_string(),
+                operator: ConditionOperator::Le,
+                value: 4,
+            },
+        ]);
+        let results = vec![
+            StepResult {
+                name: Some("STEP1".to_string()),
+                return_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+            StepResult {
+                name: Some("STEP2".to_string()),
+                return_code: 4,
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+        ];
+
+        assert!(executor.evaluate_condition(&condition, &results));
+    }
+
+    /// Story 103.3: OR condition — at least one must be true.
+    #[test]
+    fn test_evaluate_condition_or() {
+        let executor = JobExecutor::new();
+        let condition = ConditionExpr::Or(vec![
+            ConditionExpr::RcCompare {
+                step_name: "STEP1".to_string(),
+                operator: ConditionOperator::Eq,
+                value: 0,
+            },
+            ConditionExpr::Abend {
+                step_name: "STEP1".to_string(),
+            },
+        ]);
+        let results = vec![StepResult {
+            name: Some("STEP1".to_string()),
+            return_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        }];
+
+        // First condition true (RC=0), so OR is true
+        assert!(executor.evaluate_condition(&condition, &results));
+    }
+
+    /// Story 103.3: NOT condition.
+    #[test]
+    fn test_evaluate_condition_not() {
+        let executor = JobExecutor::new();
+        let condition = ConditionExpr::Not(Box::new(ConditionExpr::RcCompare {
+            step_name: "STEP1".to_string(),
+            operator: ConditionOperator::Gt,
+            value: 4,
+        }));
+        let results = vec![StepResult {
+            name: Some("STEP1".to_string()),
+            return_code: 0, // 0 > 4 is false, so NOT(false) = true
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        }];
+
+        assert!(executor.evaluate_condition(&condition, &results));
     }
 }

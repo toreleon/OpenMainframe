@@ -105,10 +105,11 @@ pub fn run(input: PathBuf, format: OutputFormat) -> Result<()> {
     }
 
     println!();
-    println!("STEPS: {} total", job.steps.len());
+    let steps = job.steps();
+    println!("STEPS: {} total", steps.len());
     println!("───────────────────────────────────────────────────────────────");
 
-    for (i, step) in job.steps.iter().enumerate() {
+    for (i, step) in steps.iter().enumerate() {
         let step_name = step.name.as_deref().unwrap_or("(unnamed)");
         let exec_desc = match &step.exec {
             open_mainframe_jcl::ExecType::Program(pgm) => format!("PGM={}", pgm),

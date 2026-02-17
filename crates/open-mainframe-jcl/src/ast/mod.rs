@@ -37,6 +37,70 @@ pub struct ProcStatement {
     pub operands: String,
 }
 
+/// An entry in a job — either a step or an IF/THEN/ELSE/ENDIF construct.
+#[derive(Debug, Clone)]
+pub enum JobEntry {
+    /// A regular job step (EXEC + DDs).
+    Step(Box<Step>),
+    /// An IF/THEN/ELSE/ENDIF conditional construct.
+    If(IfConstruct),
+}
+
+/// IF/THEN/ELSE/ENDIF conditional construct.
+///
+/// Controls which steps execute based on return codes and abend conditions
+/// from previous steps. Supports nesting up to 15 levels.
+#[derive(Debug, Clone)]
+pub struct IfConstruct {
+    /// The condition expression to evaluate.
+    pub condition: ConditionExpr,
+    /// Steps to execute if the condition is true (THEN branch).
+    pub then_entries: Vec<JobEntry>,
+    /// Steps to execute if the condition is false (ELSE branch, optional).
+    pub else_entries: Vec<JobEntry>,
+    /// Source span of the entire IF/THEN/ELSE/ENDIF block.
+    pub span: Span,
+}
+
+/// A condition expression for IF statement evaluation.
+#[derive(Debug, Clone)]
+pub enum ConditionExpr {
+    /// Compare a step's return code to a value: `STEP1.RC = 0`
+    RcCompare {
+        /// Step name to compare.
+        step_name: String,
+        /// Comparison operator.
+        operator: ConditionOperator,
+        /// Return code value to compare against.
+        value: u32,
+    },
+    /// Check if a step abended: `STEP1.ABEND`
+    Abend {
+        /// Step name to check.
+        step_name: String,
+    },
+    /// Check a step's abend completion code: `STEP1.ABENDCC = Sxxx`
+    AbendCc {
+        /// Step name to check.
+        step_name: String,
+        /// Comparison operator.
+        operator: ConditionOperator,
+        /// Abend code value.
+        value: String,
+    },
+    /// Check if a step ran (was not bypassed): `STEP1.RUN`
+    Run {
+        /// Step name to check.
+        step_name: String,
+    },
+    /// Logical NOT of an expression: `NOT (expr)`
+    Not(Box<ConditionExpr>),
+    /// Logical AND of expressions: `expr & expr`
+    And(Vec<ConditionExpr>),
+    /// Logical OR of expressions: `expr | expr`
+    Or(Vec<ConditionExpr>),
+}
+
 /// A complete JCL job.
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -44,8 +108,8 @@ pub struct Job {
     pub name: String,
     /// Job parameters.
     pub params: JobParams,
-    /// Steps in the job.
-    pub steps: Vec<Step>,
+    /// Entries in the job (steps and IF constructs).
+    pub entries: Vec<JobEntry>,
     /// Source span covering the entire job.
     pub span: Span,
     /// Symbol table populated from SET statements.
@@ -366,7 +430,7 @@ impl Job {
         Self {
             name: name.into(),
             params: JobParams::default(),
-            steps: Vec::new(),
+            entries: Vec::new(),
             span: Span::dummy(),
             symbols: SymbolTable::new(),
             in_stream_procs: HashMap::new(),
@@ -377,7 +441,33 @@ impl Job {
 
     /// Add a step to the job.
     pub fn add_step(&mut self, step: Step) {
-        self.steps.push(step);
+        self.entries.push(JobEntry::Step(Box::new(step)));
+    }
+
+    /// Add an entry (step or IF construct) to the job.
+    pub fn add_entry(&mut self, entry: JobEntry) {
+        self.entries.push(entry);
+    }
+
+    /// Return a flat list of all steps (for backwards compatibility).
+    ///
+    /// Flattens IF/THEN/ELSE constructs into a single list containing
+    /// all steps from all branches. Useful for procedure expansion.
+    pub fn steps(&self) -> Vec<&Step> {
+        fn collect_steps<'a>(entries: &'a [JobEntry], out: &mut Vec<&'a Step>) {
+            for entry in entries {
+                match entry {
+                    JobEntry::Step(step) => out.push(step.as_ref()),
+                    JobEntry::If(if_construct) => {
+                        collect_steps(&if_construct.then_entries, out);
+                        collect_steps(&if_construct.else_entries, out);
+                    }
+                }
+            }
+        }
+        let mut steps = Vec::new();
+        collect_steps(&self.entries, &mut steps);
+        steps
     }
 }
 
@@ -466,13 +556,14 @@ mod tests {
     fn test_create_job() {
         let mut job = Job::new("TESTJOB");
         assert_eq!(job.name, "TESTJOB");
-        assert!(job.steps.is_empty());
+        assert!(job.entries.is_empty());
 
         let mut step = Step::program(Some("STEP1".to_string()), "HELLO");
         step.add_dd(DdStatement::sysout("SYSOUT", '*'));
         job.add_step(step);
 
-        assert_eq!(job.steps.len(), 1);
+        assert_eq!(job.entries.len(), 1);
+        assert_eq!(job.steps().len(), 1);
     }
 
     #[test]

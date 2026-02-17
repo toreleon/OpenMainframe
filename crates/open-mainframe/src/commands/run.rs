@@ -25,7 +25,7 @@ pub fn run(
     let job = open_mainframe_jcl::parse(&source).map_err(|e| miette::miette!("JCL parse error: {}", e))?;
 
     tracing::info!("Job: {}", job.name);
-    tracing::info!("Steps: {}", job.steps.len());
+    tracing::info!("Steps: {}", job.steps().len());
 
     // Configure executor
     let mut config = open_mainframe_jcl::ExecutionConfig::default();

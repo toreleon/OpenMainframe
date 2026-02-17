@@ -171,28 +171,54 @@ impl ProcedureExpander {
         expanded_job.in_stream_procs = job.in_stream_procs.clone();
         expanded_job.jcllib_order = job.jcllib_order.clone();
 
-        for step in &job.steps {
-            match &step.exec {
-                ExecType::Program(_) => {
-                    expanded_job.add_step(step.clone());
-                }
-                ExecType::Procedure(proc_name) => {
-                    let expanded_steps = self.expand_procedure_recursive(
-                        proc_name,
-                        &step.params,
-                        &step.name,
-                        step.span,
-                        0, // depth
-                    )?;
-                    for expanded_step in expanded_steps {
-                        expanded_job.span = expanded_job.span.extend(expanded_step.span);
-                        expanded_job.add_step(expanded_step);
+        self.expand_entries(&job.entries, &mut expanded_job)?;
+
+        Ok(expanded_job)
+    }
+
+    /// Recursively expand procedure references within job entries.
+    fn expand_entries(
+        &mut self,
+        entries: &[JobEntry],
+        expanded_job: &mut Job,
+    ) -> Result<(), JclError> {
+        for entry in entries {
+            match entry {
+                JobEntry::Step(step) => match &step.exec {
+                    ExecType::Program(_) => {
+                        expanded_job.add_step(step.as_ref().clone());
                     }
+                    ExecType::Procedure(proc_name) => {
+                        let expanded_steps = self.expand_procedure_recursive(
+                            proc_name,
+                            &step.params,
+                            &step.name,
+                            step.span,
+                            0,
+                        )?;
+                        for expanded_step in expanded_steps {
+                            expanded_job.span =
+                                expanded_job.span.extend(expanded_step.span);
+                            expanded_job.add_step(expanded_step);
+                        }
+                    }
+                },
+                JobEntry::If(if_construct) => {
+                    let mut expanded_then = Job::new("_temp");
+                    self.expand_entries(&if_construct.then_entries, &mut expanded_then)?;
+                    let mut expanded_else = Job::new("_temp");
+                    self.expand_entries(&if_construct.else_entries, &mut expanded_else)?;
+
+                    expanded_job.add_entry(JobEntry::If(IfConstruct {
+                        condition: if_construct.condition.clone(),
+                        then_entries: expanded_then.entries,
+                        else_entries: expanded_else.entries,
+                        span: if_construct.span,
+                    }));
                 }
             }
         }
-
-        Ok(expanded_job)
+        Ok(())
     }
 
     /// Resolve a procedure by name — checks in-stream first, then cataloged library.
@@ -900,14 +926,15 @@ mod tests {
 
         let expanded = expander.expand(&job).unwrap();
 
-        assert_eq!(expanded.steps.len(), 1);
-        if let ExecType::Program(ref pgm) = expanded.steps[0].exec {
+        let steps = expanded.steps();
+        assert_eq!(steps.len(), 1);
+        if let ExecType::Program(ref pgm) = steps[0].exec {
             assert_eq!(pgm, "MYPROG");
         } else {
             panic!("Expected Program after expansion");
         }
 
-        let dd = &expanded.steps[0].dd_statements[0];
+        let dd = &steps[0].dd_statements[0];
         if let DdDefinition::Dataset(ref def) = dd.definition {
             assert_eq!(def.dsn, "PROD.DATA");
         } else {
@@ -955,7 +982,8 @@ mod tests {
 
         let expanded = expander.expand(&job).unwrap();
 
-        let dd = &expanded.steps[0].dd_statements[0];
+        let steps = expanded.steps();
+        let dd = &steps[0].dd_statements[0];
         assert_eq!(dd.name, "INPUT");
         if let DdDefinition::Dataset(ref def) = dd.definition {
             assert_eq!(def.dsn, "OVERRIDE.DATA");
@@ -1003,10 +1031,11 @@ mod tests {
         let expanded = expander.expand(&job).unwrap();
 
         // Should have original INPUT DD plus new EXTRA DD
-        assert_eq!(expanded.steps[0].dd_statements.len(), 2);
-        assert_eq!(expanded.steps[0].dd_statements[0].name, "INPUT");
-        assert_eq!(expanded.steps[0].dd_statements[1].name, "EXTRA");
-        if let DdDefinition::Dataset(ref def) = expanded.steps[0].dd_statements[1].definition {
+        let steps = expanded.steps();
+        assert_eq!(steps[0].dd_statements.len(), 2);
+        assert_eq!(steps[0].dd_statements[0].name, "INPUT");
+        assert_eq!(steps[0].dd_statements[1].name, "EXTRA");
+        if let DdDefinition::Dataset(ref def) = steps[0].dd_statements[1].definition {
             assert_eq!(def.dsn, "NEW.DATA");
         } else {
             panic!("Expected Dataset");
@@ -1080,8 +1109,9 @@ mod tests {
         let expanded = expander.expand(&job).unwrap();
 
         // Should resolve all the way down to PGM=PROGC
-        assert_eq!(expanded.steps.len(), 1);
-        if let ExecType::Program(ref pgm) = expanded.steps[0].exec {
+        let steps = expanded.steps();
+        assert_eq!(steps.len(), 1);
+        if let ExecType::Program(ref pgm) = steps[0].exec {
             assert_eq!(pgm, "PROGC");
         } else {
             panic!("Expected Program PROGC after nested expansion");
@@ -1169,15 +1199,16 @@ mod tests {
 
         let expanded = expander.expand(&job).unwrap();
 
-        assert_eq!(expanded.steps.len(), 1);
-        if let ExecType::Program(ref pgm) = expanded.steps[0].exec {
+        let steps = expanded.steps();
+        assert_eq!(steps.len(), 1);
+        if let ExecType::Program(ref pgm) = steps[0].exec {
             assert_eq!(pgm, "MYPROG");
         } else {
             panic!("Expected Program after expansion");
         }
 
-        assert_eq!(expanded.steps[0].dd_statements.len(), 1);
-        if let DdDefinition::Dataset(ref def) = expanded.steps[0].dd_statements[0].definition {
+        assert_eq!(steps[0].dd_statements.len(), 1);
+        if let DdDefinition::Dataset(ref def) = steps[0].dd_statements[0].definition {
             assert_eq!(def.dsn, "PROD.DATA");
         } else {
             panic!("Expected Dataset definition");
@@ -1221,8 +1252,9 @@ mod tests {
 
         let expanded = expander.expand(&job).unwrap();
 
-        assert_eq!(expanded.steps.len(), 1);
-        if let DdDefinition::Dataset(ref def) = expanded.steps[0].dd_statements[0].definition {
+        let steps = expanded.steps();
+        assert_eq!(steps.len(), 1);
+        if let DdDefinition::Dataset(ref def) = steps[0].dd_statements[0].definition {
             assert_eq!(def.dsn, "TEST.DATA");
         } else {
             panic!("Expected Dataset definition");
