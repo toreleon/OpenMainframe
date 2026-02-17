@@ -161,6 +161,8 @@ pub enum CicsResponse {
     Qiderr = 44,
     /// NOJBUFSP - no journal buffer space
     Nojbufsp = 45,
+    /// ENQBUSY - resource busy (ENQ contention)
+    Enqbusy = 55,
     /// DISABLED - disabled
     Disabled = 84,
     /// NOTAUTH - not authorized
@@ -177,6 +179,7 @@ impl CicsResponse {
             14 => Some(CicsResponse::Duprec),
             16 => Some(CicsResponse::Invreq),
             27 => Some(CicsResponse::Pgmiderr),
+            55 => Some(CicsResponse::Enqbusy),
             _ => None,
         }
     }
@@ -225,6 +228,7 @@ impl CicsResponse {
             CicsResponse::Qiderr => "QIDERR",
             CicsResponse::Nojbufsp => "NOJBUFSP",
             CicsResponse::Disabled => "DISABLED",
+            CicsResponse::Enqbusy => "ENQBUSY",
             CicsResponse::Notauth => "NOTAUTH",
         }
     }

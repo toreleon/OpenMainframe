@@ -103,7 +103,7 @@ pub struct SyncpointInfo {
     pub resources_committed: usize,
 }
 
-/// Resource enqueue manager.
+/// Resource enqueue manager with deadlock detection.
 #[derive(Debug, Default)]
 pub struct EnqueueManager {
     /// Active locks by resource name
@@ -112,6 +112,8 @@ pub struct EnqueueManager {
     task_locks: HashMap<u32, Vec<String>>,
     /// Wait queue for blocked requests
     wait_queue: Vec<EnqueueRequest>,
+    /// Lock timeout in milliseconds (0 = no timeout)
+    lock_timeout_ms: u64,
 }
 
 /// A pending enqueue request.
@@ -129,10 +131,25 @@ impl EnqueueManager {
             locks: HashMap::new(),
             task_locks: HashMap::new(),
             wait_queue: Vec::new(),
+            lock_timeout_ms: 0,
         }
     }
 
+    /// Set lock timeout in milliseconds (0 = no timeout).
+    pub fn set_lock_timeout(&mut self, ms: u64) {
+        self.lock_timeout_ms = ms;
+    }
+
+    /// Get current lock timeout.
+    pub fn lock_timeout(&self) -> u64 {
+        self.lock_timeout_ms
+    }
+
     /// Enqueue (lock) a resource.
+    ///
+    /// When `nowait` is true (NOSUSPEND), returns `ResourceBusy` immediately
+    /// if the lock cannot be granted. When `nowait` is false and a deadlock
+    /// is detected, returns `Deadlock`.
     pub fn enq(
         &mut self,
         resource: &str,
@@ -151,15 +168,24 @@ impl EnqueueManager {
             if !can_lock {
                 if nowait {
                     return Err(SyncError::ResourceBusy);
-                } else {
-                    // Add to wait queue
-                    self.wait_queue.push(EnqueueRequest {
-                        resource: resource.to_string(),
-                        lock_type,
-                        task_id,
-                    });
-                    return Err(SyncError::Waiting);
                 }
+
+                // Check for deadlock before queuing
+                let holders: Vec<u32> = existing.iter().map(|l| l.task_id).collect();
+                if self.would_deadlock(task_id, &holders) {
+                    return Err(SyncError::Deadlock {
+                        task_id,
+                        resource: resource.to_string(),
+                    });
+                }
+
+                // Add to wait queue
+                self.wait_queue.push(EnqueueRequest {
+                    resource: resource.to_string(),
+                    lock_type,
+                    task_id,
+                });
+                return Err(SyncError::Waiting);
             }
         }
 
@@ -172,15 +198,60 @@ impl EnqueueManager {
 
         self.locks
             .entry(resource.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(lock);
 
         self.task_locks
             .entry(task_id)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(resource.to_string());
 
         Ok(())
+    }
+
+    /// Detect if granting this request would cause a deadlock.
+    ///
+    /// A deadlock occurs when task A holds resource R1 and waits for R2,
+    /// while task B holds R2 and waits for R1 (or any cycle of waiting).
+    ///
+    /// This uses a wait-for graph traversal: starting from the tasks
+    /// that hold the contested resource, check if any of them are
+    /// (directly or transitively) waiting for a resource held by `task_id`.
+    fn would_deadlock(&self, task_id: u32, holders: &[u32]) -> bool {
+        // Build wait-for relationships:
+        // For each task in wait_queue, find which tasks hold the resource it wants
+        let mut visited = HashSet::new();
+        let mut stack: Vec<u32> = holders.to_vec();
+
+        while let Some(holder) = stack.pop() {
+            if holder == task_id {
+                return true; // Cycle detected
+            }
+            if !visited.insert(holder) {
+                continue; // Already visited
+            }
+
+            // Check if this holder is waiting for any resource
+            for req in &self.wait_queue {
+                if req.task_id == holder {
+                    // This holder is waiting for req.resource — who holds it?
+                    if let Some(blockers) = self.locks.get(&req.resource) {
+                        for blocker in blockers {
+                            if blocker.task_id != holder {
+                                stack.push(blocker.task_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Get the number of waiting requests.
+    pub fn wait_queue_len(&self) -> usize {
+        self.wait_queue.len()
     }
 
     /// Dequeue (unlock) a resource.
@@ -267,7 +338,7 @@ impl EnqueueManager {
 /// Synchronization errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncError {
-    /// Resource is busy (ENQBUSY)
+    /// Resource is busy (ENQBUSY) — returned when NOSUSPEND is specified
     ResourceBusy,
     /// Request is waiting
     Waiting,
@@ -277,6 +348,13 @@ pub enum SyncError {
     SyncpointError,
     /// Rollback error
     RollbackError,
+    /// Deadlock detected (AEYD) — a cycle in the wait-for graph
+    Deadlock {
+        /// Task that was detected as the deadlock victim
+        task_id: u32,
+        /// Resource that caused the deadlock
+        resource: String,
+    },
 }
 
 impl std::fmt::Display for SyncError {
@@ -287,6 +365,9 @@ impl std::fmt::Display for SyncError {
             SyncError::NotLocked => write!(f, "Resource not locked"),
             SyncError::SyncpointError => write!(f, "Syncpoint error"),
             SyncError::RollbackError => write!(f, "Rollback error"),
+            SyncError::Deadlock { task_id, resource } => {
+                write!(f, "Deadlock detected: task {} on resource '{}' (AEYD)", task_id, resource)
+            }
         }
     }
 }
@@ -385,6 +466,96 @@ mod tests {
         assert!(!mgr.is_locked("RES1"));
         assert!(!mgr.is_locked("RES2"));
         assert!(!mgr.is_locked("RES3"));
+    }
+
+    // === Story 207.1: Deadlock detection ===
+
+    #[test]
+    fn test_deadlock_detection_simple() {
+        let mut mgr = EnqueueManager::new();
+
+        // Task 1 locks RES1
+        mgr.enq("RES1", LockType::Exclusive, 1, false).unwrap();
+        // Task 2 locks RES2
+        mgr.enq("RES2", LockType::Exclusive, 2, false).unwrap();
+
+        // Task 1 tries to lock RES2 (blocked, goes to wait queue)
+        let result = mgr.enq("RES2", LockType::Exclusive, 1, false);
+        assert!(matches!(result, Err(SyncError::Waiting)));
+
+        // Task 2 tries to lock RES1 — deadlock! (2 waits for 1, 1 waits for 2)
+        let result = mgr.enq("RES1", LockType::Exclusive, 2, false);
+        assert!(matches!(result, Err(SyncError::Deadlock { task_id: 2, .. })));
+    }
+
+    #[test]
+    fn test_deadlock_detection_three_way() {
+        let mut mgr = EnqueueManager::new();
+
+        // Task 1 -> RES1, Task 2 -> RES2, Task 3 -> RES3
+        mgr.enq("RES1", LockType::Exclusive, 1, false).unwrap();
+        mgr.enq("RES2", LockType::Exclusive, 2, false).unwrap();
+        mgr.enq("RES3", LockType::Exclusive, 3, false).unwrap();
+
+        // Task 1 waits for RES2 (held by 2)
+        let _ = mgr.enq("RES2", LockType::Exclusive, 1, false);
+        // Task 2 waits for RES3 (held by 3)
+        let _ = mgr.enq("RES3", LockType::Exclusive, 2, false);
+        // Task 3 waits for RES1 (held by 1) — cycle: 3→1→2→3
+        let result = mgr.enq("RES1", LockType::Exclusive, 3, false);
+        assert!(matches!(result, Err(SyncError::Deadlock { task_id: 3, .. })));
+    }
+
+    // === Story 207.2: NOSUSPEND and timeout ===
+
+    #[test]
+    fn test_nosuspend_returns_busy() {
+        let mut mgr = EnqueueManager::new();
+
+        // Task 1 locks resource
+        mgr.enq("RES1", LockType::Exclusive, 1, false).unwrap();
+
+        // Task 2 tries with NOSUSPEND
+        let result = mgr.enq("RES1", LockType::Exclusive, 2, true);
+        assert!(matches!(result, Err(SyncError::ResourceBusy)));
+    }
+
+    #[test]
+    fn test_lock_timeout_setting() {
+        let mut mgr = EnqueueManager::new();
+        assert_eq!(mgr.lock_timeout(), 0);
+
+        mgr.set_lock_timeout(5000);
+        assert_eq!(mgr.lock_timeout(), 5000);
+    }
+
+    #[test]
+    fn test_wait_queue_count() {
+        let mut mgr = EnqueueManager::new();
+
+        mgr.enq("RES1", LockType::Exclusive, 1, false).unwrap();
+        assert_eq!(mgr.wait_queue_len(), 0);
+
+        // Task 2 waits
+        let _ = mgr.enq("RES1", LockType::Exclusive, 2, false);
+        assert_eq!(mgr.wait_queue_len(), 1);
+
+        // Release by task 1 should grant to task 2
+        mgr.deq("RES1", 1).unwrap();
+        assert_eq!(mgr.wait_queue_len(), 0);
+    }
+
+    #[test]
+    fn test_no_deadlock_when_no_cycle() {
+        let mut mgr = EnqueueManager::new();
+
+        // Task 1 locks RES1, Task 2 locks RES2
+        mgr.enq("RES1", LockType::Exclusive, 1, false).unwrap();
+        mgr.enq("RES2", LockType::Exclusive, 2, false).unwrap();
+
+        // Task 3 waits for RES1 — no cycle because task 3 holds nothing
+        let result = mgr.enq("RES1", LockType::Exclusive, 3, false);
+        assert!(matches!(result, Err(SyncError::Waiting)));
     }
 
     #[test]

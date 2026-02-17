@@ -4,6 +4,7 @@
 
 use super::{Commarea, Eib, FileManager, TransactionContext};
 use crate::queues::td::{TdQueueManager, TdError};
+use crate::sync::EnqueueManager;
 use crate::{CicsError, CicsResponse, CicsResult};
 use std::collections::HashMap;
 
@@ -75,6 +76,8 @@ pub struct CicsRuntime {
     pub files: FileManager,
     /// Transient Data queue manager
     pub td_queues: TdQueueManager,
+    /// Resource enqueue manager (ENQ/DEQ)
+    pub enqueue: EnqueueManager,
     /// Current COMMAREA
     commarea: Option<Commarea>,
     /// Program call stack
@@ -93,6 +96,16 @@ pub struct CicsRuntime {
     terminal_input: Option<Vec<u8>>,
     /// Terminal erase flag
     terminal_erase: bool,
+    /// System ID (SYSID) — 4-char region identifier
+    sysid: String,
+    /// Application ID (APPLID) — VTAM application name
+    applid: String,
+    /// Operator ID (OPID) — 3-char operator identifier
+    opid: String,
+    /// Network name (NETNAME) — terminal network name
+    netname: String,
+    /// Start code (STARTCODE) — how the transaction was started
+    startcode: String,
 }
 
 impl CicsRuntime {
@@ -106,6 +119,7 @@ impl CicsRuntime {
             context: TransactionContext::new(transaction_id),
             files: FileManager::new(),
             td_queues: TdQueueManager::new(),
+            enqueue: EnqueueManager::new(),
             commarea: None,
             call_stack: Vec::new(),
             mock_mode: true,
@@ -115,6 +129,11 @@ impl CicsRuntime {
             terminal_output: None,
             terminal_input: None,
             terminal_erase: false,
+            sysid: "CICS".to_string(),
+            applid: "OMCICS01".to_string(),
+            opid: "OPR".to_string(),
+            netname: String::new(),
+            startcode: "TD".to_string(),
         }
     }
 
@@ -419,6 +438,69 @@ impl CicsRuntime {
     /// Get pending trigger transactions from TD queues.
     pub fn get_td_triggers(&mut self) -> Vec<String> {
         self.td_queues.get_pending_triggers()
+    }
+
+    /// Execute ASSIGN command — retrieve system and task values.
+    ///
+    /// Returns a map of requested field names to their values.
+    /// The caller specifies which fields they want by passing option names.
+    pub fn assign(&self, requested_fields: &[&str]) -> HashMap<String, String> {
+        let mut result = HashMap::new();
+
+        for &field in requested_fields {
+            let value = match field.to_uppercase().as_str() {
+                "SYSID" => self.sysid.clone(),
+                "APPLID" => self.applid.clone(),
+                "USERID" => self.context.user_id.clone().unwrap_or_default(),
+                "OPID" => self.opid.clone(),
+                "FACILITY" => self.context.terminal_id.clone().unwrap_or_default(),
+                "NETNAME" => self.netname.clone(),
+                "STARTCODE" => self.startcode.clone(),
+                "TRNID" | "TRANSID" => self.eib.transaction_id(),
+                "TERMID" | "TERMCODE" => self.eib.terminal_id(),
+                "SCRNHT" => {
+                    // Return screen height — requires terminal info
+                    "24".to_string() // Default Model 2
+                }
+                "SCRNWD" => {
+                    "80".to_string() // Default Model 2
+                }
+                "CWALENG" => {
+                    let len = self.commarea.as_ref().map_or(0, |c| c.len());
+                    len.to_string()
+                }
+                "EIBCALEN" => self.eib.eibcalen.to_string(),
+                _ => String::new(),
+            };
+            result.insert(field.to_uppercase(), value);
+        }
+
+        result
+    }
+
+    /// Set SYSID.
+    pub fn set_sysid(&mut self, sysid: &str) {
+        self.sysid = sysid.to_string();
+    }
+
+    /// Set APPLID.
+    pub fn set_applid(&mut self, applid: &str) {
+        self.applid = applid.to_string();
+    }
+
+    /// Set OPID.
+    pub fn set_opid(&mut self, opid: &str) {
+        self.opid = opid.to_string();
+    }
+
+    /// Set NETNAME.
+    pub fn set_netname(&mut self, netname: &str) {
+        self.netname = netname.to_string();
+    }
+
+    /// Set STARTCODE.
+    pub fn set_startcode(&mut self, startcode: &str) {
+        self.startcode = startcode.to_string();
     }
 
     /// Execute CONVERSE command — combined SEND + RECEIVE.
@@ -937,6 +1019,59 @@ mod tests {
 
         let data = runtime.receive_data(4).unwrap();
         assert_eq!(data, b"LONG");
+    }
+
+    // === Story 205.1: ASSIGN system values ===
+
+    #[test]
+    fn test_assign_system_values() {
+        let mut runtime = CicsRuntime::new("MENU");
+        runtime.context.user_id = Some("USER01".to_string());
+        runtime.context.terminal_id = Some("T001".to_string());
+
+        let values = runtime.assign(&["SYSID", "APPLID", "USERID", "FACILITY", "TRNID"]);
+
+        assert_eq!(values.get("SYSID"), Some(&"CICS".to_string()));
+        assert_eq!(values.get("APPLID"), Some(&"OMCICS01".to_string()));
+        assert_eq!(values.get("USERID"), Some(&"USER01".to_string()));
+        assert_eq!(values.get("FACILITY"), Some(&"T001".to_string()));
+        assert_eq!(values.get("TRNID"), Some(&"MENU".to_string()));
+    }
+
+    #[test]
+    fn test_assign_custom_sysid() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.set_sysid("SYS1");
+        runtime.set_applid("PROD01");
+        runtime.set_opid("AB1");
+        runtime.set_netname("NETLU01");
+        runtime.set_startcode("S");
+
+        let values = runtime.assign(&["SYSID", "APPLID", "OPID", "NETNAME", "STARTCODE"]);
+
+        assert_eq!(values.get("SYSID"), Some(&"SYS1".to_string()));
+        assert_eq!(values.get("APPLID"), Some(&"PROD01".to_string()));
+        assert_eq!(values.get("OPID"), Some(&"AB1".to_string()));
+        assert_eq!(values.get("NETNAME"), Some(&"NETLU01".to_string()));
+        assert_eq!(values.get("STARTCODE"), Some(&"S".to_string()));
+    }
+
+    #[test]
+    fn test_assign_commarea_length() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.set_commarea(super::super::Commarea::new(256));
+
+        let values = runtime.assign(&["EIBCALEN", "CWALENG"]);
+
+        assert_eq!(values.get("EIBCALEN"), Some(&"256".to_string()));
+        assert_eq!(values.get("CWALENG"), Some(&"256".to_string()));
+    }
+
+    #[test]
+    fn test_assign_unknown_field_returns_empty() {
+        let runtime = CicsRuntime::new("TEST");
+        let values = runtime.assign(&["NONEXISTENT"]);
+        assert_eq!(values.get("NONEXISTENT"), Some(&String::new()));
     }
 
     #[test]

@@ -210,6 +210,11 @@ impl CicsDispatcher {
             "CICSSEND" => Self::dispatch_send(params, runtime),
             "CICSRECV" => Self::dispatch_receive(params, runtime),
             "CICSCNVS" => Self::dispatch_converse(params, runtime),
+            // System info
+            "CICSASGN" => Self::dispatch_assign(params, runtime),
+            // ENQ/DEQ
+            "CICSENQ" => Self::dispatch_enq(params, runtime),
+            "CICSDEQ" => Self::dispatch_deq(params, runtime),
             // Storage management
             "CICSGMN"  => Self::dispatch_getmain(params, runtime),
             // Condition handling
@@ -502,6 +507,86 @@ impl CicsDispatcher {
         }
     }
 
+    // --- ENQ/DEQ ---
+
+    fn dispatch_enq(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        let resource = params.require("RESOURCE")?;
+        let nosuspend = params.get("NOSUSPEND").is_some();
+        let lock_type = if params.get("LENGTH").is_some() {
+            // LENGTH implies shared lock semantics for partial resource
+            crate::sync::LockType::Shared
+        } else {
+            crate::sync::LockType::Exclusive
+        };
+
+        runtime.eib.reset_for_command();
+        let task_id = runtime.eib.eibtaskn;
+
+        match runtime.enqueue.enq(resource, lock_type, task_id, nosuspend) {
+            Ok(()) => {
+                runtime.eib.set_response(CicsResponse::Normal);
+                Ok(DispatchResult::ok())
+            }
+            Err(crate::sync::SyncError::ResourceBusy) => {
+                runtime.eib.set_response(CicsResponse::Enqbusy);
+                Ok(DispatchResult::from_eib(&runtime.eib))
+            }
+            Err(crate::sync::SyncError::Deadlock { .. }) => {
+                // AEYD abend — deadlock detected
+                runtime.eib.set_response(CicsResponse::Error);
+                runtime.eib.set_response2(2); // Deadlock indicator
+                Ok(DispatchResult::from_eib(&runtime.eib))
+            }
+            Err(_) => {
+                runtime.eib.set_response(CicsResponse::Error);
+                Ok(DispatchResult::from_eib(&runtime.eib))
+            }
+        }
+    }
+
+    fn dispatch_deq(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        let resource = params.require("RESOURCE")?;
+
+        runtime.eib.reset_for_command();
+        let task_id = runtime.eib.eibtaskn;
+
+        match runtime.enqueue.deq(resource, task_id) {
+            Ok(()) => {
+                runtime.eib.set_response(CicsResponse::Normal);
+                Ok(DispatchResult::ok())
+            }
+            Err(_) => {
+                runtime.eib.set_response(CicsResponse::Error);
+                Ok(DispatchResult::from_eib(&runtime.eib))
+            }
+        }
+    }
+
+    // --- System Info ---
+
+    fn dispatch_assign(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        // The params contain the field names the program wants to retrieve.
+        // Each key in the params is a field name (e.g., SYSID, USERID, etc.)
+        // and the value is the COBOL variable to store the result.
+        let field_names: Vec<&str> = params.params.keys().map(|k| k.as_str()).collect();
+        let values = runtime.assign(&field_names);
+
+        let mut result = DispatchResult::ok();
+        for (key, value) in values {
+            result.output_fields.insert(key, value);
+        }
+        Ok(result)
+    }
+
     // --- Storage Management ---
 
     fn dispatch_getmain(
@@ -773,6 +858,62 @@ mod tests {
         let result = CicsDispatcher::dispatch("CICSRECV", &params, &mut runtime, None).unwrap();
         assert_eq!(result.eibresp, CicsResponse::Normal as u32);
         assert_eq!(result.output_data, Some(b"INPUT DATA".to_vec()));
+    }
+
+    // === Story 205.1: ASSIGN dispatch ===
+
+    #[test]
+    fn test_dispatch_assign() {
+        let mut runtime = CicsRuntime::new("MENU");
+        runtime.context.user_id = Some("ADMIN".to_string());
+
+        let mut params = CommandParamBlock::new("CICSASGN");
+        params.set("SYSID", "WS-SYS");
+        params.set("USERID", "WS-USER");
+
+        let result = CicsDispatcher::dispatch("CICSASGN", &params, &mut runtime, None).unwrap();
+        assert_eq!(result.eibresp, CicsResponse::Normal as u32);
+        assert_eq!(result.output_fields.get("SYSID"), Some(&"CICS".to_string()));
+        assert_eq!(result.output_fields.get("USERID"), Some(&"ADMIN".to_string()));
+    }
+
+    // === Story 207.1/207.2: ENQ/DEQ dispatch ===
+
+    #[test]
+    fn test_dispatch_enq_deq() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.eib.eibtaskn = 1;
+
+        let mut params = CommandParamBlock::new("CICSENQ");
+        params.set("RESOURCE", "MY-RES");
+
+        let result = CicsDispatcher::dispatch("CICSENQ", &params, &mut runtime, None).unwrap();
+        assert_eq!(result.eibresp, CicsResponse::Normal as u32);
+
+        // DEQ
+        let mut params = CommandParamBlock::new("CICSDEQ");
+        params.set("RESOURCE", "MY-RES");
+
+        let result = CicsDispatcher::dispatch("CICSDEQ", &params, &mut runtime, None).unwrap();
+        assert_eq!(result.eibresp, CicsResponse::Normal as u32);
+    }
+
+    #[test]
+    fn test_dispatch_enq_nosuspend_busy() {
+        let mut runtime = CicsRuntime::new("TEST");
+        runtime.eib.eibtaskn = 1;
+
+        // Task 1 locks the resource
+        runtime.enqueue.enq("MY-RES", crate::sync::LockType::Exclusive, 1, false).unwrap();
+
+        // Task 2 tries with NOSUSPEND
+        runtime.eib.eibtaskn = 2;
+        let mut params = CommandParamBlock::new("CICSENQ");
+        params.set("RESOURCE", "MY-RES");
+        params.set("NOSUSPEND", "");
+
+        let result = CicsDispatcher::dispatch("CICSENQ", &params, &mut runtime, None).unwrap();
+        assert_eq!(result.eibresp, CicsResponse::Enqbusy as u32);
     }
 
     #[test]

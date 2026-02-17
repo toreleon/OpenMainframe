@@ -433,6 +433,10 @@ impl CicsPreprocessor {
             CicsCommandType::MoveContainer => "CICSMOVC",
             CicsCommandType::DeleteContainer => "CICSDELC",
             CicsCommandType::Converse => "CICSCNVS",
+            CicsCommandType::Assign => "CICSASGN",
+            CicsCommandType::Abend => "CICSABND",
+            CicsCommandType::Enq => "CICSENQ",
+            CicsCommandType::Deq => "CICSDEQ",
             _ => "CICSEXEC",
         };
 
