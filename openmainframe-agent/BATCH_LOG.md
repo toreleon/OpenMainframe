@@ -101,3 +101,19 @@
   - agent/src/nodes/__init__.py (updated — exports assess_node)
   - agent/src/agent.py (updated — assess node added, full graph complete: router → 6 capability nodes + ToolNode)
 - Notes: Completes the full agent graph. All 6 capability nodes are wired: assess, compile, execute, explain, dataset, chat. Router dispatches all intents to dedicated nodes — no more chat fallback for unhandled intents. Assess node presents executive summaries, groups findings by category, and offers drill-down from scan to individual files.
+
+## Batch 9a: UI Layout + Viewers (E-900 part 1)
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - src/hooks/useAgentState.ts (typed useCoAgent wrapper)
+  - src/hooks/useWorkspaceTabs.ts (tab management — open/close/activate, max 8 tabs)
+  - src/components/layout/Header.tsx (app header with project path)
+  - src/components/layout/FileTreePanel.tsx (left panel with file list, type icons, line counts)
+  - src/components/layout/WorkspacePanel.tsx (center panel with TabManager + content area)
+  - src/components/layout/StatusBar.tsx (bottom bar with operation status, progress, file count)
+  - src/components/workspace/TabManager.tsx (tab bar with close buttons, active highlighting)
+  - src/components/workspace/WelcomeScreen.tsx (welcome screen with 6 action cards)
+  - src/components/workspace/CodeViewer.tsx (COBOL/JCL syntax highlighting with line numbers)
+  - src/app/page.tsx (updated — 3-column layout: Header + FileTree | Workspace + StatusBar + CopilotSidebar)
+- Notes: Three-column layout with dark theme using om-* color tokens. FileTreePanel shows source files with type icons (CB, JC, CP, BM, DA). CodeViewer provides word-level syntax highlighting for COBOL and JCL keywords, string literals, and numbers. COBOL column-7 comments and JCL //* comments rendered in italic muted style. Tabs support welcome, code, assessment, and execution types.

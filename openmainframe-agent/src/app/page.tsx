@@ -1,8 +1,23 @@
 "use client";
 
 import { CopilotSidebar } from "@copilotkit/react-ui";
+import { useAgentState } from "@/hooks/useAgentState";
+import { useWorkspaceTabs } from "@/hooks/useWorkspaceTabs";
+import { Header } from "@/components/layout/Header";
+import { FileTreePanel } from "@/components/layout/FileTreePanel";
+import { WorkspacePanel } from "@/components/layout/WorkspacePanel";
+import { StatusBar } from "@/components/layout/StatusBar";
 
 export default function Home() {
+  const { state } = useAgentState();
+  const { tabs, activeTab, activeTabId, setActiveTabId, openTab, closeTab } =
+    useWorkspaceTabs();
+
+  const handleFileSelect = (path: string) => {
+    const name = path.split("/").pop() || path;
+    openTab({ type: "code", label: name, path });
+  };
+
   return (
     <CopilotSidebar
       defaultOpen={true}
@@ -12,42 +27,27 @@ export default function Home() {
           "Hello! I'm your mainframe modernization assistant. I can help you assess, compile, execute, and explain COBOL and JCL code. Set a project directory to get started, or just ask me a question.",
       }}
     >
-      <main className="flex h-screen bg-om-bg">
-        {/* Workspace area — expanded in Batch 9 */}
-        <div className="flex-1 flex items-center justify-center p-8">
-          <div className="max-w-lg text-center">
-            <h1 className="text-3xl font-bold text-om-text mb-4">
-              OpenMainframe Agent
-            </h1>
-            <p className="text-om-muted mb-8">
-              AI-powered mainframe modernization assistant. Use the chat panel
-              to interact with your COBOL and JCL codebases.
-            </p>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="bg-om-surface border border-om-border rounded-lg p-4 text-center">
-                <div className="text-2xl mb-2">📊</div>
-                <div className="text-sm text-om-text font-medium">Assess</div>
-                <div className="text-xs text-om-muted mt-1">
-                  Scan a codebase
-                </div>
-              </div>
-              <div className="bg-om-surface border border-om-border rounded-lg p-4 text-center">
-                <div className="text-2xl mb-2">🔨</div>
-                <div className="text-sm text-om-text font-medium">Compile</div>
-                <div className="text-xs text-om-muted mt-1">
-                  Build a program
-                </div>
-              </div>
-              <div className="bg-om-surface border border-om-border rounded-lg p-4 text-center">
-                <div className="text-2xl mb-2">📖</div>
-                <div className="text-sm text-om-text font-medium">Explain</div>
-                <div className="text-xs text-om-muted mt-1">
-                  Understand legacy code
-                </div>
-              </div>
-            </div>
-          </div>
+      <main className="flex flex-col h-screen bg-om-bg">
+        <Header projectPath={state.project_path} />
+        <div className="flex flex-1 min-h-0">
+          <FileTreePanel
+            files={state.source_files}
+            projectPath={state.project_path}
+            onFileSelect={handleFileSelect}
+          />
+          <WorkspacePanel
+            tabs={tabs}
+            activeTab={activeTab}
+            activeTabId={activeTabId}
+            onTabSelect={setActiveTabId}
+            onTabClose={closeTab}
+          />
         </div>
+        <StatusBar
+          currentOperation={state.current_operation}
+          operationProgress={state.operation_progress}
+          fileCount={state.source_files.length}
+        />
       </main>
     </CopilotSidebar>
   );
