@@ -155,6 +155,34 @@ impl SqlRow {
     }
 }
 
+/// A dynamically prepared SQL statement.
+#[derive(Debug, Clone)]
+pub struct PreparedDynamic {
+    /// Statement name (e.g., "STMT1").
+    pub name: String,
+    /// The SQL text as supplied to PREPARE.
+    pub sql: String,
+    /// Translated SQL (PostgreSQL dialect).
+    pub translated_sql: String,
+    /// Number of parameter markers (?).
+    pub param_count: usize,
+}
+
+/// Column description returned by DESCRIBE.
+#[derive(Debug, Clone)]
+pub struct DescribeColumn {
+    /// Column name.
+    pub name: String,
+    /// Column data type.
+    pub data_type: String,
+    /// Column length / precision.
+    pub length: usize,
+    /// Scale (for DECIMAL).
+    pub scale: usize,
+    /// Whether the column is nullable.
+    pub nullable: bool,
+}
+
 /// SQL executor for running statements.
 pub struct SqlExecutor {
     /// SQL translator
@@ -165,6 +193,8 @@ pub struct SqlExecutor {
     mock_mode: bool,
     /// Mock results for testing
     mock_results: Vec<SqlRow>,
+    /// Registry of dynamically prepared statements (PREPARE/EXECUTE).
+    prepared_dynamic: HashMap<String, PreparedDynamic>,
 }
 
 impl SqlExecutor {
@@ -175,6 +205,7 @@ impl SqlExecutor {
             sqlca: Sqlca::new(),
             mock_mode: true,
             mock_results: Vec::new(),
+            prepared_dynamic: HashMap::new(),
         }
     }
 
@@ -397,6 +428,197 @@ impl SqlExecutor {
         }
 
         Ok(self.sqlca.rows_affected())
+    }
+
+    /// Prepare a dynamic SQL statement.
+    ///
+    /// Parses `PREPARE <name> FROM <sql_text>` — the SQL text is provided
+    /// at runtime (typically from a COBOL host variable).  The prepared
+    /// statement is stored in the internal registry and can be later
+    /// executed via `execute_prepared()`.
+    pub fn prepare(
+        &mut self,
+        stmt_name: &str,
+        sql_text: &str,
+    ) -> Db2Result<()> {
+        self.sqlca.reset();
+
+        let name = stmt_name.to_uppercase();
+
+        // Count parameter markers (?)
+        let param_count = sql_text.chars().filter(|&c| c == '?').count();
+
+        // Translate SQL
+        let translated = self.translator.translate(sql_text);
+
+        let prepared = PreparedDynamic {
+            name: name.clone(),
+            sql: sql_text.to_string(),
+            translated_sql: translated,
+            param_count,
+        };
+
+        self.prepared_dynamic.insert(name, prepared);
+        self.sqlca.set_success();
+        Ok(())
+    }
+
+    /// Execute a previously prepared dynamic SQL statement.
+    ///
+    /// `params` supplies the values for parameter markers (?) in the order
+    /// they appear in the prepared SQL.
+    pub fn execute_prepared(
+        &mut self,
+        stmt_name: &str,
+        params: &[SqlValue],
+    ) -> Db2Result<i32> {
+        self.sqlca.reset();
+
+        let name = stmt_name.to_uppercase();
+
+        let prepared = match self.prepared_dynamic.get(&name) {
+            Some(p) => p.clone(),
+            None => {
+                self.sqlca.set_error(-518, &format!("Statement {} has not been prepared", name));
+                return Ok(0);
+            }
+        };
+
+        // Validate parameter count
+        if params.len() != prepared.param_count {
+            self.sqlca.set_error(
+                -313,
+                &format!(
+                    "Number of host variables ({}) does not match parameter markers ({})",
+                    params.len(),
+                    prepared.param_count
+                ),
+            );
+            return Ok(0);
+        }
+
+        // In mock mode, simulate execution
+        if self.mock_mode {
+            self.sqlca.set_success();
+            self.sqlca.set_rows_affected(1);
+            return Ok(1);
+        }
+
+        #[cfg(feature = "postgres")]
+        {
+            self.sqlca.set_success();
+            self.sqlca.set_rows_affected(1);
+        }
+
+        Ok(self.sqlca.rows_affected())
+    }
+
+    /// Execute a dynamic SQL statement immediately (EXECUTE IMMEDIATE).
+    ///
+    /// Combines PREPARE + EXECUTE in a single step.  Suited for DDL and
+    /// other one-shot statements that need no parameter markers.
+    pub fn execute_immediate(
+        &mut self,
+        sql_text: &str,
+    ) -> Db2Result<i32> {
+        self.sqlca.reset();
+
+        // Translate SQL
+        let _pg_sql = self.translator.translate(sql_text);
+
+        // In mock mode, simulate success
+        if self.mock_mode {
+            self.sqlca.set_success();
+            return Ok(0);
+        }
+
+        #[cfg(feature = "postgres")]
+        {
+            self.sqlca.set_success();
+        }
+
+        Ok(0)
+    }
+
+    /// Describe a prepared statement's result columns.
+    ///
+    /// Returns column metadata (name, type, length, nullability) for the
+    /// result set of a previously prepared SELECT statement.
+    pub fn describe(
+        &mut self,
+        stmt_name: &str,
+    ) -> Db2Result<Vec<DescribeColumn>> {
+        self.sqlca.reset();
+
+        let name = stmt_name.to_uppercase();
+
+        let prepared = match self.prepared_dynamic.get(&name) {
+            Some(p) => p.clone(),
+            None => {
+                self.sqlca.set_error(-518, &format!("Statement {} has not been prepared", name));
+                return Ok(Vec::new());
+            }
+        };
+
+        // In mock mode, derive columns from the SQL text (best-effort parse)
+        if self.mock_mode {
+            let columns = self.mock_describe_columns(&prepared.sql);
+            self.sqlca.set_success();
+            return Ok(columns);
+        }
+
+        #[cfg(feature = "postgres")]
+        {
+            self.sqlca.set_success();
+        }
+
+        Ok(Vec::new())
+    }
+
+    /// Get a reference to a prepared dynamic statement.
+    pub fn get_prepared(&self, stmt_name: &str) -> Option<&PreparedDynamic> {
+        self.prepared_dynamic.get(&stmt_name.to_uppercase())
+    }
+
+    /// Best-effort extraction of column names from a SELECT statement.
+    fn mock_describe_columns(&self, sql: &str) -> Vec<DescribeColumn> {
+        let upper = sql.trim().to_uppercase();
+        if !upper.starts_with("SELECT") {
+            return Vec::new();
+        }
+
+        // Extract column list between SELECT and FROM
+        let from_pos = match upper.find(" FROM ") {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+
+        let select_len = "SELECT".len();
+        let col_part = &sql[select_len..from_pos];
+
+        if col_part.trim() == "*" {
+            return vec![DescribeColumn {
+                name: "*".to_string(),
+                data_type: "VARCHAR".to_string(),
+                length: 0,
+                scale: 0,
+                nullable: true,
+            }];
+        }
+
+        col_part
+            .split(',')
+            .map(|c| {
+                let col_name = c.split_whitespace().last().unwrap_or("?");
+                DescribeColumn {
+                    name: col_name.to_uppercase(),
+                    data_type: "VARCHAR".to_string(),
+                    length: 255,
+                    scale: 0,
+                    nullable: true,
+                }
+            })
+            .collect()
     }
 
     /// Bind host variable values to a SQL statement.
@@ -719,5 +941,155 @@ mod tests {
         assert_eq!(row.get(0).unwrap().as_string(), Some("Test"));
         assert_eq!(row.get_by_name("VALUE").unwrap().as_integer(), Some(100));
         assert_eq!(row.get_by_name("name").unwrap().as_string(), Some("Test")); // Case insensitive
+    }
+
+    // --- Dynamic SQL Tests (Epic 300) ---
+
+    #[test]
+    fn test_prepare_and_execute() {
+        let mut executor = SqlExecutor::new();
+
+        // PREPARE
+        executor
+            .prepare("STMT1", "SELECT * FROM EMP WHERE DEPT = ?")
+            .unwrap();
+        assert!(executor.sqlca().is_success());
+
+        // Verify prepared statement
+        let prep = executor.get_prepared("STMT1").unwrap();
+        assert_eq!(prep.name, "STMT1");
+        assert_eq!(prep.param_count, 1);
+
+        // EXECUTE with correct parameter count
+        let rows = executor
+            .execute_prepared("STMT1", &[SqlValue::String("D01".to_string())])
+            .unwrap();
+        assert!(executor.sqlca().is_success());
+        assert_eq!(rows, 1);
+    }
+
+    #[test]
+    fn test_prepare_overwrites_existing() {
+        let mut executor = SqlExecutor::new();
+
+        executor.prepare("S1", "SELECT * FROM T WHERE A = ?").unwrap();
+        assert_eq!(executor.get_prepared("S1").unwrap().param_count, 1);
+
+        executor.prepare("S1", "SELECT * FROM T WHERE A = ? AND B = ?").unwrap();
+        assert_eq!(executor.get_prepared("S1").unwrap().param_count, 2);
+    }
+
+    #[test]
+    fn test_execute_not_prepared() {
+        let mut executor = SqlExecutor::new();
+
+        let rows = executor.execute_prepared("NOPE", &[]).unwrap();
+        assert!(executor.sqlca().is_error());
+        assert_eq!(executor.sqlca().sqlcode(), -518);
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn test_execute_wrong_param_count() {
+        let mut executor = SqlExecutor::new();
+
+        executor.prepare("S1", "SELECT * FROM T WHERE A = ? AND B = ?").unwrap();
+
+        // Too few parameters
+        let rows = executor
+            .execute_prepared("S1", &[SqlValue::Integer(1)])
+            .unwrap();
+        assert!(executor.sqlca().is_error());
+        assert_eq!(executor.sqlca().sqlcode(), -313);
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn test_execute_no_params() {
+        let mut executor = SqlExecutor::new();
+
+        executor.prepare("S1", "SELECT * FROM T").unwrap();
+        let rows = executor.execute_prepared("S1", &[]).unwrap();
+        assert!(executor.sqlca().is_success());
+        assert_eq!(rows, 1);
+    }
+
+    #[test]
+    fn test_execute_immediate_success() {
+        let mut executor = SqlExecutor::new();
+
+        let rows = executor
+            .execute_immediate("CREATE TABLE TEMP1 (COL1 INTEGER)")
+            .unwrap();
+        assert!(executor.sqlca().is_success());
+        assert_eq!(rows, 0); // DDL returns 0 rows
+    }
+
+    #[test]
+    fn test_execute_immediate_drop() {
+        let mut executor = SqlExecutor::new();
+
+        let rows = executor
+            .execute_immediate("DROP TABLE TEMP1")
+            .unwrap();
+        assert!(executor.sqlca().is_success());
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn test_describe_prepared_select() {
+        let mut executor = SqlExecutor::new();
+
+        executor
+            .prepare("S1", "SELECT NAME, AGE, DEPT FROM EMP WHERE ID = ?")
+            .unwrap();
+
+        let columns = executor.describe("S1").unwrap();
+        assert!(executor.sqlca().is_success());
+        assert_eq!(columns.len(), 3);
+        assert_eq!(columns[0].name, "NAME");
+        assert_eq!(columns[1].name, "AGE");
+        assert_eq!(columns[2].name, "DEPT");
+    }
+
+    #[test]
+    fn test_describe_not_prepared() {
+        let mut executor = SqlExecutor::new();
+
+        let columns = executor.describe("NOPE").unwrap();
+        assert!(executor.sqlca().is_error());
+        assert_eq!(executor.sqlca().sqlcode(), -518);
+        assert!(columns.is_empty());
+    }
+
+    #[test]
+    fn test_describe_select_star() {
+        let mut executor = SqlExecutor::new();
+
+        executor.prepare("S1", "SELECT * FROM EMP").unwrap();
+        let columns = executor.describe("S1").unwrap();
+        assert_eq!(columns.len(), 1);
+        assert_eq!(columns[0].name, "*");
+    }
+
+    #[test]
+    fn test_prepare_case_insensitive() {
+        let mut executor = SqlExecutor::new();
+
+        executor.prepare("stmt1", "SELECT 1 FROM DUAL").unwrap();
+        assert!(executor.get_prepared("STMT1").is_some());
+        assert!(executor.get_prepared("stmt1").is_some());
+    }
+
+    #[test]
+    fn test_prepare_sql_translation() {
+        let mut executor = SqlExecutor::new();
+
+        executor
+            .prepare("S1", "SELECT * FROM T FETCH FIRST 5 ROWS ONLY")
+            .unwrap();
+        let prep = executor.get_prepared("S1").unwrap();
+        // DB2 FETCH FIRST should be translated to LIMIT
+        assert!(prep.translated_sql.contains("LIMIT 5"));
     }
 }

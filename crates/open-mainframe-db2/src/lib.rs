@@ -29,9 +29,9 @@ pub mod utilities;
 
 pub use runtime::{
     Cursor, CursorManager, CursorOptions, CursorState, Db2Connection, Db2ConnectionConfig,
-    Db2Runtime, Db2Type, RuntimeHostVariable, RuntimeStatement, Sqlca, SqlcaBuilder, SqlExecutor,
-    SqlRow, SqlTranslator, SqlValue, TransactionConfig, TransactionManager, TransactionState,
-    TypeMapping,
+    Db2Runtime, Db2Type, DescribeColumn, PreparedDynamic, RuntimeHostVariable, RuntimeStatement,
+    Sqlca, SqlcaBuilder, SqlExecutor, SqlRow, SqlTranslator, SqlValue, TransactionConfig,
+    TransactionManager, TransactionState, TypeMapping,
 };
 
 pub use utilities::{

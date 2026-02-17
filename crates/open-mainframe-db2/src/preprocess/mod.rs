@@ -66,6 +66,14 @@ pub enum SqlStatementType {
     Include,
     /// WHENEVER (error handling)
     Whenever,
+    /// PREPARE — compile dynamic SQL into a named statement
+    Prepare,
+    /// EXECUTE — run a previously prepared statement
+    Execute,
+    /// EXECUTE IMMEDIATE — one-shot dynamic SQL
+    ExecuteImmediate,
+    /// DESCRIBE — populate SQLDA with result column info
+    Describe,
     /// Other/unknown
     Other,
 }
@@ -95,6 +103,17 @@ impl SqlStatementType {
             "ROLLBACK" => SqlStatementType::Rollback,
             "INCLUDE" => SqlStatementType::Include,
             "WHENEVER" => SqlStatementType::Whenever,
+            "PREPARE" => SqlStatementType::Prepare,
+            "EXECUTE" => {
+                // EXECUTE IMMEDIATE vs plain EXECUTE
+                let words: Vec<&str> = upper.split_whitespace().collect();
+                if words.len() > 1 && words[1] == "IMMEDIATE" {
+                    SqlStatementType::ExecuteImmediate
+                } else {
+                    SqlStatementType::Execute
+                }
+            }
+            "DESCRIBE" => SqlStatementType::Describe,
             _ => SqlStatementType::Other,
         }
     }
@@ -323,6 +342,10 @@ impl SqlPreprocessor {
             SqlStatementType::Close => "SQLCLOSE",
             SqlStatementType::Commit => "SQLCOMMIT",
             SqlStatementType::Rollback => "SQLROLLBK",
+            SqlStatementType::Prepare => "SQLPREP",
+            SqlStatementType::Execute => "SQLEXECP",
+            SqlStatementType::ExecuteImmediate => "SQLEXECI",
+            SqlStatementType::Describe => "SQLDESCR",
             _ => "SQLEXEC",
         };
 
@@ -429,6 +452,90 @@ mod tests {
         assert_eq!(vars.len(), 1);
         assert_eq!(vars[0].name, "WS-NAME");
         assert_eq!(vars[0].indicator, Some("WS-NAME-IND".to_string()));
+    }
+
+    #[test]
+    fn test_dynamic_sql_type_detection() {
+        assert_eq!(
+            SqlStatementType::from_sql("PREPARE STMT1 FROM :SQL-TEXT"),
+            SqlStatementType::Prepare
+        );
+        assert_eq!(
+            SqlStatementType::from_sql("EXECUTE STMT1 USING :DEPT-NO"),
+            SqlStatementType::Execute
+        );
+        assert_eq!(
+            SqlStatementType::from_sql("EXECUTE IMMEDIATE :DDL-TEXT"),
+            SqlStatementType::ExecuteImmediate
+        );
+        assert_eq!(
+            SqlStatementType::from_sql("DESCRIBE STMT1 INTO :SQLDA"),
+            SqlStatementType::Describe
+        );
+    }
+
+    #[test]
+    fn test_prepare_host_variable_extraction() {
+        let preprocessor = SqlPreprocessor::new();
+        let sql = "PREPARE S1 FROM :SQL-VAR";
+        let vars = preprocessor.extract_host_variables(sql, 1, SqlStatementType::Prepare);
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "SQL-VAR");
+    }
+
+    #[test]
+    fn test_execute_using_extraction() {
+        let preprocessor = SqlPreprocessor::new();
+        let sql = "EXECUTE STMT1 USING :DEPT-NO, :EMP-NAME";
+        let vars = preprocessor.extract_host_variables(sql, 1, SqlStatementType::Execute);
+        assert_eq!(vars.len(), 2);
+        assert_eq!(vars[0].name, "DEPT-NO");
+        assert_eq!(vars[1].name, "EMP-NAME");
+    }
+
+    #[test]
+    fn test_execute_immediate_extraction() {
+        let preprocessor = SqlPreprocessor::new();
+        let sql = "EXECUTE IMMEDIATE :DDL-TEXT";
+        let vars = preprocessor.extract_host_variables(sql, 1, SqlStatementType::ExecuteImmediate);
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "DDL-TEXT");
+    }
+
+    #[test]
+    fn test_prepare_generates_sqlprep_call() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             PREPARE STMT1 FROM :SQL-TEXT
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.sql_statements.len(), 1);
+        assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::Prepare);
+        assert!(result.cobol_source.contains("CALL \"SQLPREP\""));
+    }
+
+    #[test]
+    fn test_execute_immediate_generates_sqlexeci_call() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             EXECUTE IMMEDIATE :DDL-TEXT
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.sql_statements.len(), 1);
+        assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::ExecuteImmediate);
+        assert!(result.cobol_source.contains("CALL \"SQLEXECI\""));
     }
 
     #[test]

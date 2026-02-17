@@ -13,7 +13,10 @@ mod types;
 
 pub use connection::{Db2Connection, Db2ConnectionConfig};
 pub use cursor::{Cursor, CursorManager, CursorOptions, CursorState};
-pub use executor::{RuntimeHostVariable, RuntimeStatement, SqlExecutor, SqlRow, SqlValue};
+pub use executor::{
+    DescribeColumn, PreparedDynamic, RuntimeHostVariable, RuntimeStatement, SqlExecutor, SqlRow,
+    SqlValue,
+};
 pub use sqlca::{Sqlca, SqlcaBuilder};
 pub use transaction::{TransactionConfig, TransactionManager, TransactionState};
 pub use translate::SqlTranslator;
