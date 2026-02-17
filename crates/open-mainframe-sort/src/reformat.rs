@@ -278,6 +278,156 @@ fn apply_edit_mask(value: i64, mask: &str) -> String {
     result
 }
 
+/// Date/time formatting and arithmetic for DFSORT.
+pub mod datetime {
+    /// A simple date representation (year, month, day).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct SimpleDate {
+        pub year: i32,
+        pub month: u32,
+        pub day: u32,
+    }
+
+    impl SimpleDate {
+        /// Create a new date.
+        pub fn new(year: i32, month: u32, day: u32) -> Self {
+            Self { year, month, day }
+        }
+
+        /// Convert to days since epoch (1970-01-01) for arithmetic.
+        ///
+        /// Uses Howard Hinnant's algorithm (inverse of `from_days`).
+        pub fn to_days(&self) -> i64 {
+            let y = self.year as i64;
+            let m = self.month;
+            let d = self.day;
+            // Shift year so March is month 1
+            let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+            let era = if y >= 0 { y } else { y - 399 } / 400;
+            let yoe = (y - era * 400) as u32;
+            let doy = (153 * m + 2) / 5 + d - 1;
+            let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+            era * 146097 + doe as i64 - 719468
+        }
+
+        /// Create from days since epoch.
+        pub fn from_days(days: i64) -> Self {
+            let z = days + 719468;
+            let era = if z >= 0 { z } else { z - 146096 } / 146097;
+            let doe = (z - era * 146097) as u32;
+            let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+            let y = yoe as i64 + era * 400;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let d = doy - (153 * mp + 2) / 5 + 1;
+            let m = if mp < 10 { mp + 3 } else { mp - 9 };
+            let y = if m <= 2 { y + 1 } else { y };
+            SimpleDate::new(y as i32, m, d)
+        }
+
+        /// Add days.
+        pub fn add_days(&self, n: i32) -> Self {
+            Self::from_days(self.to_days() + n as i64)
+        }
+
+        /// Add months (clamping day to last day of target month).
+        pub fn add_months(&self, n: i32) -> Self {
+            let total_months = (self.year * 12 + self.month as i32 - 1) + n;
+            let new_year = total_months.div_euclid(12);
+            let new_month = (total_months.rem_euclid(12) + 1) as u32;
+            let max_day = days_in_month(new_year, new_month);
+            let new_day = self.day.min(max_day);
+            SimpleDate::new(new_year, new_month, new_day)
+        }
+
+        /// Add years (clamping Feb 29 if needed).
+        pub fn add_years(&self, n: i32) -> Self {
+            let new_year = self.year + n;
+            let max_day = days_in_month(new_year, self.month);
+            let new_day = self.day.min(max_day);
+            SimpleDate::new(new_year, self.month, new_day)
+        }
+
+        /// Days between two dates (self - other).
+        pub fn diff_days(&self, other: &SimpleDate) -> i64 {
+            self.to_days() - other.to_days()
+        }
+
+        /// Format as YYYYMMDD.
+        pub fn to_ymd(&self) -> String {
+            format!("{:04}{:02}{:02}", self.year, self.month, self.day)
+        }
+
+        /// Parse from YYYYMMDD string.
+        pub fn from_ymd(s: &str) -> Option<Self> {
+            if s.len() < 8 {
+                return None;
+            }
+            let year = s[0..4].parse::<i32>().ok()?;
+            let month = s[4..6].parse::<u32>().ok()?;
+            let day = s[6..8].parse::<u32>().ok()?;
+            Some(SimpleDate::new(year, month, day))
+        }
+
+        /// Format as YYYY/MM/DD (or with any separator).
+        pub fn format_ymd(&self, sep: char) -> String {
+            format!("{:04}{}{:02}{}{:02}", self.year, sep, self.month, sep, self.day)
+        }
+
+        /// Format as MM/DD/YYYY.
+        pub fn format_mdy(&self, sep: char) -> String {
+            format!("{:02}{}{:02}{}{:04}", self.month, sep, self.day, sep, self.year)
+        }
+
+        /// Format as DD/MM/YYYY.
+        pub fn format_dmy(&self, sep: char) -> String {
+            format!("{:02}{}{:02}{}{:04}", self.day, sep, self.month, sep, self.year)
+        }
+    }
+
+    /// Days in a given month, accounting for leap years.
+    pub fn days_in_month(year: i32, month: u32) -> u32 {
+        match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 => if is_leap_year(year) { 29 } else { 28 },
+            _ => 30,
+        }
+    }
+
+    /// Check if a year is a leap year.
+    pub fn is_leap_year(year: i32) -> bool {
+        (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    }
+
+    /// Format a packed Julian date (0cyydddF) as YYYY/DDD.
+    ///
+    /// DT1 format: c=century (0=1900, 1=2000), yy=year, ddd=day of year.
+    pub fn format_dt1(packed_bytes: &[u8]) -> Option<String> {
+        if packed_bytes.len() < 4 {
+            return None;
+        }
+        // Extract packed: 0cyydddF → nibbles
+        let c = (packed_bytes[0] >> 4) & 0x0F;
+        let century = if c == 0 { 1900 } else { 2000 };
+        let yy = ((packed_bytes[0] & 0x0F) * 10 + (packed_bytes[1] >> 4)) as u32;
+        let d1 = (packed_bytes[1] & 0x0F) as u32;
+        let d2 = ((packed_bytes[2] >> 4) & 0x0F) as u32;
+        let d3 = (packed_bytes[2] & 0x0F) as u32;
+        let ddd = d1 * 100 + d2 * 10 + d3;
+        let year = century + yy;
+        Some(format!("{:04}/{:03}", year, ddd))
+    }
+
+    /// Format time as HH:MM:SS from a STCK-derived value (binary seconds since midnight).
+    pub fn format_time_hms(seconds_since_midnight: u32) -> String {
+        let h = seconds_since_midnight / 3600;
+        let m = (seconds_since_midnight % 3600) / 60;
+        let s = seconds_since_midnight % 60;
+        format!("{:02}:{:02}:{:02}", h, m, s)
+    }
+}
+
 /// Find and replace all occurrences of `find` in `data` with `replace`.
 fn find_and_replace(data: &[u8], find: &[u8], replace: &[u8]) -> Vec<u8> {
     if find.is_empty() {
@@ -544,6 +694,113 @@ mod tests {
         assert!(OutrecSpec::new()
             .add_findrep(b"A".to_vec(), b"B".to_vec())
             .is_valid());
+    }
+
+    // -----------------------------------------------------------------------
+    // Date/Time Editing Tests (Epic 810)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_simple_date_arithmetic_add_days() {
+        use super::datetime::SimpleDate;
+        let d = SimpleDate::new(2024, 1, 15);
+        let result = d.add_days(30);
+        assert_eq!(result, SimpleDate::new(2024, 2, 14));
+    }
+
+    #[test]
+    fn test_simple_date_arithmetic_cross_year() {
+        use super::datetime::SimpleDate;
+        let d = SimpleDate::new(2024, 12, 25);
+        let result = d.add_days(10);
+        assert_eq!(result, SimpleDate::new(2025, 1, 4));
+    }
+
+    #[test]
+    fn test_simple_date_add_months() {
+        use super::datetime::SimpleDate;
+        let d = SimpleDate::new(2024, 1, 31);
+        // Jan 31 + 1 month → Feb 29 (2024 is leap)
+        let result = d.add_months(1);
+        assert_eq!(result, SimpleDate::new(2024, 2, 29));
+    }
+
+    #[test]
+    fn test_simple_date_add_years_leap() {
+        use super::datetime::SimpleDate;
+        let d = SimpleDate::new(2024, 2, 29);
+        // Feb 29, 2024 + 1 year → Feb 28, 2025 (not leap)
+        let result = d.add_years(1);
+        assert_eq!(result, SimpleDate::new(2025, 2, 28));
+    }
+
+    #[test]
+    fn test_simple_date_sub_days() {
+        use super::datetime::SimpleDate;
+        let d = SimpleDate::new(2024, 3, 1);
+        let result = d.add_days(-1);
+        assert_eq!(result, SimpleDate::new(2024, 2, 29));
+    }
+
+    #[test]
+    fn test_date_diff() {
+        use super::datetime::SimpleDate;
+        let d1 = SimpleDate::new(2024, 3, 15);
+        let d2 = SimpleDate::new(2024, 1, 1);
+        assert_eq!(d1.diff_days(&d2), 74); // Jan has 31, Feb has 29 (leap), + 14 = 74
+    }
+
+    #[test]
+    fn test_date_format_ymd() {
+        use super::datetime::SimpleDate;
+        let d = SimpleDate::new(2024, 7, 4);
+        assert_eq!(d.format_ymd('/'), "2024/07/04");
+        assert_eq!(d.format_mdy('-'), "07-04-2024");
+        assert_eq!(d.format_dmy('.'), "04.07.2024");
+    }
+
+    #[test]
+    fn test_date_from_ymd_string() {
+        use super::datetime::SimpleDate;
+        let d = SimpleDate::from_ymd("20240704").unwrap();
+        assert_eq!(d, SimpleDate::new(2024, 7, 4));
+    }
+
+    #[test]
+    fn test_date_roundtrip() {
+        use super::datetime::SimpleDate;
+        let d = SimpleDate::new(2024, 12, 25);
+        let days = d.to_days();
+        let d2 = SimpleDate::from_days(days);
+        assert_eq!(d, d2);
+    }
+
+    #[test]
+    fn test_format_time_hms() {
+        use super::datetime;
+        assert_eq!(datetime::format_time_hms(0), "00:00:00");
+        assert_eq!(datetime::format_time_hms(3661), "01:01:01");
+        assert_eq!(datetime::format_time_hms(86399), "23:59:59");
+    }
+
+    #[test]
+    fn test_dt1_format() {
+        use super::datetime;
+        // DT1: 0cyydddF packed
+        // Year 2024, day 001: c=1, yy=24, ddd=001, F=0x0C (positive)
+        // Nibbles: 1 2 4 0 0 1 C → bytes: 0x12, 0x40, 0x01, 0x0C
+        let bytes = [0x12, 0x40, 0x01, 0x0C];
+        let result = datetime::format_dt1(&bytes);
+        assert_eq!(result, Some("2024/001".to_string()));
+    }
+
+    #[test]
+    fn test_is_leap_year() {
+        use super::datetime;
+        assert!(datetime::is_leap_year(2000));
+        assert!(datetime::is_leap_year(2024));
+        assert!(!datetime::is_leap_year(1900));
+        assert!(!datetime::is_leap_year(2023));
     }
 
     #[test]

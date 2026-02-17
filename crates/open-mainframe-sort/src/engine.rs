@@ -65,6 +65,10 @@ pub struct SortEngine {
     format_conversion: FormatConversion,
     /// Maximum records to hold in memory before switching to external sort.
     max_memory_records: usize,
+    /// STOPAFT: stop after reading this many records (0 = no limit).
+    stopaft: usize,
+    /// SKIPREC: skip this many records from the beginning.
+    skiprec: usize,
 }
 
 impl SortEngine {
@@ -82,6 +86,8 @@ impl SortEngine {
             record_format: RecordFormat::LineBased,
             format_conversion: FormatConversion::None,
             max_memory_records: DEFAULT_MAX_MEMORY_RECORDS,
+            stopaft: 0,
+            skiprec: 0,
         }
     }
 
@@ -99,6 +105,8 @@ impl SortEngine {
             record_format: RecordFormat::LineBased,
             format_conversion: FormatConversion::None,
             max_memory_records: DEFAULT_MAX_MEMORY_RECORDS,
+            stopaft: 0,
+            skiprec: 0,
         }
     }
 
@@ -165,6 +173,18 @@ impl SortEngine {
         self
     }
 
+    /// Sets STOPAFT: stop after reading this many input records.
+    pub fn with_stopaft(mut self, n: usize) -> Self {
+        self.stopaft = n;
+        self
+    }
+
+    /// Sets SKIPREC: skip the first N input records.
+    pub fn with_skiprec(mut self, n: usize) -> Self {
+        self.skiprec = n;
+        self
+    }
+
     /// Sorts a file.
     ///
     /// Automatically uses in-memory sort for small datasets and
@@ -176,6 +196,19 @@ impl SortEngine {
         // Read and filter records in a streaming fashion for external sort.
         // First, determine total count by reading all records.
         let mut records = self.read_records(input_path)?;
+
+        // Apply SKIPREC and STOPAFT before anything else
+        if self.skiprec > 0 {
+            if self.skiprec >= records.len() {
+                records.clear();
+            } else {
+                records = records.split_off(self.skiprec);
+            }
+        }
+        if self.stopaft > 0 {
+            records.truncate(self.stopaft);
+        }
+
         let input_count = records.len();
 
         // Apply filters
@@ -1467,6 +1500,102 @@ mod tests {
 
         assert_eq!(records[0], "Hello"); // trailing spaces stripped
         assert_eq!(records[1], "World Record"); // trailing spaces stripped
+    }
+
+    // -----------------------------------------------------------------------
+    // STOPAFT / SKIPREC Tests (Epic 808)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_stopaft_limits_records() {
+        let input_path = test_path("stopaft_in.dat");
+        let output_path = test_path("stopaft_out.dat");
+
+        // 10 records
+        let mut input = String::new();
+        for i in 1..=10 {
+            input.push_str(&format!("R{:03}\n", i));
+        }
+        fs::write(&input_path, &input).unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 4, DataType::Character, SortOrder::Ascending));
+        let engine = SortEngine::new(spec).with_stopaft(3);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.input_records, 3);
+        assert_eq!(stats.output_records, 3);
+
+        let output = fs::read_to_string(&output_path).unwrap();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "R001");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_skiprec_skips_initial_records() {
+        let input_path = test_path("skiprec_in.dat");
+        let output_path = test_path("skiprec_out.dat");
+
+        fs::write(&input_path, "R001\nR002\nR003\nR004\nR005\n").unwrap();
+
+        let engine = SortEngine::copy().with_skiprec(2);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.input_records, 3);
+        assert_eq!(stats.output_records, 3);
+
+        let output = fs::read_to_string(&output_path).unwrap();
+        assert_eq!(output, "R003\nR004\nR005\n");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_skiprec_and_stopaft_combined() {
+        let input_path = test_path("skip_stop_in.dat");
+        let output_path = test_path("skip_stop_out.dat");
+
+        // 10 records
+        let mut input = String::new();
+        for i in 1..=10 {
+            input.push_str(&format!("R{:03}\n", i));
+        }
+        fs::write(&input_path, &input).unwrap();
+
+        // Skip 3, then take 4 → records 4,5,6,7
+        let engine = SortEngine::copy().with_skiprec(3).with_stopaft(4);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.input_records, 4);
+        assert_eq!(stats.output_records, 4);
+
+        let output = fs::read_to_string(&output_path).unwrap();
+        assert_eq!(output, "R004\nR005\nR006\nR007\n");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_skiprec_beyond_total() {
+        let input_path = test_path("skip_beyond_in.dat");
+        let output_path = test_path("skip_beyond_out.dat");
+
+        fs::write(&input_path, "R001\nR002\n").unwrap();
+
+        let engine = SortEngine::copy().with_skiprec(100);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.input_records, 0);
+        assert_eq!(stats.output_records, 0);
+
+        cleanup(&input_path);
+        cleanup(&output_path);
     }
 
     #[test]

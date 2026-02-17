@@ -24,6 +24,136 @@ pub enum SplitMode {
     Split1R,
 }
 
+/// A header or trailer record specification.
+#[derive(Debug, Clone)]
+pub struct HeaderTrailerSpec {
+    /// The literal/formatted content segments for this header/trailer line.
+    pub segments: Vec<HeaderSegment>,
+}
+
+/// A segment within a header/trailer line.
+#[derive(Debug, Clone)]
+pub enum HeaderSegment {
+    /// Literal text.
+    Literal(Vec<u8>),
+    /// Pad to a specific column with spaces (1-based target column).
+    Column(usize),
+    /// Insert the current date in a given format.
+    Date(DateFormat),
+    /// Insert the current time in a given format.
+    Time(TimeFormat),
+    /// Insert the record count (filled at write time).
+    Count { width: usize },
+    /// Insert page number.
+    Page { width: usize },
+}
+
+/// Date format codes for header/trailer DATE= parameter.
+#[derive(Debug, Clone, Copy)]
+pub enum DateFormat {
+    /// 4-digit year, 2-digit month, separator (YYYY/MM/DD)
+    Ymd(char),
+    /// 2-digit month, 2-digit day, 4-digit year (MM/DD/YYYY)
+    Mdy(char),
+    /// 2-digit day, 2-digit month, 4-digit year (DD/MM/YYYY)
+    Dmy(char),
+}
+
+/// Time format codes for header/trailer TIME= parameter.
+#[derive(Debug, Clone, Copy)]
+pub enum TimeFormat {
+    /// HH:MM:SS
+    Hms(char),
+    /// HH:MM
+    Hm(char),
+}
+
+impl HeaderTrailerSpec {
+    /// Create a new spec from a single literal.
+    pub fn from_literal(text: &[u8]) -> Self {
+        Self {
+            segments: vec![HeaderSegment::Literal(text.to_vec())],
+        }
+    }
+
+    /// Render the header/trailer line.
+    pub fn render(&self, record_count: usize, page_number: usize) -> Vec<u8> {
+        let mut output = Vec::new();
+        let now = current_date_time();
+
+        for segment in &self.segments {
+            match segment {
+                HeaderSegment::Literal(bytes) => {
+                    output.extend_from_slice(bytes);
+                }
+                HeaderSegment::Column(col) => {
+                    let target = col.saturating_sub(1);
+                    if target > output.len() {
+                        output.resize(target, b' ');
+                    }
+                }
+                HeaderSegment::Date(fmt) => {
+                    let (y, m, d) = (now.0, now.1, now.2);
+                    let date_str = match fmt {
+                        DateFormat::Ymd(sep) => format!("{:04}{}{:02}{}{:02}", y, sep, m, sep, d),
+                        DateFormat::Mdy(sep) => format!("{:02}{}{:02}{}{:04}", m, sep, d, sep, y),
+                        DateFormat::Dmy(sep) => format!("{:02}{}{:02}{}{:04}", d, sep, m, sep, y),
+                    };
+                    output.extend_from_slice(date_str.as_bytes());
+                }
+                HeaderSegment::Time(fmt) => {
+                    let (h, min, s) = (now.3, now.4, now.5);
+                    let time_str = match fmt {
+                        TimeFormat::Hms(sep) => format!("{:02}{}{:02}{}{:02}", h, sep, min, sep, s),
+                        TimeFormat::Hm(sep) => format!("{:02}{}{:02}", h, sep, min),
+                    };
+                    output.extend_from_slice(time_str.as_bytes());
+                }
+                HeaderSegment::Count { width } => {
+                    let formatted = format!("{:>width$}", record_count, width = *width);
+                    output.extend_from_slice(formatted.as_bytes());
+                }
+                HeaderSegment::Page { width } => {
+                    let formatted = format!("{:>width$}", page_number, width = *width);
+                    output.extend_from_slice(formatted.as_bytes());
+                }
+            }
+        }
+
+        output
+    }
+}
+
+/// Get current date/time as (year, month, day, hour, minute, second).
+fn current_date_time() -> (u32, u32, u32, u32, u32, u32) {
+    // Use seconds since UNIX_EPOCH to compute a rough calendar date
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Simplified date computation (days since epoch)
+    let days = (secs / 86400) as i64;
+    let time_of_day = secs % 86400;
+    let hour = (time_of_day / 3600) as u32;
+    let minute = ((time_of_day % 3600) / 60) as u32;
+    let second = (time_of_day % 60) as u32;
+
+    // Civil date from days since 1970-01-01 (algorithm from Howard Hinnant)
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    (y as u32, m, d, hour, minute, second)
+}
+
 /// A single OUTFIL output descriptor.
 #[derive(Debug, Clone)]
 pub struct OutfilDescriptor {
@@ -37,6 +167,10 @@ pub struct OutfilDescriptor {
     pub outrec: Option<OutrecSpec>,
     /// Optional IFTHEN reformatting for this output.
     pub ifthen: Option<IfThenSpec>,
+    /// Optional HEADER records (written before data records).
+    pub headers: Vec<HeaderTrailerSpec>,
+    /// Optional TRAILER records (written after data records).
+    pub trailers: Vec<HeaderTrailerSpec>,
 }
 
 impl OutfilDescriptor {
@@ -48,6 +182,8 @@ impl OutfilDescriptor {
             omit: None,
             outrec: None,
             ifthen: None,
+            headers: Vec::new(),
+            trailers: Vec::new(),
         }
     }
 
@@ -72,6 +208,18 @@ impl OutfilDescriptor {
     /// Set the IFTHEN specification.
     pub fn with_ifthen(mut self, spec: IfThenSpec) -> Self {
         self.ifthen = Some(spec);
+        self
+    }
+
+    /// Add a HEADER record specification.
+    pub fn with_header(mut self, spec: HeaderTrailerSpec) -> Self {
+        self.headers.push(spec);
+        self
+    }
+
+    /// Add a TRAILER record specification.
+    pub fn with_trailer(mut self, spec: HeaderTrailerSpec) -> Self {
+        self.trailers.push(spec);
         self
     }
 
@@ -175,6 +323,16 @@ impl OutfilSpec {
 
         let mut counts = vec![0usize; self.descriptors.len()];
         let mut save_count = 0usize;
+        let total_count = records.len();
+
+        // Write HEADER records
+        for (i, desc) in self.descriptors.iter().enumerate() {
+            for header in &desc.headers {
+                let line = header.render(total_count, 1);
+                writers[i].write_all(&line)?;
+                writers[i].write_all(b"\n")?;
+            }
+        }
 
         for record in records {
             let mut matched = false;
@@ -196,6 +354,15 @@ impl OutfilSpec {
                     writer.write_all(b"\n")?;
                     save_count += 1;
                 }
+            }
+        }
+
+        // Write TRAILER records
+        for (i, desc) in self.descriptors.iter().enumerate() {
+            for trailer in &desc.trailers {
+                let line = trailer.render(counts[i], 1);
+                writers[i].write_all(&line)?;
+                writers[i].write_all(b"\n")?;
             }
         }
 
@@ -469,6 +636,110 @@ mod tests {
         cleanup(&out1);
         cleanup(&out2);
         cleanup(&out3);
+    }
+
+    // -----------------------------------------------------------------------
+    // HEADER/TRAILER Tests (Epic 809)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_outfil_with_header() {
+        let out1 = test_path("header");
+
+        let header = HeaderTrailerSpec {
+            segments: vec![HeaderSegment::Literal(b"Sales Report".to_vec())],
+        };
+
+        let spec = OutfilSpec::new()
+            .add_descriptor(
+                OutfilDescriptor::new(&out1).with_header(header),
+            );
+
+        let records: Vec<Vec<u8>> = vec![b"R001".to_vec(), b"R002".to_vec()];
+        spec.process(&records).unwrap();
+
+        let output = fs::read_to_string(&out1).unwrap();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines[0], "Sales Report");
+        assert_eq!(lines[1], "R001");
+        assert_eq!(lines[2], "R002");
+
+        cleanup(&out1);
+    }
+
+    #[test]
+    fn test_outfil_with_trailer() {
+        let out1 = test_path("trailer");
+
+        let trailer = HeaderTrailerSpec {
+            segments: vec![
+                HeaderSegment::Literal(b"Total Records: ".to_vec()),
+                HeaderSegment::Count { width: 8 },
+            ],
+        };
+
+        let spec = OutfilSpec::new()
+            .add_descriptor(
+                OutfilDescriptor::new(&out1).with_trailer(trailer),
+            );
+
+        let records: Vec<Vec<u8>> = vec![b"R001".to_vec(), b"R002".to_vec(), b"R003".to_vec()];
+        spec.process(&records).unwrap();
+
+        let output = fs::read_to_string(&out1).unwrap();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 4); // 3 data + 1 trailer
+        assert_eq!(lines[3], "Total Records:        3");
+
+        cleanup(&out1);
+    }
+
+    #[test]
+    fn test_outfil_header_and_trailer() {
+        let out1 = test_path("hdr_trl");
+
+        let header = HeaderTrailerSpec::from_literal(b"=== REPORT ===");
+        let trailer = HeaderTrailerSpec {
+            segments: vec![
+                HeaderSegment::Literal(b"Count: ".to_vec()),
+                HeaderSegment::Count { width: 4 },
+            ],
+        };
+
+        let spec = OutfilSpec::new()
+            .add_descriptor(
+                OutfilDescriptor::new(&out1)
+                    .with_header(header)
+                    .with_trailer(trailer),
+            );
+
+        let records: Vec<Vec<u8>> = vec![b"DATA1".to_vec(), b"DATA2".to_vec()];
+        spec.process(&records).unwrap();
+
+        let output = fs::read_to_string(&out1).unwrap();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines[0], "=== REPORT ===");
+        assert_eq!(lines[1], "DATA1");
+        assert_eq!(lines[2], "DATA2");
+        assert_eq!(lines[3], "Count:    2");
+
+        cleanup(&out1);
+    }
+
+    #[test]
+    fn test_header_date_segment() {
+        let header = HeaderTrailerSpec {
+            segments: vec![
+                HeaderSegment::Literal(b"Date: ".to_vec()),
+                HeaderSegment::Date(DateFormat::Ymd('/')),
+            ],
+        };
+
+        let line = header.render(0, 1);
+        let text = String::from_utf8_lossy(&line);
+        // Should be "Date: YYYY/MM/DD" format
+        assert!(text.starts_with("Date: "), "got: {}", text);
+        assert_eq!(text.len(), 16); // "Date: " (6) + "YYYY/MM/DD" (10)
     }
 
     #[test]

@@ -42,7 +42,10 @@ pub use parser::parse_control_statements;
 pub use engine::SortEngine;
 pub use filter::{Condition, FilterSpec, CompareOp};
 pub use ifthen::{IfThenSpec, IfThenClause, WhenCondition, IfThenAction, OverlayField, OverlayData};
-pub use outfil::{OutfilSpec, OutfilDescriptor, SplitMode};
-pub use reformat::{OutrecField, OutrecSpec, OverlaySpec, FindRepSpec};
+pub use outfil::{
+    OutfilSpec, OutfilDescriptor, SplitMode, HeaderTrailerSpec, HeaderSegment,
+    DateFormat, TimeFormat,
+};
+pub use reformat::{OutrecField, OutrecSpec, OverlaySpec, FindRepSpec, datetime};
 pub use joinkeys::{JoinKeysSpec, JoinKeyField, JoinType, ReformatField as JoinReformatField};
 pub use icetool::{IceToolOp, IceToolResult, FieldStats, DisplayColumn, OnField};
