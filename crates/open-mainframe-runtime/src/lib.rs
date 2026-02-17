@@ -23,6 +23,8 @@ pub mod decimal;
 pub mod error;
 pub mod interpreter;
 pub mod io;
+pub mod numeric_editing;
+pub mod storage;
 pub mod string;
 pub mod value;
 
@@ -31,6 +33,8 @@ pub use decimal::{ArithmeticResult, RoundingMode};
 pub use error::RuntimeError;
 pub use io::{accept, accept_from_reader, display, display_to_writer};
 pub use io::{AcceptSource, DisplayOptions, DisplayTarget};
+pub use numeric_editing::format_numeric;
+pub use storage::{StorageFormat, StoredNumeric};
 pub use string::{
     inspect_converting, inspect_replacing, inspect_tallying, string_concat, unstring,
 };
