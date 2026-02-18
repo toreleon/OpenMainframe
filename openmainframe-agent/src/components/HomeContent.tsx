@@ -4,6 +4,8 @@ import { CopilotChat } from "@copilotkit/react-ui";
 import { useRenderToolCall } from "@copilotkit/react-core";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useInterruptHandler } from "@/hooks/useInterruptHandler";
+import { useConnectionStatus } from "@/hooks/useConnectionStatus";
+import { ConnectionStatusBadge } from "@/components/chat/ConnectionStatusBadge";
 import { AssessmentCard } from "@/components/chat/AssessmentCard";
 import { CompilerOutputCard } from "@/components/chat/CompilerOutputCard";
 import { ProgressCard } from "@/components/chat/ProgressCard";
@@ -11,6 +13,7 @@ import { ExplanationCard } from "@/components/chat/ExplanationCard";
 
 export default function HomeContent() {
   const { state } = useAgentState();
+  const connectionStatus = useConnectionStatus();
 
   // HITL — render LangGraph interrupt() approvals inline in chat
   useInterruptHandler();
@@ -119,15 +122,11 @@ export default function HomeContent() {
           <span className="text-om-muted text-xs">Agent</span>
         </div>
         <div className="flex-1" />
-        {state.project_path && (
-          <div className="flex items-center gap-2 text-xs">
-            <span className="w-2 h-2 rounded-full bg-om-success" />
-            <span className="text-om-muted">Connected:</span>
-            <span className="text-om-text font-mono truncate max-w-xs">
-              {state.project_path}
-            </span>
-          </div>
-        )}
+        <ConnectionStatusBadge
+          connected={connectionStatus.connected}
+          projectPath={connectionStatus.projectPath}
+          loading={connectionStatus.loading}
+        />
       </header>
 
       {/* Full-screen chat area */}
