@@ -1,11 +1,16 @@
 import type { Metadata } from "next";
-import { CopilotKit } from "@copilotkit/react-core";
-import "@copilotkit/react-ui/styles.css";
+import { JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
-  title: "OpenMainframe Agent",
-  description: "AI-powered mainframe modernization assistant",
+  title: "Coding Agent",
+  description: "AI-powered coding agent",
 };
 
 export default function RootLayout({
@@ -14,12 +19,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className="antialiased">
-        <CopilotKit runtimeUrl="/api/copilotkit">
-          {children}
-        </CopilotKit>
-      </body>
+    <html lang="en" className={`dark ${jetbrainsMono.variable}`}>
+      <body className="antialiased font-mono">{children}</body>
     </html>
   );
 }

@@ -1,13 +1,21 @@
 """
 Base tool utilities.
-Provides workspace sandboxing (sanitize_path), output truncation, and JSON parsing.
+Provides workspace sandboxing (sanitize_path), output truncation, JSON parsing,
+and bridge connection detection.
 """
 
 import json
 import os
 
+from src.bridge_client import bridge_manager
+
 MAX_OUTPUT_BYTES = 20_000  # 20KB truncation limit
 WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", os.getcwd())
+
+
+def is_bridge_connected() -> bool:
+    """Return True if a bridge daemon is currently connected."""
+    return bridge_manager.has_connection
 
 
 def sanitize_path(path: str) -> str:

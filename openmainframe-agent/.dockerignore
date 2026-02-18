@@ -1,0 +1,14 @@
+# Node / Next.js
+node_modules/
+.next/
+
+# Python
+agent/.venv/
+__pycache__/
+*.pyc
+
+# Git
+.git/
+
+# Build artifacts
+target/

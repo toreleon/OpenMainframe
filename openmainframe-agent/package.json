@@ -11,12 +11,10 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@copilotkit/react-core": "^1.8.0",
-    "@copilotkit/react-ui": "^1.8.0",
-    "@copilotkit/runtime": "^1.8.0",
     "next": "15.1.6",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-markdown": "^9.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -1196,6 +1196,7 @@ dependencies = [
  "dirs",
  "inkwell",
  "miette",
+ "open-mainframe-assess",
  "open-mainframe-cics",
  "open-mainframe-cobol",
  "open-mainframe-dataset",

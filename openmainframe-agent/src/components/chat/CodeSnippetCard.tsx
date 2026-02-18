@@ -25,30 +25,26 @@ export function CodeSnippetCard({
   const displayLines = expanded ? lines : lines.slice(0, previewLines);
 
   return (
-    <div className="bg-om-surface border border-om-border rounded-lg overflow-hidden max-w-lg">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-om-border">
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-xs text-om-text">{fileName}</span>
-          {language && (
-            <span className="px-1.5 py-0.5 bg-om-border/50 rounded text-[10px] text-om-muted">
-              {language.toUpperCase()}
-            </span>
-          )}
-        </div>
+    <div className="border-l-2 border-om-accent pl-3 py-1 font-mono text-xs">
+      {/* Header line */}
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-om-accent font-semibold">{fileName}</span>
+        {language && (
+          <span className="text-om-muted">[{language}]</span>
+        )}
         {needsExpand && (
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-[10px] text-om-muted hover:text-om-accent transition-colors"
+            className="text-om-muted hover:text-om-accent transition-colors ml-auto"
           >
-            {expanded ? "Collapse" : `Show all ${lines.length} lines`}
+            [{expanded ? "collapse" : `${lines.length} lines`}]
           </button>
         )}
       </div>
 
-      {/* Code content */}
-      <div className="overflow-x-auto max-h-80 overflow-y-auto">
-        <pre className="text-[10px] leading-relaxed">
+      {/* Code with gutter */}
+      <div className="bg-om-surface border border-om-border overflow-x-auto max-h-80 overflow-y-auto">
+        <pre className="text-[11px] leading-relaxed">
           {displayLines.map((line, idx) => {
             const lineNum = startLine + idx;
             const isHighlighted = highlightLines.includes(lineNum);
@@ -57,15 +53,15 @@ export function CodeSnippetCard({
                 key={idx}
                 className={`flex ${isHighlighted ? "bg-om-warning/10" : ""}`}
               >
-                <span className="w-10 shrink-0 text-right pr-3 text-om-muted select-none py-px">
+                <span className="w-10 shrink-0 text-right pr-3 text-om-muted select-none py-px border-r border-om-border">
                   {lineNum}
                 </span>
-                <span className="text-om-text font-mono py-px pr-4">{line}</span>
+                <span className="text-om-text pl-3 py-px">{line}</span>
               </div>
             );
           })}
           {!expanded && needsExpand && (
-            <div className="text-om-muted text-center py-2">
+            <div className="text-om-muted text-center py-1 border-t border-om-border">
               ... {lines.length - previewLines} more lines
             </div>
           )}

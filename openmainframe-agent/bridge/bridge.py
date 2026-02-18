@@ -39,6 +39,7 @@ from security import (
     validate_project_path,
     sandbox_path,
     validate_command,
+    validate_command_general,
     validate_token,
 )
 
@@ -84,10 +85,12 @@ class BridgeDaemon:
         project_path: str,
         token: str,
         cli_path: str | None = None,
+        mode: str = "general",
     ):
         self.server_url = server_url
         self.project_root = validate_project_path(project_path)
         self.token = token
+        self.mode = mode
         self.cli_path = cli_path or find_cli_binary()
         self.cli_version = get_cli_version(self.cli_path)
         self.ws = None
@@ -160,26 +163,44 @@ class BridgeDaemon:
     async def _handle_exec(self, ws, msg_id: str, command: str):
         """Execute a CLI command and return the result."""
         try:
-            parts = validate_command(command, self.project_root)
+            if self.mode == "general":
+                # General mode: run as shell command (pipes, redirects allowed)
+                validate_command_general(command)
+                print(f"  EXEC [{msg_id[:8]}]: {command}")
 
-            # Ensure the binary path is absolute
-            if not parts[0].endswith("open-mainframe") and "/" not in parts[0]:
-                parts = [self.cli_path] + parts
-            elif parts[0].endswith("open-mainframe") or "/" in parts[0]:
-                parts[0] = self.cli_path
+                result = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        cwd=str(self.project_root),
+                    ),
+                )
+            else:
+                # Mainframe mode: validate against allowlist, run as arg list
+                parts = validate_command(command, self.project_root)
 
-            print(f"  EXEC [{msg_id[:8]}]: {' '.join(parts)}")
+                # Ensure the binary path is absolute
+                if not parts[0].endswith("open-mainframe") and "/" not in parts[0]:
+                    parts = [self.cli_path] + parts
+                elif parts[0].endswith("open-mainframe") or "/" in parts[0]:
+                    parts[0] = self.cli_path
 
-            result = await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    parts,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    cwd=str(self.project_root),
-                ),
-            )
+                print(f"  EXEC [{msg_id[:8]}]: {' '.join(parts)}")
+
+                result = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: subprocess.run(
+                        parts,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        cwd=str(self.project_root),
+                    ),
+                )
 
             output = result.stdout or ""
             stderr = result.stderr or ""
@@ -336,6 +357,12 @@ def main():
         default=None,
         help="Path to open-mainframe CLI binary (auto-detected if not set)",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["mainframe", "general"],
+        default="general",
+        help="Execution mode: 'mainframe' (allowlisted CLI only) or 'general' (shell commands). Default: general",
+    )
 
     args = parser.parse_args()
 
@@ -344,6 +371,7 @@ def main():
         project_path=args.project,
         token=args.token,
         cli_path=args.cli,
+        mode=args.mode,
     )
 
     try:

@@ -112,6 +112,22 @@ def validate_command(command: str, project_root: Path) -> list[str]:
     return parts
 
 
+def validate_command_general(command: str) -> str:
+    """Minimal validation for general mode.
+
+    In general mode the bridge acts as a shell — pipes, redirects, etc. are allowed.
+    We only reject clearly invalid input (empty or containing null bytes).
+
+    Returns the command string unchanged.
+    Raises ValueError on violation.
+    """
+    if not command or not command.strip():
+        raise ValueError("Empty command")
+    if "\x00" in command:
+        raise ValueError("Command contains null bytes")
+    return command
+
+
 def validate_token(provided: str, expected: str) -> bool:
     """Constant-time token comparison to prevent timing attacks."""
     import hmac

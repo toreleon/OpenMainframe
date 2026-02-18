@@ -1,14 +1,27 @@
 """
 Shell command execution tool.
+Routes through bridge when connected, falls back to local subprocess.
 """
 
 import asyncio
 
-from .base import WORKSPACE_ROOT, MAX_OUTPUT_BYTES
+from .base import WORKSPACE_ROOT, MAX_OUTPUT_BYTES, is_bridge_connected
+from src.bridge_client import execute_via_bridge
 
 
 async def bash(command: str, timeout: int = 120) -> dict:
     """Execute a shell command and return stdout, stderr, return_code."""
+
+    # Bridge-first: route through connected bridge daemon
+    if is_bridge_connected():
+        result = await execute_via_bridge([command], timeout)
+        return {
+            "stdout": result.get("stdout", ""),
+            "stderr": result.get("stderr", ""),
+            "return_code": result.get("return_code", -1),
+        }
+
+    # Fallback: local subprocess
     try:
         proc = await asyncio.create_subprocess_shell(
             command,

@@ -11,42 +11,33 @@ interface ExplanationCardProps {
 
 export function ExplanationCard({ filePath, summary, codeSnippet, language }: ExplanationCardProps) {
   const [showCode, setShowCode] = useState(false);
-  const fileName = filePath?.split("/").pop() || "Code";
+  const fileName = filePath?.split("/").pop() || "code";
 
   return (
-    <div className="bg-om-surface border border-om-border rounded-lg overflow-hidden max-w-lg">
-      <div className="p-4">
-        <div className="flex items-center justify-between mb-2">
-          <div className="text-xs font-semibold text-om-info">Code Analysis</div>
-          {codeSnippet && (
-            <button
-              onClick={() => setShowCode(!showCode)}
-              className="text-[10px] text-om-muted hover:text-om-accent transition-colors"
-            >
-              {showCode ? "Hide Code" : "View Code"}
-            </button>
-          )}
-        </div>
-        <div className="text-xs text-om-muted mb-1">
-          File: <span className="font-mono text-om-text">{fileName}</span>
-          {language && (
-            <span className="ml-2 px-1.5 py-0.5 bg-om-border/50 rounded text-[10px]">
-              {language.toUpperCase()}
-            </span>
-          )}
-        </div>
-        {summary && (
-          <div className="text-xs text-om-text mt-2 leading-relaxed">{summary}</div>
+    <div className="border-l-2 border-om-info pl-3 py-1 font-mono text-xs">
+      <div className="flex items-center gap-2">
+        <span className="text-om-info font-semibold">analysis</span>
+        <span className="text-om-muted">›</span>
+        <span className="text-om-text">{fileName}</span>
+        {language && (
+          <span className="text-om-muted">[{language}]</span>
+        )}
+        {codeSnippet && (
+          <button
+            onClick={() => setShowCode(!showCode)}
+            className="text-om-muted hover:text-om-accent transition-colors ml-2"
+          >
+            [{showCode ? "hide" : "show"}]
+          </button>
         )}
       </div>
-
-      {/* Expandable code snippet */}
+      {summary && (
+        <div className="text-om-text mt-1 pl-2 leading-relaxed">{summary}</div>
+      )}
       {showCode && codeSnippet && (
-        <div className="border-t border-om-border">
-          <pre className="p-4 text-[10px] font-mono text-om-text bg-om-bg/50 overflow-x-auto max-h-64 overflow-y-auto leading-relaxed">
-            {codeSnippet}
-          </pre>
-        </div>
+        <pre className="mt-1 bg-om-surface border border-om-border p-2 text-[11px] text-om-text overflow-x-auto max-h-64 overflow-y-auto leading-relaxed">
+          {codeSnippet}
+        </pre>
       )}
     </div>
   );

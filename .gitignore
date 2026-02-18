@@ -10,3 +10,5 @@
 
 # MSVC Windows objects in this library
 *.pdb
+
+carddemo-config/*
