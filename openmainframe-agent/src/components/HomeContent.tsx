@@ -15,6 +15,11 @@ export default function HomeContent() {
   const { state } = useAgentState();
   const connectionStatus = useConnectionStatus();
 
+  // Dynamic initial message based on connection status
+  const initialMessage = connectionStatus.connected
+    ? `Connected to **${connectionStatus.projectPath || "your project"}**${connectionStatus.cliVersion ? ` (CLI v${connectionStatus.cliVersion})` : ""}. How can I help you today?\n\nI can help you:\n- **Assess** your COBOL programs for modernization readiness\n- **Compile** and syntax-check COBOL source files\n- **Execute** JCL jobs and COBOL programs\n- **Explain** code structure and logic\n\nJust ask!`
+    : "Hello! I'm your mainframe modernization assistant. I can help you assess, compile, execute, and explain COBOL and JCL code.\n\nTo get started, connect your local environment by running:\n```\npip install openmainframe-bridge\nopenmainframe bridge connect --project ~/your-cobol-project\n```\n\nYour source code stays on your machine — only command results flow through the agent.";
+
   // HITL — render LangGraph interrupt() approvals inline in chat
   useInterruptHandler();
 
@@ -136,8 +141,7 @@ export default function HomeContent() {
           instructions="You are the OpenMainframe Agent, an AI-powered mainframe modernization assistant. You help users assess, compile, execute, and explain COBOL and JCL code. The user's code stays on their local machine — you operate through a local bridge connection. Be concise, helpful, and proactive."
           labels={{
             title: "OpenMainframe Agent",
-            initial:
-              "Hello! I'm your mainframe modernization assistant. I can help you assess, compile, execute, and explain COBOL and JCL code.\n\nTo get started, connect your local environment by running:\n```\npip install openmainframe-bridge\nopenmainframe bridge connect --project ~/your-cobol-project\n```\n\nOr just ask me a question!",
+            initial: initialMessage,
           }}
         />
       </div>
