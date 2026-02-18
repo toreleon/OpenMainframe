@@ -9,7 +9,7 @@ from .base import run_cli, sanitize_path, try_parse_json
 
 
 @tool
-def assess_scan(directory: str) -> dict:
+async def assess_scan(directory: str) -> dict:
     """Scan a directory of COBOL source files and return assessment metrics
     including complexity scores, feature inventory, and compatibility issues.
 
@@ -17,7 +17,7 @@ def assess_scan(directory: str) -> dict:
         directory: Path to directory containing COBOL source files.
     """
     path = sanitize_path(directory)
-    result = run_cli(
+    result = await run_cli(
         ["assess", "scan", path, "--format", "json"],
         timeout=300,
     )
@@ -28,7 +28,7 @@ def assess_scan(directory: str) -> dict:
 
 
 @tool
-def assess_file(file_path: str) -> dict:
+async def assess_file(file_path: str) -> dict:
     """Assess a single COBOL source file for metrics and compatibility.
     Returns complexity, maintainability, feature usage, and issues.
 
@@ -36,7 +36,7 @@ def assess_file(file_path: str) -> dict:
         file_path: Path to a COBOL source file (.cbl, .cob).
     """
     path = sanitize_path(file_path)
-    result = run_cli(
+    result = await run_cli(
         ["assess", "file", path, "--format", "json"],
         timeout=120,
     )

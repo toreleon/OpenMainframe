@@ -1,6 +1,7 @@
 """
 FastAPI entry point for the OpenMainframe Agent.
 Serves the LangGraph agent via AG-UI protocol for CopilotKit.
+Accepts local bridge connections via WebSocket at /ws/bridge.
 """
 
 import os
@@ -8,12 +9,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
 from src.agent import graph
+from src.bridge_client import bridge_manager
 
 app = FastAPI(
     title="OpenMainframe Agent",
@@ -34,14 +36,43 @@ app.add_middleware(
 
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
+    """Health check endpoint — includes bridge connection status."""
+    bridge_status = bridge_manager.status()
     return JSONResponse(
         content={
             "status": "ok",
             "agent": "modernization_agent",
             "version": "1.0.0",
+            **bridge_status,
         }
     )
+
+
+@app.websocket("/ws/bridge")
+async def bridge_websocket(ws: WebSocket, token: str = ""):
+    """WebSocket endpoint for local bridge daemon connections."""
+    await ws.accept()
+    print(f"Bridge connected (token: {token[:8]}...)")
+
+    conn = await bridge_manager.register(ws, token or "default")
+    print(f"  Project: {conn.project_path}")
+    print(f"  CLI:     {conn.cli_version}")
+
+    try:
+        while True:
+            raw = await ws.receive_text()
+            try:
+                import json
+                msg = json.loads(raw)
+                conn.handle_response(msg)
+            except Exception as e:
+                print(f"  Bridge message error: {e}")
+    except WebSocketDisconnect:
+        print(f"Bridge disconnected (token: {token[:8]}...)")
+    except Exception as e:
+        print(f"Bridge error: {e}")
+    finally:
+        bridge_manager.unregister(token or "default")
 
 
 # Serve the LangGraph agent via the AG-UI protocol for CopilotKit

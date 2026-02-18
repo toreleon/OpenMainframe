@@ -1,6 +1,9 @@
 """
-Base subprocess wrapper for OpenMainframe CLI commands.
-Provides run_cli(), path sanitization, and IDCAMS security.
+Base tool utilities for OpenMainframe CLI commands.
+Provides run_cli() (bridge-aware), path sanitization, and IDCAMS security.
+
+In bridge mode (default): commands are sent to the local bridge daemon via WebSocket.
+In local mode (fallback): commands run via subprocess (for development/testing).
 """
 
 import json
@@ -9,33 +12,35 @@ import re
 import subprocess
 from typing import Optional
 
-OPEN_MAINFRAME_BIN = os.getenv(
-    "OPEN_MAINFRAME_BIN", "./target/release/open-mainframe"
-)
+from ..bridge_client import execute_via_bridge, bridge_manager
 
 MAX_OUTPUT_BYTES = 20_000  # 20KB truncation limit
 
+OPEN_MAINFRAME_BIN = os.getenv(
+    "OPEN_MAINFRAME_BIN", "./target/release/open-mainframe"
+)
 WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", os.getcwd())
 
 
 def sanitize_path(path: str) -> str:
     """Prevent directory traversal and null byte injection.
 
-    Resolves the path to an absolute path and verifies it falls
-    under WORKSPACE_ROOT.
+    In bridge mode, this returns the path as-is (the bridge does its own sandboxing).
+    In local mode, resolves and validates against WORKSPACE_ROOT.
     """
-    # Remove null bytes
     path = path.replace("\x00", "")
 
-    # Resolve to absolute
+    if bridge_manager.has_connection:
+        # Bridge daemon handles its own path sandboxing
+        return path
+
+    # Local mode: resolve and validate
     resolved = os.path.realpath(path)
     allowed_root = os.path.realpath(WORKSPACE_ROOT)
-
     if not resolved.startswith(allowed_root + os.sep) and resolved != allowed_root:
         raise ValueError(
             f"Path '{path}' resolves outside the allowed workspace '{allowed_root}'"
         )
-
     return resolved
 
 
@@ -52,28 +57,42 @@ def sanitize_idcams(command: str) -> str:
             f"IDCAMS verb '{verb}' not allowed. Allowed: {', '.join(sorted(ALLOWED_VERBS))}"
         )
 
-    # Reject shell metacharacters to prevent command injection
     if re.search(r"[;&|`$\\]", command):
         raise ValueError("Shell metacharacters are not allowed in IDCAMS commands")
 
     return command
 
 
-def run_cli(
+async def run_cli(
     args: list[str],
     timeout: int = 120,
     cwd: Optional[str] = None,
 ) -> dict:
     """Execute an OpenMainframe CLI command and return structured result.
 
+    Routes to the bridge if connected, otherwise falls back to local subprocess.
+
     Args:
         args: Command-line arguments (without the binary name).
         timeout: Maximum execution time in seconds.
-        cwd: Working directory for the subprocess.
+        cwd: Working directory (only used in local fallback mode).
 
     Returns:
         dict with keys: success, stdout, stderr, return_code
     """
+    if bridge_manager.has_connection:
+        return await execute_via_bridge(args, timeout=timeout)
+
+    # Local fallback for development/testing
+    return _run_cli_local(args, timeout=timeout, cwd=cwd)
+
+
+def _run_cli_local(
+    args: list[str],
+    timeout: int = 120,
+    cwd: Optional[str] = None,
+) -> dict:
+    """Execute via local subprocess (fallback when no bridge is connected)."""
     try:
         result = subprocess.run(
             [OPEN_MAINFRAME_BIN, *args],

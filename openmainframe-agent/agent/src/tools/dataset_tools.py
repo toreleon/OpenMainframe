@@ -9,18 +9,18 @@ from .base import run_cli, sanitize_idcams
 
 
 @tool
-def list_catalog(pattern: str = "*") -> dict:
+async def list_catalog(pattern: str = "*") -> dict:
     """List datasets in the catalog matching the given pattern.
     Returns dataset names, types, record formats, and record lengths.
 
     Args:
         pattern: Catalog entry pattern to match (default: "*" for all).
     """
-    return run_cli(["idcams", f"LISTCAT ENTRIES({pattern})"], timeout=60)
+    return await run_cli(["idcams", f"LISTCAT ENTRIES({pattern})"], timeout=60)
 
 
 @tool
-def idcams_command(command: str) -> dict:
+async def idcams_command(command: str) -> dict:
     """Execute an IDCAMS command for dataset management.
     Supported verbs: DEFINE, DELETE, REPRO, LISTCAT, PRINT.
 
@@ -38,4 +38,4 @@ def idcams_command(command: str) -> dict:
             "stderr": str(e),
             "return_code": -1,
         }
-    return run_cli(["idcams", sanitized], timeout=60)
+    return await run_cli(["idcams", sanitized], timeout=60)
