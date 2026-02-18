@@ -45,6 +45,8 @@ export default function HomeContent() {
           success={latest?.success}
           errorCount={latest?.errors?.length}
           warningCount={latest?.warnings?.length}
+          errors={latest?.errors}
+          warnings={latest?.warnings}
         />
       );
     },
@@ -62,6 +64,8 @@ export default function HomeContent() {
           success={latest?.success}
           errorCount={latest?.errors?.length}
           warningCount={latest?.warnings?.length}
+          errors={latest?.errors}
+          warnings={latest?.warnings}
         />
       );
     },
