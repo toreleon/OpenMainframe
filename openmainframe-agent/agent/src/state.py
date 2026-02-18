@@ -1,73 +1,40 @@
 """
 Agent state definition.
-Extends CopilotKitState for message handling and frontend state sync.
-Keep in sync with frontend types in src/lib/types.ts
+Plain dataclass — no LangGraph/CopilotKit dependency.
+Keep field names in sync with frontend types in src/lib/types.ts.
 """
 
-from typing import TypedDict, Optional
-
-from copilotkit import CopilotKitState
+from dataclasses import dataclass, field
 
 
-class SourceFile(TypedDict):
-    path: str
-    type: str  # "cobol", "jcl", "copybook", "bms", "data"
-    size_bytes: int
-    line_count: int
-
-
-class AssessmentReport(TypedDict):
-    total_files: int
-    total_loc: int
-    average_complexity: float
-    programs: list[dict]
-    issues: list[dict]
-    recommendations: list[str]
-    feature_support: dict[str, float]
-
-
-class CompilerError(TypedDict):
-    line: int
-    column: int
-    message: str
-    severity: str
-
-
-class CompilationResult(TypedDict):
-    file_path: str
-    success: bool
-    errors: list[CompilerError]
-    warnings: list[CompilerError]
-    timestamp: str
-
-
-class ExecutionResult(TypedDict):
-    jcl_file: str
-    steps: list[dict]
-    max_return_code: int
-    output: str
-    timestamp: str
-
-
-class AgentState(CopilotKitState):
-    """Main agent state. Inherits messages + copilotkit from CopilotKitState."""
+@dataclass
+class AgentState:
+    """Agent state emitted as STATE_SNAPSHOT events for frontend consumption."""
 
     # Project context
-    project_path: Optional[str]
-    source_files: list[SourceFile]
+    project_path: str | None = None
+    source_files: list = field(default_factory=list)
 
     # Assessment
-    assessment_results: Optional[AssessmentReport]
+    assessment_results: dict | None = None
 
     # Compilation
-    compilation_results: list[CompilationResult]
+    compilation_results: list = field(default_factory=list)
 
     # Execution
-    execution_results: list[ExecutionResult]
+    execution_results: list = field(default_factory=list)
 
     # Operation tracking
-    current_operation: Optional[str]
-    operation_progress: float  # 0.0 - 1.0
+    current_operation: str | None = None
+    operation_progress: float = 0.0
 
-    # Internal routing (set by capability nodes before routing to tools)
-    active_node: Optional[str]
+    def to_dict(self) -> dict:
+        return {
+            "project_path": self.project_path,
+            "source_files": self.source_files,
+            "assessment_results": self.assessment_results,
+            "compilation_results": self.compilation_results,
+            "execution_results": self.execution_results,
+            "current_operation": self.current_operation,
+            "operation_progress": self.operation_progress,
+        }

@@ -1,6 +1,6 @@
 """
 FastAPI entry point for the OpenMainframe Agent.
-Serves the LangGraph agent via AG-UI protocol for CopilotKit.
+Serves the Anthropic agent via AG-UI SSE protocol for CopilotKit.
 Accepts local bridge connections via WebSocket at /ws/bridge.
 """
 
@@ -9,12 +9,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 
-from src.agent import graph
+from ag_ui.core.types import RunAgentInput
+from ag_ui.encoder import EventEncoder
+
+from src.agent import agent
 from src.bridge_client import bridge_manager
 
 app = FastAPI(
@@ -75,19 +78,19 @@ async def bridge_websocket(ws: WebSocket, token: str = ""):
         bridge_manager.unregister(token or "default")
 
 
-# Serve the LangGraph agent via the AG-UI protocol for CopilotKit
-from ag_ui_langgraph import add_langgraph_fastapi_endpoint
-from copilotkit import LangGraphAGUIAgent
+@app.post("/")
+async def agent_endpoint(input_data: RunAgentInput, request: Request):
+    """AG-UI streaming endpoint — replaces ag_ui_langgraph."""
+    encoder = EventEncoder(accept=request.headers.get("accept"))
 
-add_langgraph_fastapi_endpoint(
-    app=app,
-    agent=LangGraphAGUIAgent(
-        name="modernization_agent",
-        description="AI-powered mainframe modernization assistant",
-        graph=graph,
-    ),
-    path="/",
-)
+    async def event_generator():
+        async for event in agent.run(input_data):
+            yield encoder.encode(event)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type=encoder.get_content_type(),
+    )
 
 
 def main():

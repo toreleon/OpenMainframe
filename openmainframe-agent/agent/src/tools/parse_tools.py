@@ -3,12 +3,9 @@ Parse tools — tokenize COBOL and parse JCL for structural analysis.
 Wraps: open-mainframe parse-jcl, open-mainframe lex
 """
 
-from langchain.tools import tool
-
 from .base import run_cli, sanitize_path, try_parse_json
 
 
-@tool
 async def parse_jcl(jcl_file: str) -> dict:
     """Parse a JCL file and return its AST structure.
     Useful for understanding job structure before execution.
@@ -23,7 +20,6 @@ async def parse_jcl(jcl_file: str) -> dict:
     return result
 
 
-@tool
 async def lex_cobol(source_file: str) -> dict:
     """Tokenize a COBOL source file and return the token stream.
     Useful for structural code analysis and explanation grounding.

@@ -3,12 +3,9 @@ Execution tools — run JCL jobs and interpret COBOL programs.
 Wraps: open-mainframe run, open-mainframe interpret
 """
 
-from langchain.tools import tool
-
 from .base import run_cli, sanitize_path
 
 
-@tool
 async def run_jcl(jcl_file: str) -> dict:
     """Execute a JCL job file. Returns step-by-step execution results
     including per-step return codes and SYSOUT content.
@@ -23,7 +20,6 @@ async def run_jcl(jcl_file: str) -> dict:
     return await run_cli(["run", path], timeout=300)
 
 
-@tool
 async def interpret_cobol(source_file: str) -> dict:
     """Run a COBOL program through the tree-walking interpreter.
     Captures DISPLAY output and final return code.

@@ -1,25 +1,18 @@
 [project]
 name = "openmainframe-agent"
 version = "1.0.0"
-description = "AI-powered mainframe modernization agent using LangGraph + CopilotKit"
+description = "AI-powered mainframe modernization agent using Anthropic SDK + AG-UI"
 requires-python = ">=3.11"
 
 dependencies = [
-    "langchain>=0.3.0",
-    "langchain-openai>=0.3.0",
-    "langchain-anthropic>=0.3.0",
-    "langgraph>=0.3.0",
-    "copilotkit>=0.1.0",
+    "anthropic>=0.52.0",
+    "ag-ui-protocol>=0.1.10",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
     "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
-postgres = [
-    "langgraph-checkpoint-postgres>=2.0.0",
-    "psycopg[binary]>=3.2.0",
-]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24.0",

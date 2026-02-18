@@ -3,12 +3,9 @@ Compilation tools — compile and syntax-check COBOL source files.
 Wraps: open-mainframe compile, open-mainframe check
 """
 
-from langchain.tools import tool
-
 from .base import run_cli, sanitize_path
 
 
-@tool
 async def compile_cobol(source_file: str) -> dict:
     """Compile a COBOL source file to a native executable.
     Returns success/failure with compiler output and error messages.
@@ -20,7 +17,6 @@ async def compile_cobol(source_file: str) -> dict:
     return await run_cli(["compile", path], timeout=120)
 
 
-@tool
 async def check_cobol(source_file: str) -> dict:
     """Syntax check a COBOL source file without full compilation.
     Faster than compile — useful for quick validation.

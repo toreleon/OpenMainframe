@@ -3,12 +3,9 @@ Dataset management tools — browse catalogs and manage datasets via IDCAMS.
 Wraps: open-mainframe idcams
 """
 
-from langchain.tools import tool
-
 from .base import run_cli, sanitize_idcams
 
 
-@tool
 async def list_catalog(pattern: str = "*") -> dict:
     """List datasets in the catalog matching the given pattern.
     Returns dataset names, types, record formats, and record lengths.
@@ -19,7 +16,6 @@ async def list_catalog(pattern: str = "*") -> dict:
     return await run_cli(["idcams", f"LISTCAT ENTRIES({pattern})"], timeout=60)
 
 
-@tool
 async def idcams_command(command: str) -> dict:
     """Execute an IDCAMS command for dataset management.
     Supported verbs: DEFINE, DELETE, REPRO, LISTCAT, PRINT.

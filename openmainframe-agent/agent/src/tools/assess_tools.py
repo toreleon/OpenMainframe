@@ -3,12 +3,9 @@ Assessment tools — scan directories and analyze individual COBOL files.
 Wraps: open-mainframe assess scan, open-mainframe assess file
 """
 
-from langchain.tools import tool
-
 from .base import run_cli, sanitize_path, try_parse_json
 
 
-@tool
 async def assess_scan(directory: str) -> dict:
     """Scan a directory of COBOL source files and return assessment metrics
     including complexity scores, feature inventory, and compatibility issues.
@@ -27,7 +24,6 @@ async def assess_scan(directory: str) -> dict:
     return result
 
 
-@tool
 async def assess_file(file_path: str) -> dict:
     """Assess a single COBOL source file for metrics and compatibility.
     Returns complexity, maintainability, feature usage, and issues.

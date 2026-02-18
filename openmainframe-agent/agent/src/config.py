@@ -1,29 +1,35 @@
 """
-Environment configuration and model factory.
+Environment configuration and Anthropic client factory.
+
+Supported providers (LLM_PROVIDER env var):
+
+  anthropic     — Direct Anthropic API (default). Set ANTHROPIC_API_KEY.
+  litellm-proxy — LiteLLM proxy server (recommended for production).
+                  Exposes an OpenAI-compatible API that the Anthropic SDK
+                  can talk to via base_url override.
+                  Set LITELLM_PROXY_URL (default http://localhost:4000)
+                  and LITELLM_API_KEY. Model name maps to proxy config.
 """
 
 import os
 
-from langchain_openai import ChatOpenAI
+from anthropic import AsyncAnthropic
 
 
-def get_model(config=None):
-    """Create an LLM instance based on environment configuration.
+def get_client() -> AsyncAnthropic:
+    """Create an AsyncAnthropic client based on environment configuration."""
+    provider = os.getenv("LLM_PROVIDER", "anthropic")
 
-    Supports:
-      LLM_PROVIDER=openai (default) | anthropic
-      LLM_MODEL=gpt-4.1-mini (default) | claude-sonnet-4-5-20250929 | etc.
-    """
-    provider = os.getenv("LLM_PROVIDER", "openai")
-    model_name = os.getenv("LLM_MODEL", "gpt-4.1-mini")
+    if provider == "litellm-proxy":
+        return AsyncAnthropic(
+            base_url=os.getenv("LITELLM_PROXY_URL", "http://localhost:4000"),
+            api_key=os.getenv("LITELLM_API_KEY", "sk-1234"),
+        )
 
-    if provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
+    # Default: direct Anthropic API (uses ANTHROPIC_API_KEY env var)
+    return AsyncAnthropic()
 
-        return ChatAnthropic(model=model_name)
 
-    base_url = os.getenv("OPENAI_BASE_URL")
-    kwargs = {"model": model_name}
-    if base_url:
-        kwargs["base_url"] = base_url
-    return ChatOpenAI(**kwargs)
+def get_model_name() -> str:
+    """Return the model name from environment (default: claude-sonnet-4-5-20250929)."""
+    return os.getenv("LLM_MODEL", "claude-sonnet-4-5-20250929")
