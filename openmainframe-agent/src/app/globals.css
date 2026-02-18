@@ -23,9 +23,34 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
 }
 
-/* CopilotKit sidebar dark theme overrides */
-.copilotKitSidebar {
-  --copilot-kit-background-color: var(--om-surface);
+/* CopilotKit chat dark theme overrides */
+.copilotKitChat {
+  --copilot-kit-background-color: var(--om-bg);
   --copilot-kit-secondary-color: var(--om-border);
   --copilot-kit-primary-color: var(--om-accent);
+  --copilot-kit-response-button-background-color: var(--om-surface);
+  --copilot-kit-response-button-color: var(--om-text);
+}
+
+/* Full-height chat container */
+.chat-container {
+  height: calc(100vh - 3.5rem);
+}
+
+/* Center the chat messages area with a comfortable max width */
+.chat-container [class*="messagesContainer"],
+.chat-container [class*="Messages"] {
+  max-width: 800px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+
+/* Style the chat input area */
+.chat-container [class*="inputContainer"],
+.chat-container [class*="Input"] {
+  max-width: 800px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
 }

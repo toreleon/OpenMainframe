@@ -1,15 +1,9 @@
 "use client";
 
-import { CopilotSidebar } from "@copilotkit/react-ui";
+import { CopilotChat } from "@copilotkit/react-ui";
 import { useRenderToolCall } from "@copilotkit/react-core";
 import { useAgentState } from "@/hooks/useAgentState";
-import { useWorkspaceTabs } from "@/hooks/useWorkspaceTabs";
 import { useInterruptHandler } from "@/hooks/useInterruptHandler";
-import { useProgressSync } from "@/hooks/useProgressSync";
-import { Header } from "@/components/layout/Header";
-import { FileTreePanel } from "@/components/layout/FileTreePanel";
-import { WorkspacePanel } from "@/components/layout/WorkspacePanel";
-import { StatusBar } from "@/components/layout/StatusBar";
 import { AssessmentCard } from "@/components/chat/AssessmentCard";
 import { CompilerOutputCard } from "@/components/chat/CompilerOutputCard";
 import { ProgressCard } from "@/components/chat/ProgressCard";
@@ -17,19 +11,9 @@ import { ExplanationCard } from "@/components/chat/ExplanationCard";
 
 export default function HomeContent() {
   const { state } = useAgentState();
-  const { tabs, activeTab, activeTabId, setActiveTabId, openTab, closeTab } =
-    useWorkspaceTabs();
-
-  const handleFileSelect = (path: string) => {
-    const name = path.split("/").pop() || path;
-    openTab({ type: "code", label: name, path });
-  };
 
   // HITL — render LangGraph interrupt() approvals inline in chat
   useInterruptHandler();
-
-  // Auto-open workspace tabs when agent produces results
-  useProgressSync(state, openTab);
 
   // Generative UI — render tool calls inline in chat
   useRenderToolCall({
@@ -119,45 +103,41 @@ export default function HomeContent() {
     },
   });
 
-  const latestExecution =
-    state.execution_results.length > 0
-      ? state.execution_results[state.execution_results.length - 1]
-      : null;
-
   return (
-    <CopilotSidebar
-      defaultOpen={true}
-      labels={{
-        title: "OpenMainframe Agent",
-        initial:
-          "Hello! I'm your mainframe modernization assistant. I can help you assess, compile, execute, and explain COBOL and JCL code. Set a project directory to get started, or just ask me a question.",
-      }}
-    >
-      <main className="flex flex-col h-screen bg-om-bg">
-        <Header projectPath={state.project_path} />
-        <div className="flex flex-1 min-h-0">
-          <FileTreePanel
-            files={state.source_files}
-            projectPath={state.project_path}
-            onFileSelect={handleFileSelect}
-          />
-          <WorkspacePanel
-            tabs={tabs}
-            activeTab={activeTab}
-            activeTabId={activeTabId}
-            onTabSelect={setActiveTabId}
-            onTabClose={closeTab}
-            assessmentReport={state.assessment_results}
-            latestExecution={latestExecution}
-            onFileSelect={handleFileSelect}
-          />
+    <main className="flex flex-col h-screen bg-om-bg">
+      {/* Minimal header */}
+      <header className="h-14 bg-om-surface border-b border-om-border flex items-center px-6 shrink-0">
+        <div className="flex items-center gap-3">
+          <span className="text-om-accent font-bold text-sm tracking-wide">
+            OPENMAINFRAME
+          </span>
+          <span className="text-om-muted text-xs">|</span>
+          <span className="text-om-muted text-xs">Agent</span>
         </div>
-        <StatusBar
-          currentOperation={state.current_operation}
-          operationProgress={state.operation_progress}
-          fileCount={state.source_files.length}
+        <div className="flex-1" />
+        {state.project_path && (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="w-2 h-2 rounded-full bg-om-success" />
+            <span className="text-om-muted">Connected:</span>
+            <span className="text-om-text font-mono truncate max-w-xs">
+              {state.project_path}
+            </span>
+          </div>
+        )}
+      </header>
+
+      {/* Full-screen chat area */}
+      <div className="chat-container flex-1 min-h-0">
+        <CopilotChat
+          className="h-full"
+          instructions="You are the OpenMainframe Agent, an AI-powered mainframe modernization assistant. You help users assess, compile, execute, and explain COBOL and JCL code. The user's code stays on their local machine — you operate through a local bridge connection. Be concise, helpful, and proactive."
+          labels={{
+            title: "OpenMainframe Agent",
+            initial:
+              "Hello! I'm your mainframe modernization assistant. I can help you assess, compile, execute, and explain COBOL and JCL code.\n\nTo get started, connect your local environment by running:\n```\npip install openmainframe-bridge\nopenmainframe bridge connect --project ~/your-cobol-project\n```\n\nOr just ask me a question!",
+          }}
         />
-      </main>
-    </CopilotSidebar>
+      </div>
+    </main>
   );
 }
