@@ -44,33 +44,19 @@ async def health():
     )
 
 
-# Register the LangGraph agent at the root path for CopilotKit
-# The graph is served using LangGraph's built-in serving capabilities
-# CopilotKit's LangGraphAgent connects to this endpoint
-try:
-    from copilotkit.integrations.fastapi import add_fastapi_endpoint
+# Serve the LangGraph agent via the AG-UI protocol for CopilotKit
+from ag_ui_langgraph import add_langgraph_fastapi_endpoint
+from copilotkit import LangGraphAGUIAgent
 
-    add_fastapi_endpoint(app, graph, "/copilotkit")
-except ImportError:
-    # Fallback: try ag-ui-langgraph integration
-    try:
-        from ag_ui_langgraph import add_langgraph_fastapi_endpoint
-        from copilotkit import LangGraphAGUIAgent
-
-        add_langgraph_fastapi_endpoint(
-            app=app,
-            agent=LangGraphAGUIAgent(
-                name="modernization_agent",
-                description="AI-powered mainframe modernization assistant",
-                graph=graph,
-            ),
-            path="/",
-        )
-    except ImportError:
-        print(
-            "WARNING: Neither copilotkit.integrations.fastapi nor ag_ui_langgraph found. "
-            "Install copilotkit or ag-ui-langgraph to serve the agent."
-        )
+add_langgraph_fastapi_endpoint(
+    app=app,
+    agent=LangGraphAGUIAgent(
+        name="modernization_agent",
+        description="AI-powered mainframe modernization assistant",
+        graph=graph,
+    ),
+    path="/",
+)
 
 
 def main():

@@ -22,4 +22,8 @@ def get_model(config=None):
 
         return ChatAnthropic(model=model_name)
 
-    return ChatOpenAI(model=model_name)
+    base_url = os.getenv("OPENAI_BASE_URL")
+    kwargs = {"model": model_name}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return ChatOpenAI(**kwargs)

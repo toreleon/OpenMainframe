@@ -3,24 +3,25 @@ import {
   ExperimentalEmptyAdapter,
   copilotRuntimeNextJSAppRouterEndpoint,
 } from "@copilotkit/runtime";
-import { LangGraphAgent } from "@copilotkit/runtime/langgraph";
+import { LangGraphHttpAgent } from "@copilotkit/runtime/langgraph";
 import { NextRequest } from "next/server";
 
-const agent = new LangGraphAgent({
-  deploymentUrl: process.env.AGENT_URL || "http://localhost:8123",
-  graphId: "modernization_agent",
-  langsmithApiKey: process.env.LANGSMITH_API_KEY || "",
+const agentUrl = process.env.AGENT_URL || "http://localhost:8123";
+
+const runtime = new CopilotRuntime({
+  agents: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    default: new LangGraphHttpAgent({
+      url: agentUrl,
+    }) as any,
+  },
 });
 
 export const POST = async (req: NextRequest) => {
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
     endpoint: "/api/copilotkit",
     serviceAdapter: new ExperimentalEmptyAdapter(),
-    runtime: new CopilotRuntime({
-      agents: {
-        default: agent,
-      },
-    }),
+    runtime,
   });
 
   return handleRequest(req);

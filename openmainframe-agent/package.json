@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:agent\"",
     "dev:frontend": "next dev --port 3000",
-    "dev:agent": "cd agent && uvicorn main:app --host 0.0.0.0 --port 8123 --reload",
+    "dev:agent": "agent/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8123 --reload --app-dir agent",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

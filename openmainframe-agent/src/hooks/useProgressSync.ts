@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { AgentState } from "@/lib/types";
+import type { TabType } from "@/hooks/useWorkspaceTabs";
 
 /**
  * Watches agent state changes and triggers side effects:
@@ -10,7 +11,7 @@ import type { AgentState } from "@/lib/types";
  */
 export function useProgressSync(
   state: AgentState,
-  openTab: (tab: { type: string; label: string; path?: string }) => void,
+  openTab: (tab: { type: TabType; label: string; path?: string }) => void,
 ) {
   const prevAssessment = useRef(state.assessment_results);
   const prevExecutionCount = useRef(state.execution_results.length);
