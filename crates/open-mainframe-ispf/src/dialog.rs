@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use crate::panel::{Panel, PanelStmt, PanelExpr, PanelCond, CmpOp, VerCheck, VarPool as PanelVarPool};
+use crate::table::TableManager;
 
 // ---------------------------------------------------------------------------
 //  Dialog manager
@@ -24,6 +25,8 @@ pub struct DialogManager {
     panels: HashMap<String, Panel>,
     /// Variable pools.
     pub vars: IspfVarPools,
+    /// Table manager.
+    pub tables: TableManager,
     /// Message library: id → message definition.
     messages: HashMap<String, MessageDef>,
     /// Pending message (set by SETMSG, displayed on next DISPLAY).
@@ -304,6 +307,11 @@ impl IspfVarPools {
     pub fn function_depth(&self) -> usize {
         self.function_stack.len()
     }
+
+    /// Get all variables from the current function pool.
+    pub fn current_function_vars(&self) -> HashMap<String, String> {
+        self.function_stack.last().cloned().unwrap_or_default()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +324,7 @@ impl DialogManager {
         Self {
             panels: HashMap::new(),
             vars: IspfVarPools::new(),
+            tables: TableManager::new(),
             messages: HashMap::new(),
             pending_msg: None,
             errors_return: false,
@@ -356,6 +365,21 @@ impl DialogManager {
             Some("VCOPY") => self.exec_vcopy(&upper),
             Some("VDEFINE") => self.exec_vdefine(&upper),
             Some("VRESET") => self.exec_vreset(),
+            Some("TBCREATE") => self.exec_tbcreate(&upper),
+            Some("TBOPEN") => self.exec_tbopen(&upper),
+            Some("TBCLOSE") => self.exec_tbclose(&upper),
+            Some("TBEND") => self.exec_tbend(&upper),
+            Some("TBSAVE") => self.exec_tbsave(&upper),
+            Some("TBADD") => self.exec_tbadd(&upper),
+            Some("TBPUT") => self.exec_tbput(&upper),
+            Some("TBMOD") => self.exec_tbmod(&upper),
+            Some("TBDELETE") => self.exec_tbdelete(&upper),
+            Some("TBTOP") => self.exec_tbtop(&upper),
+            Some("TBBOT") => self.exec_tbbot(&upper),
+            Some("TBSKIP") => self.exec_tbskip(&upper),
+            Some("TBSORT") => self.exec_tbsort(&upper),
+            Some("TBSCAN") => self.exec_tbscan(&upper),
+            Some("TBSARG") => self.exec_tbsarg(&upper),
             _ => {
                 self.last_rc = 12;
                 12
@@ -587,6 +611,164 @@ impl DialogManager {
         self.vars.vreset();
         self.last_rc = 0;
         0
+    }
+
+    // -----------------------------------------------------------------------
+    //  Table services (delegated to TableManager)
+    // -----------------------------------------------------------------------
+
+    fn exec_tbcreate(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let keys = extract_paren(cmd, "KEYS")
+            .map(|s| s.split_whitespace().map(|w| w.to_uppercase()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let names = extract_paren(cmd, "NAMES")
+            .map(|s| s.split_whitespace().map(|w| w.to_uppercase()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let writable = !cmd.contains("NOWRITE");
+        let rc = self.tables.tbcreate(table_name, &keys, &names, writable);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbopen(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let writable = cmd.contains("WRITE");
+        let rc = self.tables.tbopen(table_name, writable);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbclose(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let rc = self.tables.tbclose(table_name);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbend(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let rc = self.tables.tbend(table_name);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbsave(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let rc = self.tables.tbsave(table_name);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbadd(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let vars = self.collect_func_vars();
+        let rc = self.tables.tbadd(table_name, &vars);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbput(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let vars = self.collect_func_vars();
+        let rc = self.tables.tbput(table_name, &vars);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbmod(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let vars = self.collect_func_vars();
+        let rc = self.tables.tbmod(table_name, &vars);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbdelete(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let rc = self.tables.tbdelete(table_name);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbtop(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let rc = self.tables.tbtop(table_name);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbbot(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let rc = self.tables.tbbot(table_name);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbskip(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let count = extract_paren(cmd, "NUMBER")
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(1);
+        let (rc, row) = self.tables.tbskip(table_name, count);
+        if let Some(row) = row {
+            for (k, v) in &row {
+                self.vars.set(k, v.clone());
+            }
+        }
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbsort(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let fields = extract_paren(cmd, "FIELDS").unwrap_or_default();
+        let rc = self.tables.tbsort(table_name, &fields);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbscan(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let arglist = extract_paren(cmd, "ARGLIST")
+            .map(|s| s.split_whitespace().map(|w| w.to_string()).collect::<Vec<_>>());
+        let condlist = extract_paren(cmd, "CONDLIST")
+            .map(|s| s.split_whitespace().map(|w| w.to_string()).collect::<Vec<_>>());
+        let vars = self.collect_func_vars();
+
+        let (rc, row) = if let Some(args) = &arglist {
+            let conds = condlist.as_deref().unwrap_or(&[]);
+            self.tables.tbscan(table_name, Some((args, conds)), &vars)
+        } else {
+            self.tables.tbscan(table_name, None, &vars)
+        };
+
+        if let Some(row) = row {
+            for (k, v) in &row {
+                self.vars.set(k, v.clone());
+            }
+        }
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_tbsarg(&mut self, cmd: &str) -> i32 {
+        let table_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let arglist = extract_paren(cmd, "ARGLIST")
+            .map(|s| s.split_whitespace().map(|w| w.to_string()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let condlist = extract_paren(cmd, "CONDLIST")
+            .map(|s| s.split_whitespace().map(|w| w.to_string()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let vars = self.collect_func_vars();
+        let rc = self.tables.tbsarg(table_name, &arglist, &condlist, &vars);
+        self.last_rc = rc;
+        rc
+    }
+
+    /// Collect all variables from the current function pool as a map.
+    fn collect_func_vars(&self) -> HashMap<String, String> {
+        self.vars.current_function_vars()
     }
 
     // -----------------------------------------------------------------------

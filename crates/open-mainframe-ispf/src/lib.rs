@@ -9,9 +9,14 @@
 //! - **Dialog** — ISPF dialog manager: DISPLAY, SELECT, SETMSG, CONTROL, variable pools
 //! - Four-pool variable model: function, shared, profile, system
 //! - VGET/VPUT/VERASE services, pop-up management, message handling
+//! - **Table** — ISPF table services: in-memory tables with row ops, search, sort, persistence
+//! - TBCREATE/TBOPEN/TBCLOSE/TBEND/TBSAVE lifecycle
+//! - TBADD/TBPUT/TBMOD/TBDELETE/TBTOP/TBBOT/TBSKIP row operations
+//! - TBSCAN/TBSARG/TBSORT search and sort
 
 pub mod dialog;
 pub mod panel;
+pub mod table;
 
 pub use dialog::{DialogManager, DisplayEvent, IspfVarPools, MessageDef, VarType};
 pub use panel::{
@@ -19,3 +24,4 @@ pub use panel::{
     Justification, Panel, PanelCond, PanelError, PanelExpr, PanelField, PanelStmt,
     VarPool, VerCheck,
 };
+pub use table::{IspfTable, SearchCond, TableManager, TableStats};
