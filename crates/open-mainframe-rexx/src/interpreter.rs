@@ -7,7 +7,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{BinOp, Clause, ClauseBody, DoControl, Expr, Program, SignalTarget, UnaryOp};
+use crate::ast::{
+    BinOp, Clause, ClauseBody, DoControl, Expr, ParseSource, Program, SignalTarget, UnaryOp,
+};
+use crate::parse_template::{execute_parse, parse_template};
 use crate::value::{
     rexx_add, rexx_compare, rexx_div, rexx_idiv, rexx_mul, rexx_pow, rexx_rem, rexx_sub,
     NumericForm, NumericSettings, RexxValue,
@@ -380,8 +383,26 @@ impl Interpreter {
                 }
                 Ok(Flow::Normal)
             }
-            ClauseBody::Parse { .. } | ClauseBody::Arg(_) | ClauseBody::Pull(_) => {
-                // PARSE is implemented in R102 — stub: set target vars to empty.
+            ClauseBody::Parse {
+                upper,
+                source,
+                template,
+            } => {
+                let source_str = self.get_parse_source(source)?;
+                self.apply_parse(&source_str, template, *upper);
+                Ok(Flow::Normal)
+            }
+            ClauseBody::Arg(template) => {
+                // ARG is shorthand for PARSE UPPER ARG template.
+                let source_str = self.vars().get("ARG");
+                self.apply_parse(&source_str, template, true);
+                Ok(Flow::Normal)
+            }
+            ClauseBody::Pull(template) => {
+                // PULL is shorthand for PARSE UPPER PULL template.
+                // Read from data stack (stub: use empty string).
+                let source_str = self.pull_from_stack();
+                self.apply_parse(&source_str, template, true);
                 Ok(Flow::Normal)
             }
             ClauseBody::Push(_) | ClauseBody::Queue(_) => {
@@ -992,6 +1013,53 @@ impl Interpreter {
             line: self.current_line,
             message: msg.to_string(),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    //  PARSE helpers
+    // -----------------------------------------------------------------------
+
+    /// Get the source string for a PARSE instruction.
+    fn get_parse_source(&mut self, source: &ParseSource) -> Result<String, InterpError> {
+        match source {
+            ParseSource::Arg => Ok(self.vars().get("ARG")),
+            ParseSource::Pull => Ok(self.pull_from_stack()),
+            ParseSource::Var(name) => {
+                let resolved = self.resolve_var_name(name);
+                Ok(self.vars().get(&resolved))
+            }
+            ParseSource::Value(expr) => self.eval_expr(expr),
+            ParseSource::External => Ok(String::new()), // Stub.
+            ParseSource::Source => {
+                // PARSE SOURCE returns: system invocation_type name
+                Ok("TSO COMMAND EXEC".to_string())
+            }
+            ParseSource::Version => {
+                // PARSE VERSION returns: language level date
+                Ok("REXX-OpenMainframe 4.00 01 Jan 2025".to_string())
+            }
+            ParseSource::Linein => Ok(String::new()), // Stub.
+        }
+    }
+
+    /// Apply a PARSE template, setting variables in the current pool.
+    fn apply_parse(&mut self, source: &str, template_str: &str, upper: bool) {
+        let template = parse_template(template_str);
+        let var_resolver = |name: &str| -> String {
+            // We can't borrow self here, so return the name as-is.
+            // Variable pattern resolution is limited in this context.
+            name.to_string()
+        };
+        let bindings = execute_parse(source, &template, upper, &var_resolver);
+        for (name, value) in bindings {
+            self.vars_mut().set(&name, value);
+        }
+    }
+
+    /// Pull a value from the data stack (stub — returns empty string).
+    fn pull_from_stack(&mut self) -> String {
+        // Data stack operations are implemented in R105.
+        String::new()
     }
 }
 
