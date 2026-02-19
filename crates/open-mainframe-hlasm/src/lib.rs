@@ -14,6 +14,7 @@
 
 pub mod instruction;
 pub mod lexer;
+pub mod macros;
 pub mod symbol;
 
 pub use instruction::{
@@ -23,4 +24,5 @@ pub use lexer::{
     parse_source, parse_source_line, tokenize_operands, InstructionLine, LexerError, SourceLine,
     Token,
 };
+pub use macros::{CopyLibrary, MacroDef, MacroEngine, MacroError, MacroParam, Mnote, SystemVars};
 pub use symbol::{eval_expr_str, eval_expression, ExprError, Symbol, SymbolTable};
