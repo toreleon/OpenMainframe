@@ -15,7 +15,7 @@ members = [
     "crates/open-mainframe-ims",
     "crates/open-mainframe-deploy",
     "crates/open-mainframe-tui",
-    "crates/open-mainframe-racf", "crates/open-mainframe-jes2",
+    "crates/open-mainframe-racf", "crates/open-mainframe-jes2", "crates/open-mainframe-tso",
 ]
 
 [workspace.package]

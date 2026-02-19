@@ -1320,6 +1320,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-jes2"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "open-mainframe-lang-core"
 version = "0.1.0"
 
@@ -1350,6 +1361,17 @@ name = "open-mainframe-sort"
 version = "0.1.0"
 dependencies = [
  "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-tso"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
