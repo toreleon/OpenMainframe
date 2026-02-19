@@ -1,0 +1,14 @@
+[package]
+name = "open-mainframe-smf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "System Management Facilities — SMF record format, writer, and job/step record types"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true
