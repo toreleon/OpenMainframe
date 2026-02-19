@@ -19,9 +19,12 @@
 //! assert_eq!(String::from_utf8(output).unwrap(), "HELLO WORLD\n");
 //! ```
 
+pub mod condition;
 pub mod date_time;
 pub mod decimal;
+pub mod enclave;
 pub mod error;
+pub mod heap;
 pub mod file_io;
 pub mod interpreter;
 pub mod io;
