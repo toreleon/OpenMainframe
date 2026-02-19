@@ -14,6 +14,7 @@
 //! - **Macro Language** — MACRO/MEND, parameter substitution, &SYSNDX, MNOTE, MEXIT, COPY
 //! - **Object Code Generation** — OBJ format (ESD/TXT/RLD/END), GOFF basics, AMODE/RMODE
 
+pub mod conditional;
 pub mod instruction;
 pub mod lexer;
 pub mod macros;
@@ -30,3 +31,6 @@ pub use lexer::{
 pub use macros::{CopyLibrary, MacroDef, MacroEngine, MacroError, MacroParam, Mnote, SystemVars};
 pub use object::{Amode, EsdItem, EsdType, ObjectModule, Rmode, RldEntry, TxtRecord};
 pub use symbol::{eval_expr_str, eval_expression, ExprError, Symbol, SymbolTable};
+pub use conditional::{
+    CondAsmEngine, CondAsmError, CondAsmStmt, SetType, SetValue,
+};
