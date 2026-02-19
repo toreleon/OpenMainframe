@@ -23,6 +23,7 @@
 
 pub mod checkpoint;
 pub mod commands;
+pub mod config;
 pub mod error;
 pub mod job;
 pub mod queue;
@@ -30,6 +31,7 @@ pub mod spool;
 
 pub use checkpoint::{CheckpointConfig, CheckpointData, CheckpointManager, StartMode};
 pub use commands::{execute_command, parse_command, CommandResponse, Initiator, Jes2Command};
+pub use config::{apply_parms, build_initiators, parse_jes2parm, Jes2Config, Jes2Parm};
 pub use error::Jes2Error;
 pub use job::{Job, JobClass, JobId, JobState};
 pub use queue::Jes2;
