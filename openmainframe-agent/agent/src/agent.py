@@ -14,9 +14,129 @@ from ag_ui.core import events as ev
 from ag_ui.core.events import EventType
 
 from .config import get_client, get_model_name
-from .prompts import SYSTEM_PROMPT
+from .prompts import SYSTEM_PROMPT, THINKING_INSTRUCTION, THINKING_ONLY_SUFFIX
 from .state import AgentState
 from .tools import TOOL_REGISTRY, TOOL_SCHEMAS, HITL_TOOLS
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """Return True if the model supports native extended thinking."""
+    return any(k in model for k in ("sonnet", "opus", "haiku"))
+
+
+def _strip_tool_blocks(messages: list[dict]) -> list[dict]:
+    """Return a copy of messages safe for a no-tools API call.
+
+    Removes tool_use blocks from assistant messages and drops user
+    messages that consist solely of tool_result blocks.  This prevents
+    the API from complaining about tool references when no tools are
+    provided.
+    """
+    out: list[dict] = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+
+        if role == "assistant" and isinstance(content, list):
+            # Keep only text blocks
+            text_blocks = [b for b in content if getattr(b, "type", None) == "text"
+                           or (isinstance(b, dict) and b.get("type") == "text")]
+            if not text_blocks:
+                # All-tool-use assistant turn — replace with placeholder
+                out.append({"role": "assistant", "content": "(tool call)"})
+            else:
+                out.append({"role": "assistant", "content": text_blocks})
+        elif role == "user" and isinstance(content, list):
+            # Drop pure tool_result user messages
+            has_tool_result = any(
+                (isinstance(b, dict) and b.get("type") == "tool_result")
+                for b in content
+            )
+            if has_tool_result:
+                # Summarise tool results as plain text
+                parts = []
+                for b in content:
+                    if isinstance(b, dict) and b.get("type") == "tool_result":
+                        c = b.get("content", "")
+                        parts.append(c[:200] if isinstance(c, str) else str(c)[:200])
+                out.append({"role": "user", "content": "Tool results:\n" + "\n".join(parts)})
+            else:
+                out.append(msg)
+        else:
+            out.append(msg)
+    return out
+
+
+class ThinkingTagParser:
+    """Stream parser that extracts <thinking>...</thinking> from text deltas.
+
+    Yields (event_type, content) tuples where event_type is one of:
+      "thinking_start", "thinking_content", "thinking_end", "text"
+    Handles tags split across multiple deltas via an internal buffer.
+    """
+
+    OPEN_TAG = "<thinking>"
+    CLOSE_TAG = "</thinking>"
+
+    def __init__(self):
+        self._buf = ""
+        self._inside = False
+
+    def feed(self, delta: str):
+        """Feed a text delta, yield parsed events."""
+        self._buf += delta
+        yield from self._drain()
+
+    def flush(self):
+        """Flush remaining buffer at end of stream."""
+        if self._buf:
+            if self._inside:
+                yield ("thinking_content", self._buf)
+                yield ("thinking_end", "")
+            else:
+                yield ("text", self._buf)
+            self._buf = ""
+
+    # ── internals ────────────────────────────────────────────────
+
+    def _drain(self):
+        while self._buf:
+            if self._inside:
+                idx = self._buf.find(self.CLOSE_TAG)
+                if idx >= 0:
+                    if idx > 0:
+                        yield ("thinking_content", self._buf[:idx])
+                    yield ("thinking_end", "")
+                    self._buf = self._buf[idx + len(self.CLOSE_TAG) :]
+                    self._inside = False
+                else:
+                    safe, held = self._split_partial(self._buf, self.CLOSE_TAG)
+                    if safe:
+                        yield ("thinking_content", safe)
+                    self._buf = held
+                    break
+            else:
+                idx = self._buf.find(self.OPEN_TAG)
+                if idx >= 0:
+                    if idx > 0:
+                        yield ("text", self._buf[:idx])
+                    yield ("thinking_start", "")
+                    self._buf = self._buf[idx + len(self.OPEN_TAG) :]
+                    self._inside = True
+                else:
+                    safe, held = self._split_partial(self._buf, self.OPEN_TAG)
+                    if safe:
+                        yield ("text", safe)
+                    self._buf = held
+                    break
+
+    @staticmethod
+    def _split_partial(text: str, tag: str):
+        """Split into (safe_to_emit, possible_partial_tag_suffix)."""
+        for i in range(min(len(tag) - 1, len(text)), 0, -1):
+            if text.endswith(tag[:i]):
+                return text[:-i], text[-i:]
+        return text, ""
 
 
 @dataclass
@@ -68,7 +188,10 @@ class AnthropicAgent:
             input_data.messages
         )
 
+        model = get_model_name()
         system = SYSTEM_PROMPT
+        if not _is_reasoning_model(model):
+            system += THINKING_INSTRUCTION
         if system_parts:
             system = system + "\n\n" + "\n".join(system_parts)
 
@@ -115,6 +238,7 @@ class AnthropicAgent:
     ) -> AsyncGenerator[ev.BaseEvent, None]:
         client = get_client()
         model = get_model_name()
+        is_reasoning = _is_reasoning_model(model)
 
         while True:
             message_id = f"msg_{uuid.uuid4().hex[:12]}"
@@ -126,86 +250,67 @@ class AnthropicAgent:
             tool_call_names: dict[int, str] = {}
             collected_tool_calls: list[dict] = []
 
-            # ── Stream LLM response ────────────────────────────────
+            # ── LLM call ─────────────────────────────────────────────
+            thinking_id = f"think_{uuid.uuid4().hex[:8]}"
+
             try:
-                async with client.messages.stream(
+                call_kwargs = dict(
                     model=model,
                     system=system,
                     messages=messages,
                     tools=tools if tools else [],
-                    max_tokens=4096,
-                ) as stream:
-                    async for event in stream:
-                        if event.type == "content_block_start":
-                            idx = event.index
-                            block = event.content_block
+                    max_tokens=16000,
+                )
 
-                            if block.type == "text":
-                                block_types[idx] = "text"
-                                if not text_started:
-                                    text_started = True
-                                    yield ev.TextMessageStartEvent(
-                                        type=EventType.TEXT_MESSAGE_START,
-                                        message_id=message_id,
-                                        role="assistant",
-                                    )
+                if is_reasoning:
+                    # ── Streaming path (Anthropic reasoning models) ──
+                    call_kwargs["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": 10000,
+                    }
+                    async for e in self._stream_reasoning(
+                        client, call_kwargs, message_id, thinking_id,
+                    ):
+                        yield e
+                    final_message = self._last_final_message
+                else:
+                    # ── Two-step path (proxy models like GPT) ────────
+                    # GPT-style models return content=null alongside
+                    # tool calls, so thinking text is lost.  We make a
+                    # quick thinking-only call first (no tools), then
+                    # the real call with tools.
 
-                            elif block.type == "tool_use":
-                                block_types[idx] = "tool_use"
-                                tool_call_ids[idx] = block.id
-                                tool_call_names[idx] = block.name
-                                yield ev.ToolCallStartEvent(
-                                    type=EventType.TOOL_CALL_START,
-                                    tool_call_id=block.id,
-                                    tool_call_name=block.name,
-                                    parent_message_id=message_id,
-                                )
+                    # Step 1 — thinking (no tools, capped tokens)
+                    think_msgs = _strip_tool_blocks(messages)
+                    try:
+                        think_resp = await client.messages.create(
+                            model=model,
+                            system=system + THINKING_ONLY_SUFFIX,
+                            messages=think_msgs,
+                            max_tokens=800,
+                        )
+                        async for e in self._emit_thinking_only(
+                            think_resp, thinking_id,
+                        ):
+                            yield e
+                    except Exception:
+                        pass  # thinking is best-effort
 
-                        elif event.type == "content_block_delta":
-                            idx = event.index
-                            if block_types.get(idx) == "text":
-                                yield ev.TextMessageContentEvent(
-                                    type=EventType.TEXT_MESSAGE_CONTENT,
-                                    message_id=message_id,
-                                    delta=event.delta.text,
-                                )
-                            elif block_types.get(idx) == "tool_use":
-                                yield ev.ToolCallArgsEvent(
-                                    type=EventType.TOOL_CALL_ARGS,
-                                    tool_call_id=tool_call_ids[idx],
-                                    delta=event.delta.partial_json,
-                                )
-
-                        elif event.type == "content_block_stop":
-                            idx = event.index
-                            if block_types.get(idx) == "tool_use":
-                                yield ev.ToolCallEndEvent(
-                                    type=EventType.TOOL_CALL_END,
-                                    tool_call_id=tool_call_ids[idx],
-                                )
-
-                    # Stream consumed — get final message
-                    final_message = await stream.get_final_message()
+                    # Step 2 — action (with tools)
+                    final_message = await client.messages.create(
+                        **call_kwargs
+                    )
+                    async for e in self._emit_non_streaming(
+                        final_message, message_id, thinking_id,
+                    ):
+                        yield e
 
             except Exception as exc:
-                # Close any open text message before error
-                if text_started:
-                    yield ev.TextMessageEndEvent(
-                        type=EventType.TEXT_MESSAGE_END,
-                        message_id=message_id,
-                    )
                 yield ev.RunErrorEvent(
                     type=EventType.RUN_ERROR,
                     message=str(exc),
                 )
                 return
-
-            # ── Close text message ──────────────────────────────────
-            if text_started:
-                yield ev.TextMessageEndEvent(
-                    type=EventType.TEXT_MESSAGE_END,
-                    message_id=message_id,
-                )
 
             # ── Collect tool calls from final message ───────────────
             for block in final_message.content:
@@ -349,6 +454,233 @@ class AnthropicAgent:
 
             # Add tool results as user message and continue loop
             messages.append({"role": "user", "content": tool_results})
+
+    # ─────────────────────────────────────────────────────────────────
+    # Streaming path — Anthropic reasoning models
+    # ─────────────────────────────────────────────────────────────────
+
+    async def _stream_reasoning(
+        self,
+        client,
+        call_kwargs: dict,
+        message_id: str,
+        thinking_id: str,
+    ) -> AsyncGenerator[ev.BaseEvent, None]:
+        """Stream an Anthropic reasoning model and yield AG-UI events.
+
+        Sets self._last_final_message so the caller can collect tool
+        calls from the completed response.
+        """
+        text_started = False
+        block_types: dict[int, str] = {}
+        tool_call_ids: dict[int, str] = {}
+        tool_call_names: dict[int, str] = {}
+
+        async with client.messages.stream(**call_kwargs) as stream:
+            async for event in stream:
+                if event.type == "content_block_start":
+                    idx = event.index
+                    block = event.content_block
+
+                    if block.type == "thinking":
+                        block_types[idx] = "thinking"
+                        yield ev.CustomEvent(
+                            type=EventType.CUSTOM,
+                            name="thinking_start",
+                            value={"id": thinking_id},
+                        )
+
+                    elif block.type == "text":
+                        block_types[idx] = "text"
+                        if not text_started:
+                            text_started = True
+                            yield ev.TextMessageStartEvent(
+                                type=EventType.TEXT_MESSAGE_START,
+                                message_id=message_id,
+                                role="assistant",
+                            )
+
+                    elif block.type == "tool_use":
+                        block_types[idx] = "tool_use"
+                        tool_call_ids[idx] = block.id
+                        tool_call_names[idx] = block.name
+                        yield ev.ToolCallStartEvent(
+                            type=EventType.TOOL_CALL_START,
+                            tool_call_id=block.id,
+                            tool_call_name=block.name,
+                            parent_message_id=message_id,
+                        )
+
+                elif event.type == "content_block_delta":
+                    idx = event.index
+                    if block_types.get(idx) == "thinking":
+                        delta_text = getattr(event.delta, "thinking", "")
+                        if delta_text:
+                            yield ev.CustomEvent(
+                                type=EventType.CUSTOM,
+                                name="thinking_content",
+                                value={
+                                    "id": thinking_id,
+                                    "delta": delta_text,
+                                },
+                            )
+                    elif block_types.get(idx) == "text":
+                        yield ev.TextMessageContentEvent(
+                            type=EventType.TEXT_MESSAGE_CONTENT,
+                            message_id=message_id,
+                            delta=event.delta.text,
+                        )
+                    elif block_types.get(idx) == "tool_use":
+                        yield ev.ToolCallArgsEvent(
+                            type=EventType.TOOL_CALL_ARGS,
+                            tool_call_id=tool_call_ids[idx],
+                            delta=event.delta.partial_json,
+                        )
+
+                elif event.type == "content_block_stop":
+                    idx = event.index
+                    if block_types.get(idx) == "thinking":
+                        yield ev.CustomEvent(
+                            type=EventType.CUSTOM,
+                            name="thinking_end",
+                            value={"id": thinking_id},
+                        )
+                        thinking_id = f"think_{uuid.uuid4().hex[:8]}"
+                    elif block_types.get(idx) == "tool_use":
+                        yield ev.ToolCallEndEvent(
+                            type=EventType.TOOL_CALL_END,
+                            tool_call_id=tool_call_ids[idx],
+                        )
+
+            self._last_final_message = await stream.get_final_message()
+
+        if text_started:
+            yield ev.TextMessageEndEvent(
+                type=EventType.TEXT_MESSAGE_END,
+                message_id=message_id,
+            )
+
+    # ─────────────────────────────────────────────────────────────────
+    # Thinking-only pre-call — emit thinking CUSTOM events
+    # ─────────────────────────────────────────────────────────────────
+
+    async def _emit_thinking_only(
+        self,
+        response,
+        thinking_id: str,
+    ) -> AsyncGenerator[ev.BaseEvent, None]:
+        """Extract <thinking> from a no-tools response and emit events."""
+        parser = ThinkingTagParser()
+
+        for block in response.content:
+            if block.type == "text":
+                parsed = list(parser.feed(block.text))
+                parsed += list(parser.flush())
+
+                for ptype, pcontent in parsed:
+                    if ptype == "thinking_start":
+                        yield ev.CustomEvent(
+                            type=EventType.CUSTOM,
+                            name="thinking_start",
+                            value={"id": thinking_id},
+                        )
+                    elif ptype == "thinking_content" and pcontent:
+                        yield ev.CustomEvent(
+                            type=EventType.CUSTOM,
+                            name="thinking_content",
+                            value={"id": thinking_id, "delta": pcontent},
+                        )
+                    elif ptype == "thinking_end":
+                        yield ev.CustomEvent(
+                            type=EventType.CUSTOM,
+                            name="thinking_end",
+                            value={"id": thinking_id},
+                        )
+                    # Ignore "text" — we only want thinking from this call
+
+    # ─────────────────────────────────────────────────────────────────
+    # Non-streaming path — proxy models (GPT etc.)
+    # ─────────────────────────────────────────────────────────────────
+
+    async def _emit_non_streaming(
+        self,
+        response,
+        message_id: str,
+        thinking_id: str,
+    ) -> AsyncGenerator[ev.BaseEvent, None]:
+        """Emit AG-UI events from a non-streaming Anthropic response.
+
+        Parses <thinking> tags from text blocks and emits them as
+        thinking CUSTOM events.  Remaining text becomes a text message.
+        Tool-use blocks become tool-call events.
+        """
+        parser = ThinkingTagParser()
+        text_started = False
+
+        for block in response.content:
+            if block.type == "text":
+                # Parse thinking tags out of the full text
+                parsed = list(parser.feed(block.text))
+                parsed += list(parser.flush())
+
+                for ptype, pcontent in parsed:
+                    if ptype == "thinking_start":
+                        yield ev.CustomEvent(
+                            type=EventType.CUSTOM,
+                            name="thinking_start",
+                            value={"id": thinking_id},
+                        )
+                    elif ptype == "thinking_content" and pcontent:
+                        yield ev.CustomEvent(
+                            type=EventType.CUSTOM,
+                            name="thinking_content",
+                            value={"id": thinking_id, "delta": pcontent},
+                        )
+                    elif ptype == "thinking_end":
+                        yield ev.CustomEvent(
+                            type=EventType.CUSTOM,
+                            name="thinking_end",
+                            value={"id": thinking_id},
+                        )
+                        thinking_id = f"think_{uuid.uuid4().hex[:8]}"
+                    elif ptype == "text" and pcontent:
+                        if not text_started:
+                            text_started = True
+                            yield ev.TextMessageStartEvent(
+                                type=EventType.TEXT_MESSAGE_START,
+                                message_id=message_id,
+                                role="assistant",
+                            )
+                        yield ev.TextMessageContentEvent(
+                            type=EventType.TEXT_MESSAGE_CONTENT,
+                            message_id=message_id,
+                            delta=pcontent,
+                        )
+
+            elif block.type == "tool_use":
+                yield ev.ToolCallStartEvent(
+                    type=EventType.TOOL_CALL_START,
+                    tool_call_id=block.id,
+                    tool_call_name=block.name,
+                    parent_message_id=message_id,
+                )
+                yield ev.ToolCallArgsEvent(
+                    type=EventType.TOOL_CALL_ARGS,
+                    tool_call_id=block.id,
+                    delta=json.dumps(block.input),
+                )
+                yield ev.ToolCallEndEvent(
+                    type=EventType.TOOL_CALL_END,
+                    tool_call_id=block.id,
+                )
+
+        if text_started:
+            yield ev.TextMessageEndEvent(
+                type=EventType.TEXT_MESSAGE_END,
+                message_id=message_id,
+            )
+
+
 
     # ─────────────────────────────────────────────────────────────────
     # HITL resume handler

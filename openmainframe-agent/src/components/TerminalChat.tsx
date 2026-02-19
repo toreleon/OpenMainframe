@@ -2,17 +2,12 @@
 
 import { useState, useRef, useEffect, useCallback, type FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
-import { ToolCallBlock } from "@/components/chat/ToolCallBlock";
-import type {
-  ChatMessage,
-  ToolCallInfo,
-  InterruptPayload,
-} from "@/hooks/useAgent";
+import type { ActivityEntry, InterruptPayload } from "@/hooks/useAgent";
 
 // ── Props ────────────────────────────────────────────────────────
 
 interface TerminalChatProps {
-  messages: ChatMessage[];
+  entries: ActivityEntry[];
   isStreaming: boolean;
   error: string | null;
   pendingInterrupt: InterruptPayload | null;
@@ -23,9 +18,8 @@ interface TerminalChatProps {
 // ── Component ────────────────────────────────────────────────────
 
 export function TerminalChat({
-  messages,
+  entries,
   isStreaming,
-  error,
   pendingInterrupt,
   onSend,
   onResolveInterrupt,
@@ -38,7 +32,7 @@ export function TerminalChat({
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, isStreaming, pendingInterrupt]);
+  }, [entries, isStreaming, pendingInterrupt]);
 
   // Focus input on mount
   useEffect(() => {
@@ -69,44 +63,24 @@ export function TerminalChat({
 
   return (
     <div className="flex flex-col h-full">
-      {/* Scrollable message area */}
+      {/* Scrollable log area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
-        <div className="max-w-[900px] mx-auto space-y-3">
-          {/* Initial message */}
-          {messages.length === 0 && !isStreaming && (
-            <div className="text-om-muted text-xs border-l-2 border-om-border pl-3 py-1">
+        <div className="max-w-[900px] mx-auto space-y-1">
+          {/* Empty state */}
+          {entries.length === 0 && !isStreaming && (
+            <div className="text-om-muted text-xs py-1">
               Ready. Describe what you need.
             </div>
           )}
 
-          {messages.map((msg) => (
-            <MessageBlock key={msg.id} message={msg} />
-          ))}
-
-          {/* Streaming indicator */}
-          {isStreaming &&
-            messages.length > 0 &&
-            messages[messages.length - 1].role === "user" && (
-              <div className="flex items-center gap-2 text-xs text-om-muted border-l-2 border-om-border pl-3 py-1">
-                <span className="terminal-spinner" />
-                <span>thinking...</span>
-              </div>
-            )}
-
-          {/* HITL interrupt card */}
-          {pendingInterrupt && (
-            <InterruptCard
-              interrupt={pendingInterrupt}
-              onResolve={onResolveInterrupt}
+          {/* Linear activity log */}
+          {entries.map((entry) => (
+            <EntryBlock
+              key={entry.id}
+              entry={entry}
+              onResolveInterrupt={onResolveInterrupt}
             />
-          )}
-
-          {/* Error display */}
-          {error && (
-            <div className="border-l-2 border-om-error pl-3 py-1 text-xs text-om-error">
-              Error: {error}
-            </div>
-          )}
+          ))}
         </div>
       </div>
 
@@ -143,104 +117,240 @@ export function TerminalChat({
   );
 }
 
-// ── Message rendering ────────────────────────────────────────────
+// ── Entry rendering ──────────────────────────────────────────────
 
-function MessageBlock({ message }: { message: ChatMessage }) {
-  if (message.role === "user") {
-    return <UserMessage content={message.content} />;
+function EntryBlock({
+  entry,
+  onResolveInterrupt,
+}: {
+  entry: ActivityEntry;
+  onResolveInterrupt: (approved: boolean, reason?: string) => void;
+}) {
+  switch (entry.kind) {
+    case "user":
+      return <UserEntry content={entry.content} />;
+    case "thinking":
+      return <ThinkingEntry />;
+    case "thinking_content":
+      return (
+        <ThinkingContentEntry
+          content={entry.content}
+          streaming={entry.streaming ?? false}
+        />
+      );
+    case "tool_call":
+      return (
+        <ToolCallEntry
+          toolName={entry.toolName || "bash"}
+          command={entry.content}
+          status={entry.toolStatus || "streaming"}
+        />
+      );
+    case "tool_output":
+      return <ToolOutputEntry result={entry.toolResult} />;
+    case "text":
+      return <TextEntry content={entry.content} />;
+    case "error":
+      return <ErrorEntry content={entry.content} />;
+    case "interrupt":
+      return (
+        <InterruptEntry
+          interrupt={entry.interrupt!}
+          onResolve={onResolveInterrupt}
+        />
+      );
+    default:
+      return null;
   }
-  return (
-    <AssistantMessage
-      content={message.content}
-      toolCalls={message.toolCalls}
-    />
-  );
 }
 
-function UserMessage({ content }: { content: string }) {
+// ── User input ──────────────────────────────────────────────────
+
+function UserEntry({ content }: { content: string }) {
   return (
-    <div className="border-l-2 border-om-accent pl-3 py-1 text-[13px] leading-relaxed">
-      <span className="text-om-accent font-bold">{">"} </span>
+    <div className="py-1 text-[13px]">
+      <span className="text-om-accent font-bold">❯ </span>
       <span className="text-om-text">{content}</span>
     </div>
   );
 }
 
-function AssistantMessage({
+// ── Thinking spinner ────────────────────────────────────────────
+
+function ThinkingEntry() {
+  return (
+    <div className="flex items-center gap-2 py-0.5 text-xs text-om-muted">
+      <span className="terminal-spinner" />
+      <span>thinking...</span>
+    </div>
+  );
+}
+
+// ── Thinking content (extended reasoning) ───────────────────────
+
+function ThinkingContentEntry({
   content,
-  toolCalls,
+  streaming,
 }: {
   content: string;
-  toolCalls?: ToolCallInfo[];
+  streaming: boolean;
 }) {
-  return (
-    <div className="border-l-2 border-om-border pl-3 py-1 space-y-1">
-      {/* Tool calls (inline, above text) */}
-      {toolCalls?.map((tc) => (
-        <div key={tc.id} className="space-y-0.5">
-          <ToolCallBlock
-            tool={tc.name}
-            args={getToolCallSummary(tc)}
-            status={tc.status}
-          />
-          {tc.result && <ToolResultBlock result={tc.result} />}
-        </div>
-      ))}
-
-      {/* Markdown text */}
-      {content && (
-        <div className="assistant-message text-[13px] leading-relaxed text-om-text">
-          <ReactMarkdown>{content}</ReactMarkdown>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Tool result (collapsible) ────────────────────────────────────
-
-function ToolResultBlock({ result }: { result: string }) {
   const [expanded, setExpanded] = useState(false);
 
-  // Try to extract meaningful summary
-  let preview = result;
-  try {
-    const parsed = JSON.parse(result);
-    if (parsed.error) {
-      preview = `error: ${parsed.error}`;
-    } else if (parsed.stdout !== undefined) {
-      preview = parsed.stdout || "(no output)";
-    } else if (parsed.content) {
-      preview = parsed.content;
-    } else if (parsed.success) {
-      preview = "success";
-    }
-  } catch {
-    // Use raw string
-  }
-
-  const lines = preview.split("\n");
-  const isLong = lines.length > 5 || preview.length > 300;
-  const shown = expanded ? preview : lines.slice(0, 3).join("\n");
-
   return (
-    <div className="ml-5 text-[11px] text-om-muted font-mono">
-      <pre className="whitespace-pre-wrap break-all">{shown}</pre>
-      {isLong && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="text-om-accent hover:underline mt-0.5"
-        >
-          {expanded ? "collapse" : `... ${lines.length} lines (expand)`}
-        </button>
+    <div className="py-0.5 font-mono text-[11px]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="text-om-muted hover:text-om-accent flex items-center gap-1"
+      >
+        <span className="text-[10px]">{expanded ? "▼" : "▶"}</span>
+        {streaming && <span className="terminal-spinner" />}
+        <span className="italic">thinking...</span>
+      </button>
+
+      {expanded && (
+        <pre className="mt-0.5 ml-3 text-om-muted opacity-70 italic whitespace-pre-wrap break-words leading-relaxed">
+          {content}
+        </pre>
       )}
     </div>
   );
 }
 
-// ── HITL interrupt card ──────────────────────────────────────────
+// ── Tool call (command line) ────────────────────────────────────
 
-function InterruptCard({
+function ToolCallEntry({
+  toolName,
+  command,
+  status,
+}: {
+  toolName: string;
+  command: string;
+  status: "streaming" | "executing" | "done" | "error";
+}) {
+  const isActive = status === "streaming" || status === "executing";
+
+  return (
+    <div className="py-0.5 font-mono text-xs">
+      <div className="flex items-start gap-2">
+        {/* Status icon */}
+        {isActive ? (
+          <span className="terminal-spinner shrink-0 mt-0.5" />
+        ) : status === "done" ? (
+          <span className="text-om-success shrink-0">✓</span>
+        ) : (
+          <span className="text-om-error shrink-0">✗</span>
+        )}
+
+        {/* Tool name */}
+        <span className="text-om-warning font-semibold shrink-0">
+          {toolName}
+        </span>
+
+        {/* Command */}
+        <span
+          className={`text-om-text whitespace-pre-wrap break-all ${
+            status === "streaming" ? "opacity-60" : ""
+          }`}
+        >
+          {command || "..."}
+        </span>
+      </div>
+
+      {status === "executing" && (
+        <div className="ml-5 text-om-muted text-[11px]">executing...</div>
+      )}
+    </div>
+  );
+}
+
+// ── Tool output (full, inline) ──────────────────────────────────
+
+function ToolOutputEntry({
+  result,
+}: {
+  result?: { stdout: string; stderr: string; returnCode: number };
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!result) return null;
+
+  const hasStdout = result.stdout.trim().length > 0;
+  const hasStderr = result.stderr.trim().length > 0;
+  const hasError = result.returnCode !== 0;
+  const lines = result.stdout.split("\n");
+  const lineCount = lines.length;
+
+  // Collapsed: show a one-line summary
+  const summary = hasError
+    ? `exit code ${result.returnCode}`
+    : hasStdout
+      ? `${lineCount} line${lineCount !== 1 ? "s" : ""}`
+      : hasStderr
+        ? "stderr"
+        : "(no output)";
+
+  return (
+    <div className="ml-5 py-0.5 font-mono text-[11px] border-l border-om-border pl-3">
+      {/* Toggle button — always visible */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="text-om-muted hover:text-om-accent flex items-center gap-1"
+      >
+        <span className="text-[10px]">{expanded ? "▼" : "▶"}</span>
+        <span className={hasError ? "text-om-error" : ""}>{summary}</span>
+      </button>
+
+      {/* Expanded content */}
+      {expanded && (
+        <div className="mt-0.5">
+          {hasError && (
+            <div className="text-om-error mb-0.5">
+              exit code {result.returnCode}
+            </div>
+          )}
+
+          {hasStdout && (
+            <pre className="text-om-muted whitespace-pre-wrap break-all leading-relaxed">
+              {result.stdout}
+            </pre>
+          )}
+
+          {hasStderr && (
+            <pre className="text-om-error whitespace-pre-wrap break-all leading-relaxed mt-0.5">
+              {result.stderr}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Assistant text (markdown) ───────────────────────────────────
+
+function TextEntry({ content }: { content: string }) {
+  if (!content) return null;
+  return (
+    <div className="assistant-message text-[13px] leading-relaxed text-om-text py-1">
+      <ReactMarkdown>{content}</ReactMarkdown>
+    </div>
+  );
+}
+
+// ── Error ───────────────────────────────────────────────────────
+
+function ErrorEntry({ content }: { content: string }) {
+  return (
+    <div className="py-1 text-xs text-om-error font-mono">
+      <span className="font-semibold">error:</span> {content}
+    </div>
+  );
+}
+
+// ── HITL interrupt ──────────────────────────────────────────────
+
+function InterruptEntry({
   interrupt,
   onResolve,
 }: {
@@ -249,8 +359,6 @@ function InterruptCard({
 }) {
   const [decided, setDecided] = useState(false);
   const [approved, setApproved] = useState(false);
-
-  const fileName = interrupt.file?.split("/").pop() || interrupt.file;
 
   const handleApprove = () => {
     setApproved(true);
@@ -266,19 +374,16 @@ function InterruptCard({
 
   return (
     <div
-      className={`border-l-2 pl-3 py-2 font-mono text-xs transition-opacity ${
-        decided ? "border-om-border opacity-50" : "border-om-warning"
+      className={`py-2 font-mono text-xs ${
+        decided ? "opacity-50" : ""
       }`}
     >
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-om-warning font-semibold">approval required</span>
+      <div className="text-om-warning font-semibold mb-0.5">
+        ⚠ approval required
       </div>
       <div className="text-om-text mb-0.5">{interrupt.action}</div>
-      <div className="text-om-muted mb-0.5">
-        file: <span className="text-om-text">{fileName}</span>
-      </div>
       {interrupt.description && (
-        <div className="text-om-muted mb-2">{interrupt.description}</div>
+        <div className="text-om-muted mb-1">{interrupt.description}</div>
       )}
 
       {decided ? (
@@ -287,7 +392,7 @@ function InterruptCard({
             approved ? "text-om-success" : "text-om-error"
           }`}
         >
-          {approved ? "approved" : "rejected"}
+          {approved ? "✓ approved" : "✗ rejected"}
         </div>
       ) : (
         <div className="flex gap-3">
@@ -307,22 +412,4 @@ function InterruptCard({
       )}
     </div>
   );
-}
-
-// ── Helpers ──────────────────────────────────────────────────────
-
-function getToolCallSummary(tc: ToolCallInfo): string {
-  try {
-    const args = JSON.parse(tc.argsJson);
-    // Return the most interesting arg
-    return (
-      args.command ||
-      args.file_path ||
-      args.pattern ||
-      args.path ||
-      tc.argsJson.slice(0, 80)
-    );
-  } catch {
-    return tc.argsJson.slice(0, 80) || "...";
-  }
 }
