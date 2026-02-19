@@ -44,6 +44,7 @@ pub mod error;
 pub mod profile;
 pub mod resource;
 pub mod saf;
+pub mod setropts;
 pub mod types;
 
 pub use auth::{AuthResult, AuthService, PasswordChangeResult, PasswordPolicy};
@@ -56,6 +57,7 @@ pub use resource::{
     ResourceAuthResult, ResourceManager, ResourceProfile, WhenCondition,
 };
 pub use saf::{SafRouter, SafRc, RacfRc, RacrouteResult, ExtractResult};
+pub use setropts::{Setropts, SetroptsListResult, SystemOptions, LogOption, MacSettings, PasswordRules};
 
 /// Convenience result type for RACF operations.
 pub type Result<T> = std::result::Result<T, RacfError>;
