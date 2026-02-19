@@ -1355,6 +1355,16 @@ name = "open-mainframe-lang-core"
 version = "0.1.0"
 
 [[package]]
+name = "open-mainframe-mq"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "serde",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "open-mainframe-racf"
 version = "0.1.0"
 dependencies = [
