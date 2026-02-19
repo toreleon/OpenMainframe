@@ -5,7 +5,7 @@
 //! control flow including DO loops, IF/THEN/ELSE, SELECT/WHEN/OTHERWISE,
 //! and CALL/RETURN with PROCEDURE EXPOSE scoping.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::{
     BinOp, Clause, ClauseBody, DoControl, Expr, ParseSource, Program, SignalTarget, UnaryOp,
@@ -162,6 +162,86 @@ impl VarPool {
 /// Label table: label name → index into clause list.
 type LabelTable = HashMap<String, usize>;
 
+// ---------------------------------------------------------------------------
+//  Data stack
+// ---------------------------------------------------------------------------
+
+/// REXX data stack — supports LIFO (PUSH), FIFO (QUEUE), and buffer management.
+#[derive(Debug, Clone, Default)]
+struct DataStack {
+    /// The stack elements (front = top).
+    items: VecDeque<String>,
+    /// Buffer boundaries — each entry is the stack depth when MAKEBUF was called.
+    buffers: Vec<usize>,
+}
+
+impl DataStack {
+    /// PUSH — add item to top (LIFO).
+    fn push(&mut self, value: String) {
+        self.items.push_front(value);
+    }
+
+    /// QUEUE — add item to bottom (FIFO).
+    fn queue(&mut self, value: String) {
+        self.items.push_back(value);
+    }
+
+    /// PULL — remove and return from top. Returns empty string if empty.
+    fn pull(&mut self) -> String {
+        self.items.pop_front().unwrap_or_default()
+    }
+
+    /// QUEUED — number of items on the stack.
+    fn queued(&self) -> usize {
+        self.items.len()
+    }
+
+    /// MAKEBUF — create a new buffer boundary, returns the buffer number.
+    fn makebuf(&mut self) -> usize {
+        self.buffers.push(self.items.len());
+        self.buffers.len()
+    }
+
+    /// DROPBUF — drop the most recent buffer and all items added since it was created.
+    /// If `n` is 0, drop all buffers. Otherwise drop buffer `n`.
+    fn dropbuf(&mut self, n: usize) {
+        if n == 0 {
+            // Drop all buffers and their contents.
+            if let Some(&first_boundary) = self.buffers.first() {
+                while self.items.len() > first_boundary {
+                    self.items.pop_front();
+                }
+            }
+            self.buffers.clear();
+        } else if !self.buffers.is_empty() {
+            let boundary = self.buffers.pop().unwrap();
+            // Remove items added since this buffer was created.
+            while self.items.len() > boundary {
+                self.items.pop_front();
+            }
+        }
+    }
+
+    /// NEWSTACK — save the current stack and start a fresh one.
+    /// Returns the saved stack.
+    fn newstack(&mut self) -> DataStack {
+        std::mem::take(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  DD file simulation for EXECIO
+// ---------------------------------------------------------------------------
+
+/// A simulated DD allocation for EXECIO.
+#[derive(Debug, Clone, Default)]
+struct DdAllocation {
+    /// Records in the DD.
+    records: Vec<String>,
+    /// Current read position.
+    read_pos: usize,
+}
+
 struct Interpreter {
     /// Stack of variable pools (for PROCEDURE scoping).
     var_stack: Vec<VarPool>,
@@ -175,6 +255,12 @@ struct Interpreter {
     output: Vec<String>,
     /// Current line (for error reporting).
     current_line: u32,
+    /// REXX data stack.
+    data_stack: DataStack,
+    /// Saved stacks from NEWSTACK.
+    saved_stacks: Vec<DataStack>,
+    /// Simulated DD allocations for EXECIO.
+    dd_files: HashMap<String, DdAllocation>,
 }
 
 impl Interpreter {
@@ -186,6 +272,9 @@ impl Interpreter {
             rc: 0,
             output: Vec::new(),
             current_line: 0,
+            data_stack: DataStack::default(),
+            saved_stacks: Vec::new(),
+            dd_files: HashMap::new(),
         }
     }
 
@@ -406,13 +495,19 @@ impl Interpreter {
                 self.apply_parse(&source_str, template, true);
                 Ok(Flow::Normal)
             }
-            ClauseBody::Push(_) | ClauseBody::Queue(_) => {
-                // Data stack operations — stub for R105.
+            ClauseBody::Push(expr) => {
+                let val = self.eval_expr(expr)?;
+                self.data_stack.push(val);
+                Ok(Flow::Normal)
+            }
+            ClauseBody::Queue(expr) => {
+                let val = self.eval_expr(expr)?;
+                self.data_stack.queue(val);
                 Ok(Flow::Normal)
             }
             ClauseBody::Command(expr) => {
-                // Host command — stub for R106.
-                let _cmd = self.eval_expr(expr)?;
+                let cmd = self.eval_expr(expr)?;
+                self.exec_host_command(&cmd)?;
                 Ok(Flow::Normal)
             }
         }
@@ -820,6 +915,9 @@ impl Interpreter {
                 let state = self.vars().symbol_state(name_arg);
                 return Some(Ok(state.to_string()));
             }
+            "QUEUED" => {
+                return Some(Ok(self.data_stack.queued().to_string()));
+            }
             "ABS" => {
                 let s = args.first().map(|a| a.as_str()).unwrap_or("0");
                 return match rexx_compare(s, "0", 0) {
@@ -985,10 +1083,188 @@ impl Interpreter {
         }
     }
 
-    /// Pull a value from the data stack (stub — returns empty string).
+    /// Pull a value from the data stack.
     fn pull_from_stack(&mut self) -> String {
-        // Data stack operations are implemented in R105.
-        String::new()
+        self.data_stack.pull()
+    }
+
+    // -----------------------------------------------------------------------
+    //  Host command execution
+    // -----------------------------------------------------------------------
+
+    /// Execute a host command string. Recognizes MAKEBUF, DROPBUF, NEWSTACK,
+    /// DELSTACK, and EXECIO as built-in TSO commands.
+    fn exec_host_command(&mut self, cmd: &str) -> Result<(), InterpError> {
+        let trimmed = cmd.trim();
+        let upper = trimmed.to_uppercase();
+        let words: Vec<&str> = upper.split_whitespace().collect();
+
+        match words.first().copied() {
+            Some("MAKEBUF") => {
+                let buf_num = self.data_stack.makebuf();
+                self.rc = buf_num as i32;
+                Ok(())
+            }
+            Some("DROPBUF") => {
+                let n = words.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
+                self.data_stack.dropbuf(n);
+                self.rc = 0;
+                Ok(())
+            }
+            Some("NEWSTACK") => {
+                let old = self.data_stack.newstack();
+                self.saved_stacks.push(old);
+                self.rc = 0;
+                Ok(())
+            }
+            Some("DELSTACK") => {
+                if let Some(restored) = self.saved_stacks.pop() {
+                    self.data_stack = restored;
+                } else {
+                    // No saved stack — clear the current one.
+                    self.data_stack = DataStack::default();
+                }
+                self.rc = 0;
+                Ok(())
+            }
+            Some("EXECIO") => self.exec_execio(trimmed),
+            _ => {
+                // Unknown host command — stub for ADDRESS environments (R106).
+                self.rc = 0;
+                Ok(())
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    //  EXECIO
+    // -----------------------------------------------------------------------
+
+    /// Execute an EXECIO command: `EXECIO count DISKR|DISKW ddname (options`
+    fn exec_execio(&mut self, cmd: &str) -> Result<(), InterpError> {
+        // Parse: EXECIO count DISKR|DISKW ddname [(options)]
+        // The actual command string has mixed case from the user; parse case-insensitively.
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if parts.len() < 4 {
+            return Err(self.error("EXECIO requires: EXECIO count DISKR|DISKW ddname"));
+        }
+
+        let count_str = parts[1].to_uppercase();
+        let op = parts[2].to_uppercase();
+        let ddname = parts[3].to_uppercase();
+
+        // Parse options after '('.
+        let opts_str = cmd.find('(').map(|i| &cmd[i + 1..]).unwrap_or("");
+        let opts_upper = opts_str.to_uppercase();
+        let opt_words: Vec<&str> = opts_upper.split_whitespace().collect();
+
+        let stem = opt_words.iter()
+            .position(|&w| w == "STEM")
+            .and_then(|i| opt_words.get(i + 1))
+            .map(|s| {
+                let mut st = s.to_string();
+                if !st.ends_with('.') {
+                    st.push('.');
+                }
+                st
+            });
+        let finis = opt_words.contains(&"FINIS");
+
+        match op.as_str() {
+            "DISKR" => {
+                let count = if count_str == "*" {
+                    usize::MAX
+                } else {
+                    count_str.parse::<usize>().unwrap_or(0)
+                };
+                self.execio_read(&ddname, count, stem.as_deref(), finis)
+            }
+            "DISKW" => {
+                let count = count_str.parse::<usize>().unwrap_or(0);
+                self.execio_write(&ddname, count, stem.as_deref(), finis)
+            }
+            _ => Err(self.error(&format!("EXECIO: unknown operation '{op}'"))),
+        }
+    }
+
+    /// EXECIO DISKR — read records from a DD.
+    fn execio_read(
+        &mut self,
+        ddname: &str,
+        count: usize,
+        stem: Option<&str>,
+        _finis: bool,
+    ) -> Result<(), InterpError> {
+        // Clone records out to avoid borrow conflicts.
+        let dd = self.dd_files.entry(ddname.to_string()).or_default();
+        let read_pos = dd.read_pos;
+        let available = dd.records.len().saturating_sub(read_pos);
+        let to_read = count.min(available);
+        let records: Vec<String> = dd.records[read_pos..read_pos + to_read].to_vec();
+        dd.read_pos += to_read;
+
+        let records_read = records.len();
+
+        if let Some(stem_name) = stem {
+            for (i, rec) in records.into_iter().enumerate() {
+                let var_name = format!("{stem_name}{}", i + 1);
+                self.vars_mut().set(&var_name, rec);
+            }
+            let count_var = format!("{stem_name}0");
+            self.vars_mut().set(&count_var, records_read.to_string());
+        } else {
+            for rec in records {
+                self.data_stack.queue(rec);
+            }
+        }
+
+        // RC: 0 = success, 2 = EOF reached before count satisfied.
+        self.rc = if records_read < count && count != usize::MAX { 2 } else { 0 };
+        Ok(())
+    }
+
+    /// EXECIO DISKW — write records to a DD.
+    fn execio_write(
+        &mut self,
+        ddname: &str,
+        count: usize,
+        stem: Option<&str>,
+        _finis: bool,
+    ) -> Result<(), InterpError> {
+        if count == 0 {
+            self.dd_files.entry(ddname.to_string()).or_default();
+            self.rc = 0;
+            return Ok(());
+        }
+
+        // Collect values first to avoid borrow conflicts.
+        let values: Vec<String> = if let Some(stem_name) = stem {
+            (1..=count)
+                .map(|i| {
+                    let var_name = format!("{stem_name}{i}");
+                    self.vars().get(&var_name)
+                })
+                .collect()
+        } else {
+            (0..count).map(|_| self.data_stack.pull()).collect()
+        };
+
+        let dd = self.dd_files.entry(ddname.to_string()).or_default();
+        dd.records.extend(values);
+        self.rc = 0;
+        Ok(())
+    }
+
+    /// Allocate a DD with initial records (for testing).
+    #[cfg(test)]
+    fn allocate_dd(&mut self, ddname: &str, records: Vec<String>) {
+        self.dd_files.insert(
+            ddname.to_uppercase(),
+            DdAllocation {
+                records,
+                read_pos: 0,
+            },
+        );
     }
 }
 
@@ -1253,5 +1529,147 @@ mod tests {
     fn test_max_min_functions() {
         let result = run("SAY MAX(3, 7, 1)\nSAY MIN(3, 7, 1)");
         assert_eq!(result.output, vec!["7", "1"]);
+    }
+
+    // -- Data stack tests --
+
+    #[test]
+    fn test_push_pull_lifo() {
+        let result = run("PUSH 'last'\nPUSH 'first'\nPULL x\nSAY x");
+        assert_eq!(result.output, vec!["FIRST"]);
+    }
+
+    #[test]
+    fn test_queue_pull_fifo() {
+        let result = run("QUEUE 'first'\nQUEUE 'last'\nPULL x\nSAY x");
+        assert_eq!(result.output, vec!["FIRST"]);
+    }
+
+    #[test]
+    fn test_queued_function() {
+        let result = run("PUSH 'a'\nPUSH 'b'\nPUSH 'c'\nSAY QUEUED()");
+        assert_eq!(result.output, vec!["3"]);
+    }
+
+    #[test]
+    fn test_push_pull_multiple() {
+        let result = run(
+            "PUSH 'c'\nPUSH 'b'\nPUSH 'a'\nPULL x\nPULL y\nPULL z\nSAY x\nSAY y\nSAY z",
+        );
+        assert_eq!(result.output, vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn test_queue_fifo_order() {
+        let result = run(
+            "QUEUE 'a'\nQUEUE 'b'\nQUEUE 'c'\nPULL x\nPULL y\nPULL z\nSAY x\nSAY y\nSAY z",
+        );
+        assert_eq!(result.output, vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn test_pull_empty_stack() {
+        let result = run("PULL x\nSAY x");
+        // Empty pull returns empty string, PARSE UPPER gives empty.
+        assert_eq!(result.output, vec![""]);
+    }
+
+    #[test]
+    fn test_queued_after_pull() {
+        let result = run(
+            "PUSH 'a'\nPUSH 'b'\nPULL x\nSAY QUEUED()",
+        );
+        assert_eq!(result.output, vec!["1"]);
+    }
+
+    // -- EXECIO tests (require direct interpreter access) --
+
+    fn run_with_dd(source: &str, ddname: &str, records: Vec<&str>) -> (ExecResult, Interpreter) {
+        let tokens = lex(source).expect("lex failed");
+        let program = parse(&tokens).expect("parse failed");
+        let mut interp = Interpreter::new();
+        let recs: Vec<String> = records.iter().map(|s| s.to_string()).collect();
+        interp.allocate_dd(ddname, recs);
+        interp.run(&program).expect("interpret failed");
+        let result = ExecResult {
+            rc: interp.rc,
+            output: interp.output.clone(),
+        };
+        (result, interp)
+    }
+
+    #[test]
+    fn test_execio_read_stem() {
+        let (result, interp) = run_with_dd(
+            "\"EXECIO * DISKR INDD (STEM LINE. FINIS\"",
+            "INDD",
+            vec!["rec1", "rec2", "rec3"],
+        );
+        assert_eq!(result.rc, 0);
+        assert_eq!(interp.vars().get("LINE.0"), "3");
+        assert_eq!(interp.vars().get("LINE.1"), "rec1");
+        assert_eq!(interp.vars().get("LINE.2"), "rec2");
+        assert_eq!(interp.vars().get("LINE.3"), "rec3");
+    }
+
+    #[test]
+    fn test_execio_read_stack() {
+        let (result, interp) = run_with_dd(
+            "\"EXECIO * DISKR INDD (FINIS\"",
+            "INDD",
+            vec!["line1", "line2"],
+        );
+        assert_eq!(result.rc, 0);
+        assert_eq!(interp.data_stack.queued(), 2);
+    }
+
+    #[test]
+    fn test_execio_write_stem() {
+        let source = "rec.1 = 'hello'\nrec.2 = 'world'\n\"EXECIO 2 DISKW OUTDD (STEM REC.\"";
+        let (result, interp) = run_with_dd(source, "DUMMY", vec![]);
+        assert_eq!(result.rc, 0);
+        let dd = interp.dd_files.get("OUTDD").unwrap();
+        assert_eq!(dd.records, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_execio_eof_rc() {
+        // Request 10 records from a DD with only 2 — should get RC=2.
+        let (result, _) = run_with_dd(
+            "\"EXECIO 10 DISKR INDD (STEM LINE. FINIS\"",
+            "INDD",
+            vec!["a", "b"],
+        );
+        assert_eq!(result.rc, 2);
+    }
+
+    // -- Data stack unit tests --
+
+    #[test]
+    fn test_data_stack_makebuf_dropbuf() {
+        let mut stack = DataStack::default();
+        stack.push("a".into());
+        stack.makebuf();
+        stack.push("b".into());
+        stack.push("c".into());
+        // Stack now: c, b, a (with buffer boundary at depth 1).
+        assert_eq!(stack.queued(), 3);
+        stack.dropbuf(1);
+        // After dropbuf, items added since makebuf are removed.
+        assert_eq!(stack.queued(), 1);
+        assert_eq!(stack.pull(), "a");
+    }
+
+    #[test]
+    fn test_data_stack_newstack() {
+        let mut stack = DataStack::default();
+        stack.push("old".into());
+        let saved = stack.newstack();
+        assert_eq!(stack.queued(), 0); // New stack is empty.
+        assert_eq!(saved.queued(), 1); // Old stack has the item.
+        stack.push("new".into());
+        // Restore.
+        stack = saved;
+        assert_eq!(stack.pull(), "old");
     }
 }
