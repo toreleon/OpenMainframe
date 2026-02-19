@@ -35,8 +35,9 @@ pub mod string;
 pub mod value;
 
 pub use date_time::{
-    ceedate, ceedays, ceesecs, date_of_integer, date_to_lilian, day_of_integer,
-    integer_of_date, integer_of_day, is_leap_year, lilian_to_date, FeedbackCode,
+    cee3dly, ceedate, ceedatm, ceedays, ceedywk, ceegmt, ceegmto, ceeisec, ceeloct,
+    ceeseci, ceesecs, date_of_integer, date_to_lilian, day_of_integer, integer_of_date,
+    integer_of_day, is_leap_year, lilian_to_date, CenturyWindow, FeedbackCode,
 };
 pub use decimal::{add, add_to, compute, divide, multiply, power, subtract_from};
 pub use decimal::{ArithmeticResult, RoundingMode};
