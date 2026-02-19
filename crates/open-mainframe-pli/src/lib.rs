@@ -6,6 +6,7 @@
 
 pub mod lexer;
 pub mod parser;
+pub mod types;
 
 pub use lexer::{is_keyword, string_value, Lexer, LexerError, Token, TokenKind};
 pub use parser::{
@@ -14,4 +15,8 @@ pub use parser::{
     IfStmt, IoMode, IterateStmt, LeaveStmt, OnCondition, OnStmt, OpenStmt, ParseError, Parser,
     PreprocessorDirective, ProcedureStmt, Program, PutStmt, ReadStmt, ReturnStmt, RevertStmt,
     SelectStmt, SignalStmt, Statement, StorageClass, UnaryOp, WhenClause, WriteStmt,
+};
+pub use types::{
+    arithmetic_result_type, comparison_common_type, concat_result_type, convert_value,
+    ConversionError, PliType, PliValue, StructureMember, TypeCategory,
 };
