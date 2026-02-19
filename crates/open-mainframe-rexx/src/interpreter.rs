@@ -261,6 +261,10 @@ struct Interpreter {
     saved_stacks: Vec<DataStack>,
     /// Simulated DD allocations for EXECIO.
     dd_files: HashMap<String, DdAllocation>,
+    /// Current ADDRESS environment (default: TSO).
+    address_env: String,
+    /// Previous ADDRESS environment (for ADDRESS VALUE toggling).
+    prev_address_env: String,
 }
 
 impl Interpreter {
@@ -275,6 +279,8 @@ impl Interpreter {
             data_stack: DataStack::default(),
             saved_stacks: Vec::new(),
             dd_files: HashMap::new(),
+            address_env: "TSO".to_string(),
+            prev_address_env: "TSO".to_string(),
         }
     }
 
@@ -427,7 +433,38 @@ impl Interpreter {
             ClauseBody::Leave(name) => Ok(Flow::Leave(name.clone())),
             ClauseBody::Nop => Ok(Flow::Normal),
             ClauseBody::Trace(_) => Ok(Flow::Normal), // Stub.
-            ClauseBody::Address { .. } => Ok(Flow::Normal), // Stub — handled in R106.
+            ClauseBody::Address { environment, command } => {
+                match (environment, command) {
+                    (Some(env), Some(cmd_expr)) => {
+                        // ADDRESS env command — execute command in specified environment.
+                        let cmd = self.eval_expr(cmd_expr)?;
+                        let env_upper = env.to_uppercase();
+                        self.exec_in_env(&env_upper, &cmd)?;
+                    }
+                    (Some(env), None) => {
+                        // ADDRESS env — change default environment.
+                        let old = std::mem::replace(
+                            &mut self.address_env,
+                            env.to_uppercase(),
+                        );
+                        self.prev_address_env = old;
+                    }
+                    (None, None) => {
+                        // ADDRESS (no args) — toggle between current and previous.
+                        std::mem::swap(&mut self.address_env, &mut self.prev_address_env);
+                    }
+                    (None, Some(cmd_expr)) => {
+                        // ADDRESS VALUE expr — set env from expression.
+                        let env = self.eval_expr(cmd_expr)?;
+                        let old = std::mem::replace(
+                            &mut self.address_env,
+                            env.to_uppercase(),
+                        );
+                        self.prev_address_env = old;
+                    }
+                }
+                Ok(Flow::Normal)
+            }
             ClauseBody::Procedure { expose } => {
                 // Push a new variable pool, exposing listed variables.
                 let parent = self.vars().clone();
@@ -507,7 +544,8 @@ impl Interpreter {
             }
             ClauseBody::Command(expr) => {
                 let cmd = self.eval_expr(expr)?;
-                self.exec_host_command(&cmd)?;
+                let env = self.address_env.clone();
+                self.exec_in_env(&env, &cmd)?;
                 Ok(Flow::Normal)
             }
         }
@@ -1089,12 +1127,27 @@ impl Interpreter {
     }
 
     // -----------------------------------------------------------------------
-    //  Host command execution
+    //  ADDRESS environment command dispatch
     // -----------------------------------------------------------------------
 
-    /// Execute a host command string. Recognizes MAKEBUF, DROPBUF, NEWSTACK,
-    /// DELSTACK, and EXECIO as built-in TSO commands.
-    fn exec_host_command(&mut self, cmd: &str) -> Result<(), InterpError> {
+    /// Execute a command in a specific ADDRESS environment.
+    fn exec_in_env(&mut self, env: &str, cmd: &str) -> Result<(), InterpError> {
+        match env {
+            "TSO" => self.exec_tso_command(cmd),
+            "MVS" | "LINK" | "LINKPGM" | "LINKMVS" | "ATTACH" | "ATTCHPGM" | "ATTCHMVS" => {
+                self.exec_mvs_command(cmd)
+            }
+            "ISPEXEC" => self.exec_ispexec_command(cmd),
+            "ISREDIT" => self.exec_isredit_command(cmd),
+            _ => {
+                // Unknown environment — treat as TSO.
+                self.exec_tso_command(cmd)
+            }
+        }
+    }
+
+    /// Execute a TSO command.
+    fn exec_tso_command(&mut self, cmd: &str) -> Result<(), InterpError> {
         let trimmed = cmd.trim();
         let upper = trimmed.to_uppercase();
         let words: Vec<&str> = upper.split_whitespace().collect();
@@ -1121,19 +1174,83 @@ impl Interpreter {
                 if let Some(restored) = self.saved_stacks.pop() {
                     self.data_stack = restored;
                 } else {
-                    // No saved stack — clear the current one.
                     self.data_stack = DataStack::default();
                 }
                 self.rc = 0;
                 Ok(())
             }
             Some("EXECIO") => self.exec_execio(trimmed),
+            Some("ALLOCATE" | "ALLOC") => {
+                // Simulated ALLOCATE: parse DD name and dataset.
+                self.exec_allocate(trimmed)
+            }
+            Some("FREE") => {
+                // Simulated FREE: remove a DD allocation.
+                if let Some(dd) = words.iter().position(|&w| w == "FI" || w == "FILE" || w == "F")
+                    .and_then(|i| words.get(i + 1))
+                {
+                    let ddname = dd.trim_matches(|c| c == '(' || c == ')');
+                    self.dd_files.remove(ddname);
+                }
+                self.rc = 0;
+                Ok(())
+            }
+            Some("LISTDS" | "LISTDSI") => {
+                // Stub: just set RC=0.
+                self.rc = 0;
+                Ok(())
+            }
             _ => {
-                // Unknown host command — stub for ADDRESS environments (R106).
+                // Unknown TSO command — set RC=0 (no error in simulation).
                 self.rc = 0;
                 Ok(())
             }
         }
+    }
+
+    /// Execute an MVS command.
+    fn exec_mvs_command(&mut self, cmd: &str) -> Result<(), InterpError> {
+        let trimmed = cmd.trim();
+        let upper = trimmed.to_uppercase();
+        let words: Vec<&str> = upper.split_whitespace().collect();
+
+        match words.first().copied() {
+            Some("EXECIO") => self.exec_execio(trimmed),
+            _ => {
+                // Unknown MVS command — set RC=0.
+                self.rc = 0;
+                Ok(())
+            }
+        }
+    }
+
+    /// Execute an ISPEXEC command (stub for ISPF dialog services).
+    fn exec_ispexec_command(&mut self, _cmd: &str) -> Result<(), InterpError> {
+        // ISPF dialog services will be implemented in T104.
+        self.rc = 0;
+        Ok(())
+    }
+
+    /// Execute an ISREDIT command (stub for ISPF editor macros).
+    fn exec_isredit_command(&mut self, _cmd: &str) -> Result<(), InterpError> {
+        // ISPF edit macros will be implemented in T109.
+        self.rc = 0;
+        Ok(())
+    }
+
+    /// Simulated ALLOCATE command: parse FI(ddname) and create a DD entry.
+    fn exec_allocate(&mut self, cmd: &str) -> Result<(), InterpError> {
+        let upper = cmd.to_uppercase();
+        // Find FI(ddname) or FILE(ddname) or F(ddname).
+        let ddname = extract_paren_value(&upper, "FI")
+            .or_else(|| extract_paren_value(&upper, "FILE"))
+            .or_else(|| extract_paren_value(&upper, "F"));
+
+        if let Some(dd) = ddname {
+            self.dd_files.entry(dd).or_default();
+        }
+        self.rc = 0;
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -1271,6 +1388,18 @@ impl Interpreter {
 // ---------------------------------------------------------------------------
 //  Helpers
 // ---------------------------------------------------------------------------
+
+/// Extract a parenthesized value after a keyword, e.g. `FI(INDD)` → `"INDD"`.
+fn extract_paren_value(text: &str, keyword: &str) -> Option<String> {
+    let pat = format!("{keyword}(");
+    if let Some(start) = text.find(&pat) {
+        let after = &text[start + pat.len()..];
+        if let Some(end) = after.find(')') {
+            return Some(after[..end].to_string());
+        }
+    }
+    None
+}
 
 /// Build a label table from a clause list.
 fn build_label_table(clauses: &[Clause]) -> LabelTable {
@@ -1671,5 +1800,56 @@ mod tests {
         // Restore.
         stack = saved;
         assert_eq!(stack.pull(), "old");
+    }
+
+    // -- ADDRESS environment tests --
+
+    #[test]
+    fn test_address_tso_command() {
+        // ADDRESS TSO 'cmd' should route to TSO environment.
+        let result = run("ADDRESS TSO 'LISTDS DUMMY'");
+        assert_eq!(result.rc, 0);
+    }
+
+    #[test]
+    fn test_address_change_default() {
+        // ADDRESS env (no command) changes the default environment.
+        let result = run("ADDRESS ISPEXEC\nSAY 'ok'");
+        assert_eq!(result.output, vec!["ok"]);
+    }
+
+    #[test]
+    fn test_address_toggle() {
+        // ADDRESS with no args toggles between current and previous.
+        let result = run("ADDRESS MVS\nADDRESS\nSAY 'ok'");
+        assert_eq!(result.output, vec!["ok"]);
+    }
+
+    #[test]
+    fn test_address_mvs_execio() {
+        // EXECIO via ADDRESS MVS environment.
+        let (result, interp) = run_with_dd(
+            "ADDRESS MVS \"EXECIO * DISKR INDD (STEM LINE. FINIS\"",
+            "INDD",
+            vec!["data1", "data2"],
+        );
+        assert_eq!(result.rc, 0);
+        assert_eq!(interp.vars().get("LINE.0"), "2");
+        assert_eq!(interp.vars().get("LINE.1"), "data1");
+        assert_eq!(interp.vars().get("LINE.2"), "data2");
+    }
+
+    #[test]
+    fn test_address_tso_allocate() {
+        // ADDRESS TSO ALLOCATE should create a DD entry.
+        let result = run("ADDRESS TSO \"ALLOCATE FI(MYDD) DA('DUMMY') SHR\"");
+        assert_eq!(result.rc, 0);
+    }
+
+    #[test]
+    fn test_host_command_default_tso() {
+        // Unquoted host commands default to TSO environment.
+        let result = run("\"LISTDS DUMMY\"");
+        assert_eq!(result.rc, 0);
     }
 }
