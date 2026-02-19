@@ -4,6 +4,7 @@
 //! PL/I is notable for having **no reserved words** — any keyword can also be
 //! used as an identifier, requiring context-sensitive parsing.
 
+pub mod builtins;
 pub mod exceptions;
 pub mod interpreter;
 pub mod lexer;
@@ -24,3 +25,4 @@ pub use types::{
 };
 pub use exceptions::{Condition, ConditionContext, ConditionManager, OnAction, RaiseResult};
 pub use interpreter::{Interpreter, InterpreterError};
+pub use builtins::{call_builtin, BuiltinError, BuiltinResult};
