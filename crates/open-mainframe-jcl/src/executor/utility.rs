@@ -181,6 +181,7 @@ impl UtilityRegistry {
         registry.register(Box::new(Iebgener));
         registry.register(Box::new(Idcams));
         registry.register(Box::new(Iebcompr));
+        registry.register(Box::new(super::iebcopy::Iebcopy));
         registry
     }
 
