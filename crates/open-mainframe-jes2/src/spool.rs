@@ -31,7 +31,7 @@ pub struct SpoolDataset {
 // ---------------------------------------------------------------------------
 
 /// Manages the JES2 spool storage.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SpoolManager {
     datasets: HashMap<u64, SpoolDataset>,
     next_key: u64,
@@ -124,6 +124,19 @@ impl SpoolManager {
     pub fn dataset_count(&self) -> usize {
         self.datasets.len()
     }
+
+    /// List all spool datasets in a given SYSOUT class.
+    pub fn list_by_sysout_class(&self, class: char) -> Vec<&SpoolDataset> {
+        self.datasets
+            .values()
+            .filter(|ds| ds.sysout_class == class)
+            .collect()
+    }
+
+    /// Total number of records across all spool datasets.
+    pub fn total_records(&self) -> u64 {
+        self.datasets.values().map(|ds| ds.record_count).sum()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -197,5 +210,49 @@ mod tests {
         let k1 = spool.allocate(JobId(1), "A", "S", 'A');
         let k2 = spool.allocate(JobId(1), "B", "S", 'A');
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn list_by_sysout_class() {
+        let mut spool = SpoolManager::new();
+        spool.allocate(JobId(1), "DD1", "S1", 'A');
+        spool.allocate(JobId(2), "DD2", "S1", 'B');
+        spool.allocate(JobId(3), "DD3", "S1", 'A');
+
+        let class_a = spool.list_by_sysout_class('A');
+        assert_eq!(class_a.len(), 2);
+
+        let class_b = spool.list_by_sysout_class('B');
+        assert_eq!(class_b.len(), 1);
+
+        let class_x = spool.list_by_sysout_class('X');
+        assert_eq!(class_x.len(), 0);
+    }
+
+    #[test]
+    fn total_records() {
+        let mut spool = SpoolManager::new();
+        let k1 = spool.allocate(JobId(1), "A", "S", 'A');
+        let k2 = spool.allocate(JobId(2), "B", "S", 'B');
+
+        spool.write(k1, "LINE1").unwrap();
+        spool.write(k1, "LINE2").unwrap();
+        spool.write(k2, "LINE1").unwrap();
+
+        assert_eq!(spool.total_records(), 3);
+    }
+
+    #[test]
+    fn spool_serialization_roundtrip() {
+        let mut spool = SpoolManager::new();
+        let key = spool.allocate(JobId(1), "SYSPRINT", "STEP1", 'A');
+        spool.write(key, "TEST LINE").unwrap();
+
+        let json = serde_json::to_string(&spool).unwrap();
+        let restored: SpoolManager = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.dataset_count(), 1);
+        let data = restored.read(key).unwrap();
+        assert_eq!(data, &["TEST LINE"]);
     }
 }

@@ -21,14 +21,17 @@
 //! assert_eq!(jes.job_count(), 1);
 //! ```
 
+pub mod checkpoint;
 pub mod error;
 pub mod job;
 pub mod queue;
 pub mod spool;
 
+pub use checkpoint::{CheckpointConfig, CheckpointData, CheckpointManager, StartMode};
 pub use error::Jes2Error;
 pub use job::{Job, JobClass, JobId, JobState};
 pub use queue::Jes2;
+pub use spool::SpoolManager;
 
 /// Convenience result type for JES2 operations.
 pub type Result<T> = std::result::Result<T, Jes2Error>;
