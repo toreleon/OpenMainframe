@@ -91,6 +91,9 @@ async fn start_or_command(
                 Json(TsoStartResponse {
                     servlet_key: String::new(),
                     queue_id: None,
+                    ver: "0100".to_string(),
+                    timeout: false,
+                    reused: false,
                     tso_data: lines_to_tso_data(&result.output),
                 }),
             ));
@@ -125,6 +128,9 @@ async fn start_or_command(
         Json(TsoStartResponse {
             servlet_key,
             queue_id: Some("0".to_string()),
+            ver: "0100".to_string(),
+            timeout: false,
+            reused: false,
             tso_data,
         }),
     ))

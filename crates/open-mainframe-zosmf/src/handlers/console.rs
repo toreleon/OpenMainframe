@@ -59,11 +59,13 @@ async fn issue_command(
         format!("/zosmf/restconsoles/consoles/{}/solmsgs/{}", _console_name, key)
     });
 
+    let cmd_response_uri = cmd_response_url.clone();
     Ok(Json(ConsoleResponse {
         cmd_response_url,
         cmd_response: response_text,
         cmd_response_key,
         sol_key_detected,
+        cmd_response_uri,
     }))
 }
 
@@ -78,6 +80,7 @@ mod tests {
             cmd_response: "IEE114I ACTIVE SYSTEM".to_string(),
             cmd_response_key: Some("C1234567".to_string()),
             sol_key_detected: None,
+            cmd_response_uri: None,
         };
 
         let json = serde_json::to_string(&resp).unwrap();
@@ -92,6 +95,7 @@ mod tests {
             cmd_response: "response data".to_string(),
             cmd_response_key: None,
             sol_key_detected: Some(true),
+            cmd_response_uri: None,
         };
 
         let json = serde_json::to_string(&resp).unwrap();

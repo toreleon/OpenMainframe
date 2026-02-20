@@ -142,6 +142,17 @@ async fn list_datasets(
                         cdate: None,
                         rdate: None,
                         catnm: None,
+                        dev: None,
+                        edate: None,
+                        extx: None,
+                        migr: Some("NO".to_string()),
+                        mvol: Some("N".to_string()),
+                        ovf: None,
+                        sizex: None,
+                        spacu: None,
+                        used: None,
+                        vols: Some("WORK01".to_string()),
+                        dsntp: if dsref.attributes.dsorg == DatasetOrg::Partitioned { Some("PDS".to_string()) } else { None },
                     };
                 }
             }
@@ -160,6 +171,17 @@ async fn list_datasets(
                 cdate: None,
                 rdate: None,
                 catnm: None,
+                dev: None,
+                edate: None,
+                extx: None,
+                migr: None,
+                mvol: None,
+                ovf: None,
+                sizex: None,
+                spacu: None,
+                used: None,
+                vols: None,
+                dsntp: None,
             }
         })
         .collect();
@@ -520,15 +542,22 @@ fn write_dataset_content(
             ))
         })?;
 
-        if pds.has_member(member_name) {
-            pds.update_member(member_name, &content).map_err(|e| {
-                ZosmfErrorResponse::internal(format!("Failed to update member: {}", e))
-            })?;
-        } else {
+        let is_new = !pds.has_member(member_name);
+        if is_new {
             pds.add_member(member_name, &content).map_err(|e| {
                 ZosmfErrorResponse::internal(format!("Failed to add member: {}", e))
             })?;
+        } else {
+            pds.update_member(member_name, &content).map_err(|e| {
+                ZosmfErrorResponse::internal(format!("Failed to update member: {}", e))
+            })?;
         }
+
+        return if is_new {
+            Ok(StatusCode::CREATED)
+        } else {
+            Ok(StatusCode::NO_CONTENT)
+        };
     } else {
         // Write sequential dataset.
         let dsref = catalog.lookup(ds_name).map_err(|_| {
@@ -750,6 +779,17 @@ mod tests {
                 cdate: None,
                 rdate: None,
                 catnm: None,
+                dev: None,
+                edate: None,
+                extx: None,
+                migr: None,
+                mvol: None,
+                ovf: None,
+                sizex: None,
+                spacu: None,
+                used: None,
+                vols: None,
+                dsntp: None,
             }],
             returned_rows: 1,
             total_rows: 1,

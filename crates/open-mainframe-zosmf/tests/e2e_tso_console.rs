@@ -402,11 +402,12 @@ async fn test_login_flow() {
     let cookie_str = set_cookie.unwrap().to_str().unwrap();
     assert!(cookie_str.contains("jwtToken="));
 
+    // IBM z/OSMF returns JWT via Set-Cookie only; body is empty JSON.
     let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json.get("token").is_some());
+    assert!(json.is_object());
 }
 
 #[tokio::test]

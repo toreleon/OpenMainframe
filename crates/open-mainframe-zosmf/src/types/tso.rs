@@ -11,6 +11,15 @@ pub struct TsoStartResponse {
     /// Queue ID for the session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue_id: Option<String>,
+    /// Version string.
+    #[serde(default = "default_ver")]
+    pub ver: String,
+    /// Whether session timed out.
+    #[serde(default)]
+    pub timeout: bool,
+    /// Whether session was reused.
+    #[serde(default)]
+    pub reused: bool,
     /// Initial output data.
     #[serde(default)]
     pub tso_data: Vec<TsoData>,
@@ -104,6 +113,10 @@ pub struct TsoStartQuery {
     /// Region size.
     #[serde(default)]
     pub rsize: Option<u32>,
+}
+
+fn default_ver() -> String {
+    "0100".to_string()
 }
 
 fn default_rows() -> u32 {

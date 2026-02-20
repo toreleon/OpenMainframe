@@ -39,6 +39,50 @@ pub struct JobResponse {
     /// Phase name.
     #[serde(rename = "phase-name", skip_serializing_if = "Option::is_none")]
     pub phase_name: Option<String>,
+    /// Execution started timestamp.
+    #[serde(rename = "exec-started", skip_serializing_if = "Option::is_none")]
+    pub exec_started: Option<String>,
+    /// Execution ended timestamp.
+    #[serde(rename = "exec-ended", skip_serializing_if = "Option::is_none")]
+    pub exec_ended: Option<String>,
+    /// Execution member (system member name).
+    #[serde(rename = "exec-member", skip_serializing_if = "Option::is_none")]
+    pub exec_member: Option<String>,
+    /// Execution submitted timestamp.
+    #[serde(rename = "exec-submitted", skip_serializing_if = "Option::is_none")]
+    pub exec_submitted: Option<String>,
+    /// Execution system name.
+    #[serde(rename = "exec-system", skip_serializing_if = "Option::is_none")]
+    pub exec_system: Option<String>,
+    /// Reason not running.
+    #[serde(rename = "reason-not-running", skip_serializing_if = "Option::is_none")]
+    pub reason_not_running: Option<String>,
+    /// Step data (populated when exec-data=Y).
+    #[serde(rename = "step-data", skip_serializing_if = "Option::is_none")]
+    pub step_data: Option<Vec<JobStepData>>,
+}
+
+/// Step data for a job execution step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobStepData {
+    /// SMF system ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smfid: Option<String>,
+    /// Completion code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion: Option<String>,
+    /// Step name.
+    #[serde(rename = "step-name", skip_serializing_if = "Option::is_none")]
+    pub step_name: Option<String>,
+    /// Proc step name.
+    #[serde(rename = "proc-step-name", skip_serializing_if = "Option::is_none")]
+    pub proc_step_name: Option<String>,
+    /// Program name.
+    #[serde(rename = "program-name", skip_serializing_if = "Option::is_none")]
+    pub program_name: Option<String>,
+    /// Whether step is active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
 }
 
 /// A spool file entry.
@@ -101,6 +145,24 @@ pub struct JobFeedback {
     pub status: i32,
     /// Feedback message.
     pub message: String,
+    /// Original job ID.
+    #[serde(rename = "original-jobid", skip_serializing_if = "Option::is_none")]
+    pub original_jobid: Option<String>,
+    /// Job owner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// System member name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+    /// System name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sysname: Option<String>,
+    /// Job correlator.
+    #[serde(rename = "job-correlator", skip_serializing_if = "Option::is_none")]
+    pub job_correlator: Option<String>,
+    /// Internal code.
+    #[serde(rename = "internal-code", skip_serializing_if = "Option::is_none")]
+    pub internal_code: Option<String>,
 }
 
 /// Query parameters for job list.
@@ -118,4 +180,10 @@ pub struct JobListQuery {
     /// Status filter (INPUT, ACTIVE, OUTPUT).
     #[serde(default)]
     pub status: Option<String>,
+    /// Max jobs to return (0 = unlimited).
+    #[serde(rename = "max-jobs", default)]
+    pub max_jobs: Option<usize>,
+    /// Include execution data (Y/N).
+    #[serde(rename = "exec-data", default)]
+    pub exec_data: Option<String>,
 }

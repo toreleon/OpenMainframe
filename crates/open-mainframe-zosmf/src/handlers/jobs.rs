@@ -157,6 +157,13 @@ fn job_to_response(job: &Job) -> JobResponse {
         )),
         phase: Some(job_state_to_phase(&job.state)),
         phase_name: Some(job_state_to_phase_name(&job.state).to_string()),
+        exec_started: None,
+        exec_ended: None,
+        exec_member: None,
+        exec_submitted: None,
+        exec_system: None,
+        reason_not_running: None,
+        step_data: None,
     }
 }
 
@@ -410,6 +417,12 @@ async fn job_action(
         jobname,
         status: 0,
         message: format!("Job {} {} successfully", jobid, action.request),
+        original_jobid: None,
+        owner: None,
+        member: None,
+        sysname: None,
+        job_correlator: None,
+        internal_code: None,
     }))
 }
 
@@ -437,6 +450,12 @@ async fn purge_job(
         jobname,
         status: 0,
         message: format!("Job {} purged", jobid),
+        original_jobid: None,
+        owner: None,
+        member: None,
+        sysname: None,
+        job_correlator: None,
+        internal_code: None,
     }))
 }
 
@@ -544,6 +563,13 @@ mod tests {
             files_url: None,
             phase: Some(10),
             phase_name: Some("Job is actively executing".to_string()),
+            exec_started: None,
+            exec_ended: None,
+            exec_member: None,
+            exec_submitted: None,
+            exec_system: None,
+            reason_not_running: None,
+            step_data: None,
         };
 
         let json = serde_json::to_string(&resp).unwrap();

@@ -460,10 +460,13 @@ fn copy_dir_recursive(
 }
 
 /// Write raw content to a USS file.
+/// Returns 201 Created if file is new, 204 No Content if overwriting.
 fn write_file_content(
     full_path: &std::path::Path,
     bytes: &[u8],
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let existed = full_path.exists();
+
     if let Some(parent) = full_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             ZosmfErrorResponse::internal(format!("Failed to create parent directory: {}", e))
@@ -474,7 +477,11 @@ fn write_file_content(
         ZosmfErrorResponse::internal(format!("Failed to write file: {}", e))
     })?;
 
-    Ok(StatusCode::NO_CONTENT)
+    if existed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Ok(StatusCode::CREATED)
+    }
 }
 
 async fn create_dir_impl(

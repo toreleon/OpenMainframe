@@ -15,6 +15,12 @@ pub struct ZosmfErrorBody {
     pub category: i32,
     /// Human-readable error message.
     pub message: String,
+    /// Additional error details.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub details: Vec<String>,
+    /// Stack trace information.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack: Option<String>,
 }
 
 /// z/OSMF error response — combines HTTP status with z/OSMF error body.
@@ -36,6 +42,8 @@ impl ZosmfErrorResponse {
                 reason: 0,
                 category: 1,
                 message: message.into(),
+                details: Vec::new(),
+                stack: None,
             },
         }
     }
@@ -49,6 +57,8 @@ impl ZosmfErrorResponse {
                 reason: 0,
                 category: 2,
                 message: message.into(),
+                details: Vec::new(),
+                stack: None,
             },
         }
     }
@@ -62,6 +72,8 @@ impl ZosmfErrorResponse {
                 reason: 0,
                 category: 3,
                 message: message.into(),
+                details: Vec::new(),
+                stack: None,
             },
         }
     }
@@ -75,6 +87,8 @@ impl ZosmfErrorResponse {
                 reason: 0,
                 category: 4,
                 message: message.into(),
+                details: Vec::new(),
+                stack: None,
             },
         }
     }
@@ -88,6 +102,8 @@ impl ZosmfErrorResponse {
                 reason: 0,
                 category: 5,
                 message: message.into(),
+                details: Vec::new(),
+                stack: None,
             },
         }
     }
@@ -134,6 +150,8 @@ mod tests {
             reason: 0,
             category: 1,
             message: "test error".to_string(),
+            details: Vec::new(),
+            stack: None,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains(r#""rc":4"#));

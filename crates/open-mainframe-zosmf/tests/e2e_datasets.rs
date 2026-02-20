@@ -268,7 +268,8 @@ async fn test_pds_member_operations() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    // New member returns 201 Created per z/OSMF spec.
+    assert_eq!(resp.status(), StatusCode::CREATED);
 
     // List members
     let app = build_router(state.clone());

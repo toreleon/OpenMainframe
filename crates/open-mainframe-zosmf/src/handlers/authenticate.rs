@@ -6,12 +6,12 @@ use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{delete, post};
-use axum::{Json, Router};
+use axum::Router;
 use base64::Engine;
 
 use crate::jwt;
 use crate::state::AppState;
-use crate::types::auth::{AuthContext, AuthenticatedUser, LoginResponse};
+use crate::types::auth::{AuthContext, AuthenticatedUser};
 use crate::types::error::ZosmfErrorResponse;
 
 /// Register authentication routes.
@@ -90,13 +90,14 @@ async fn login(
         token
     );
 
+    // IBM z/OSMF returns JWT only via Set-Cookie; body is empty JSON.
     Ok((
         StatusCode::OK,
         [
             (header::SET_COOKIE, cookie),
             (header::CONTENT_TYPE, "application/json".to_string()),
         ],
-        Json(LoginResponse { token }),
+        "{}",
     ))
 }
 

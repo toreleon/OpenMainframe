@@ -48,6 +48,39 @@ pub struct DatasetListItem {
     /// Catalog name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catnm: Option<String>,
+    /// Device type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dev: Option<String>,
+    /// Expiration date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edate: Option<String>,
+    /// Extents used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extx: Option<u32>,
+    /// Migration status ("YES" / "NO").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub migr: Option<String>,
+    /// Multi-volume flag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mvol: Option<String>,
+    /// Overflow status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ovf: Option<String>,
+    /// Allocated size in tracks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizex: Option<u32>,
+    /// Space unit (TRACKS / CYLINDERS / BLOCKS).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spacu: Option<String>,
+    /// Percentage used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used: Option<u32>,
+    /// Volume list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vols: Option<String>,
+    /// Dataset name type (PDS, PDSE, LIBRARY, etc.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dsntp: Option<String>,
 }
 
 /// Response body for PDS member list operations.
@@ -122,6 +155,27 @@ pub struct DatasetCreateParams {
     /// Directory blocks (for PDS).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dirblk: Option<u32>,
+    /// Volume serial.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volser: Option<String>,
+    /// Device type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// Average block length.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avgblk: Option<u32>,
+    /// SMS storage class.
+    #[serde(rename = "storeclass", skip_serializing_if = "Option::is_none")]
+    pub storclass: Option<String>,
+    /// SMS management class.
+    #[serde(rename = "mgntclass", skip_serializing_if = "Option::is_none")]
+    pub mgntclass: Option<String>,
+    /// SMS data class.
+    #[serde(rename = "dataclass", skip_serializing_if = "Option::is_none")]
+    pub dataclass: Option<String>,
+    /// Dataset name type (PDS, PDSE, LIBRARY, BASIC, etc.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dsntype: Option<String>,
 }
 
 impl DatasetCreateParams {
