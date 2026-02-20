@@ -80,6 +80,32 @@ pub struct TsoStartParams {
     pub cols: u32,
 }
 
+/// Query parameters for TSO start (Zowe CLI sends params in URL).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TsoStartQuery {
+    /// Account number.
+    #[serde(default)]
+    pub acct: Option<String>,
+    /// Logon procedure.
+    #[serde(default)]
+    pub proc: Option<String>,
+    /// Character set.
+    #[serde(default)]
+    pub chset: Option<String>,
+    /// Code page.
+    #[serde(default)]
+    pub cpage: Option<String>,
+    /// Screen rows.
+    #[serde(default)]
+    pub rows: Option<u32>,
+    /// Screen columns.
+    #[serde(default)]
+    pub cols: Option<u32>,
+    /// Region size.
+    #[serde(default)]
+    pub rsize: Option<u32>,
+}
+
 fn default_rows() -> u32 {
     24
 }

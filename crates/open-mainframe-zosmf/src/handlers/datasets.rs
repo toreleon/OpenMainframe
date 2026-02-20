@@ -82,10 +82,12 @@ async fn list_datasets(
     headers: HeaderMap,
     Query(query): Query<DatasetListQuery>,
 ) -> std::result::Result<Json<DatasetListResponse>, ZosmfErrorResponse> {
+    // X-IBM-Max-Items: 0 means unlimited per z/OSMF spec.
     let max_items: usize = headers
         .get("x-ibm-max-items")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
+        .map(|n: usize| if n == 0 { usize::MAX } else { n })
         .unwrap_or(usize::MAX);
 
     let attributes_filter = headers
@@ -157,10 +159,12 @@ async fn list_members(
     headers: HeaderMap,
     Path(dsn): Path<String>,
 ) -> std::result::Result<Json<MemberListResponse>, ZosmfErrorResponse> {
+    // X-IBM-Max-Items: 0 means unlimited per z/OSMF spec.
     let max_items: usize = headers
         .get("x-ibm-max-items")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
+        .map(|n: usize| if n == 0 { usize::MAX } else { n })
         .unwrap_or(usize::MAX);
 
     let catalog = state
@@ -388,8 +392,15 @@ async fn create_dataset(
     State(state): State<Arc<AppState>>,
     _auth: AuthContext,
     Path(dsn): Path<String>,
-    Json(params): Json<DatasetCreateParams>,
+    body: Body,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let bytes = axum::body::to_bytes(body, 1024 * 1024)
+        .await
+        .map_err(|_| ZosmfErrorResponse::bad_request("Failed to read request body"))?;
+
+    let params: DatasetCreateParams = serde_json::from_slice(&bytes).map_err(|e| {
+        ZosmfErrorResponse::bad_request(format!("Invalid JSON: {}", e))
+    })?;
     let dsn_upper = dsn.to_uppercase();
 
     let mut catalog = state
@@ -417,7 +428,7 @@ async fn create_dataset(
         .unwrap_or(RecordFormat::FixedBlocked);
 
     let lrecl = params.lrecl.unwrap_or(80);
-    let blksize = params.blksz.unwrap_or(lrecl * 10);
+    let blksize = params.effective_blksize().unwrap_or(lrecl * 10);
 
     // Validate allocation parameters.
     if recfm == RecordFormat::FixedBlocked && blksize > 0 && lrecl > blksize {

@@ -91,6 +91,8 @@ pub struct MemberListItem {
 }
 
 /// Parameters for creating a new dataset.
+///
+/// Zowe CLI sends `blksize` while the z/OSMF spec uses `blksz`, so both are accepted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetCreateParams {
     /// Dataset organization.
@@ -102,9 +104,12 @@ pub struct DatasetCreateParams {
     /// Logical record length.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lrecl: Option<u32>,
-    /// Block size.
+    /// Block size (z/OSMF field name).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blksz: Option<u32>,
+    /// Block size (Zowe CLI field name).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blksize: Option<u32>,
     /// Primary space allocation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary: Option<u32>,
@@ -114,6 +119,16 @@ pub struct DatasetCreateParams {
     /// Allocation unit (TRK, CYL, BLK).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alcunit: Option<String>,
+    /// Directory blocks (for PDS).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dirblk: Option<u32>,
+}
+
+impl DatasetCreateParams {
+    /// Get the effective block size from either `blksz` or `blksize`.
+    pub fn effective_blksize(&self) -> Option<u32> {
+        self.blksz.or(self.blksize)
+    }
 }
 
 /// Query parameters for dataset list.

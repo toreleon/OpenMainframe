@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post, put};
@@ -21,9 +21,23 @@ use crate::state::AppState;
 use crate::types::auth::AuthContext;
 use crate::types::error::ZosmfErrorResponse;
 
+/// Query parameters for USS file operations (Zowe CLI sends path as query param).
+#[derive(Debug, Deserialize)]
+pub struct UssPathQuery {
+    /// USS path.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
 /// Register USS file routes.
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        // Query-param based routes (Zowe CLI uses ?path=/)
+        .route("/zosmf/restfiles/fs", get(read_or_list_query))
+        .route("/zosmf/restfiles/fs", put(write_file_query))
+        .route("/zosmf/restfiles/fs", post(create_dir_query))
+        .route("/zosmf/restfiles/fs", delete(delete_path_query))
+        // Path-based routes (direct URL path)
         .route("/zosmf/restfiles/fs/{*path}", get(read_or_list))
         .route("/zosmf/restfiles/fs/{*path}", put(write_file))
         .route("/zosmf/restfiles/fs/{*path}", post(create_dir))
@@ -61,13 +75,49 @@ fn resolve_uss_path(state: &AppState, uss_path: &str) -> PathBuf {
     root.join(cleaned)
 }
 
-/// GET /zosmf/restfiles/fs/:path — list directory contents or read file.
+// ─── Path-based route handlers (direct URL path) ───
+
 async fn read_or_list(
     State(state): State<Arc<AppState>>,
-    _auth: AuthContext,
+    auth: AuthContext,
     Path(uss_path): Path<String>,
 ) -> std::result::Result<axum::response::Response, ZosmfErrorResponse> {
-    let full_path = resolve_uss_path(&state, &uss_path);
+    read_or_list_impl(&state, &auth, &uss_path).await
+}
+
+async fn write_file(
+    State(state): State<Arc<AppState>>,
+    auth: AuthContext,
+    Path(uss_path): Path<String>,
+    body: Body,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    write_file_impl(&state, &auth, &uss_path, body).await
+}
+
+async fn create_dir(
+    State(state): State<Arc<AppState>>,
+    auth: AuthContext,
+    Path(uss_path): Path<String>,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    create_dir_impl(&state, &auth, &uss_path).await
+}
+
+async fn delete_path(
+    State(state): State<Arc<AppState>>,
+    auth: AuthContext,
+    Path(uss_path): Path<String>,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    delete_path_impl(&state, &auth, &uss_path).await
+}
+
+// ─── Implementation functions shared by path-based and query-based handlers ───
+
+async fn read_or_list_impl(
+    state: &AppState,
+    _auth: &AuthContext,
+    uss_path: &str,
+) -> std::result::Result<axum::response::Response, ZosmfErrorResponse> {
+    let full_path = resolve_uss_path(state, uss_path);
 
     if !full_path.exists() {
         return Err(ZosmfErrorResponse::not_found(format!(
@@ -77,7 +127,6 @@ async fn read_or_list(
     }
 
     if full_path.is_dir() {
-        // List directory contents.
         let entries = std::fs::read_dir(&full_path).map_err(|e| {
             ZosmfErrorResponse::internal(format!("Failed to read directory: {}", e))
         })?;
@@ -114,7 +163,6 @@ async fn read_or_list(
 
         Ok(Json(resp).into_response())
     } else {
-        // Read file content.
         let content = std::fs::read(&full_path).map_err(|e| {
             ZosmfErrorResponse::internal(format!("Failed to read file: {}", e))
         })?;
@@ -129,20 +177,18 @@ async fn read_or_list(
     }
 }
 
-/// PUT /zosmf/restfiles/fs/:path — write file content.
-async fn write_file(
-    State(state): State<Arc<AppState>>,
-    _auth: AuthContext,
-    Path(uss_path): Path<String>,
+async fn write_file_impl(
+    state: &AppState,
+    _auth: &AuthContext,
+    uss_path: &str,
     body: Body,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
-    let full_path = resolve_uss_path(&state, &uss_path);
+    let full_path = resolve_uss_path(state, uss_path);
 
     let bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|_| ZosmfErrorResponse::bad_request("Failed to read request body"))?;
 
-    // Ensure parent directory exists.
     if let Some(parent) = full_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             ZosmfErrorResponse::internal(format!("Failed to create parent directory: {}", e))
@@ -156,13 +202,12 @@ async fn write_file(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /zosmf/restfiles/fs/:path — create directory.
-async fn create_dir(
-    State(state): State<Arc<AppState>>,
-    _auth: AuthContext,
-    Path(uss_path): Path<String>,
+async fn create_dir_impl(
+    state: &AppState,
+    _auth: &AuthContext,
+    uss_path: &str,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
-    let full_path = resolve_uss_path(&state, &uss_path);
+    let full_path = resolve_uss_path(state, uss_path);
 
     std::fs::create_dir_all(&full_path).map_err(|e| {
         ZosmfErrorResponse::internal(format!("Failed to create directory: {}", e))
@@ -171,13 +216,12 @@ async fn create_dir(
     Ok(StatusCode::CREATED)
 }
 
-/// DELETE /zosmf/restfiles/fs/:path — delete file or directory.
-async fn delete_path(
-    State(state): State<Arc<AppState>>,
-    _auth: AuthContext,
-    Path(uss_path): Path<String>,
+async fn delete_path_impl(
+    state: &AppState,
+    _auth: &AuthContext,
+    uss_path: &str,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
-    let full_path = resolve_uss_path(&state, &uss_path);
+    let full_path = resolve_uss_path(state, uss_path);
 
     if !full_path.exists() {
         return Err(ZosmfErrorResponse::not_found(format!(
@@ -197,6 +241,55 @@ async fn delete_path(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ─── Query-param-based route handlers (Zowe CLI sends ?path=/) ───
+
+/// GET /zosmf/restfiles/fs?path=/ — list directory or read file.
+async fn read_or_list_query(
+    State(state): State<Arc<AppState>>,
+    auth: AuthContext,
+    Query(query): Query<UssPathQuery>,
+) -> std::result::Result<axum::response::Response, ZosmfErrorResponse> {
+    let uss_path = query.path.unwrap_or_else(|| "/".to_string());
+    read_or_list_impl(&state, &auth, &uss_path).await
+}
+
+/// PUT /zosmf/restfiles/fs?path=/file — write file content.
+async fn write_file_query(
+    State(state): State<Arc<AppState>>,
+    auth: AuthContext,
+    Query(query): Query<UssPathQuery>,
+    body: Body,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let uss_path = query
+        .path
+        .ok_or_else(|| ZosmfErrorResponse::bad_request("Missing 'path' query parameter"))?;
+    write_file_impl(&state, &auth, &uss_path, body).await
+}
+
+/// POST /zosmf/restfiles/fs?path=/dir — create directory.
+async fn create_dir_query(
+    State(state): State<Arc<AppState>>,
+    auth: AuthContext,
+    Query(query): Query<UssPathQuery>,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let uss_path = query
+        .path
+        .ok_or_else(|| ZosmfErrorResponse::bad_request("Missing 'path' query parameter"))?;
+    create_dir_impl(&state, &auth, &uss_path).await
+}
+
+/// DELETE /zosmf/restfiles/fs?path=/file — delete file or directory.
+async fn delete_path_query(
+    State(state): State<Arc<AppState>>,
+    auth: AuthContext,
+    Query(query): Query<UssPathQuery>,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let uss_path = query
+        .path
+        .ok_or_else(|| ZosmfErrorResponse::bad_request("Missing 'path' query parameter"))?;
+    delete_path_impl(&state, &auth, &uss_path).await
 }
 
 #[cfg(test)]
