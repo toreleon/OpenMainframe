@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/open-mainframe",
     "crates/open-mainframe-lang-core",
     "crates/open-mainframe-cobol",
     "crates/open-mainframe-jcl",
