@@ -38,6 +38,7 @@
 //! ```
 
 pub mod auth;
+pub mod certificate;
 pub mod database;
 pub mod dataset;
 pub mod error;
@@ -48,6 +49,10 @@ pub mod setropts;
 pub mod types;
 
 pub use auth::{AuthResult, AuthService, PasswordChangeResult, PasswordPolicy};
+pub use certificate::{
+    CertMapping, CertRc, CertType, CertUsage, Certificate, CertificateManager, GencertParams,
+    KeyAlgorithm, Keyring, KeyringConnection, SubjectDN, TrustStatus,
+};
 pub use database::{AuthCheckResult, ListDatasetResult, ListGroupResult, ListUserResult, RacfDatabase, SearchResult};
 pub use dataset::DatasetProfile;
 pub use error::RacfError;
