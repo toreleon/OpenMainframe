@@ -47,16 +47,22 @@ async fn issue_command(
     };
 
     // Check for solicitation key in response.
-    let sol_key_detected = request.sol_key.as_ref().and_then(|key| {
-        if response_text.contains(key) {
-            Some(key.clone())
-        } else {
-            None
-        }
+    let sol_key_detected = request.sol_key.as_ref().map(|key| response_text.contains(key));
+
+    // Generate a response key for follow-up requests.
+    let cmd_response_key = Some(format!("C{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() % 10_000_000));
+
+    let cmd_response_url = cmd_response_key.as_ref().map(|key| {
+        format!("/zosmf/restconsoles/consoles/{}/solmsgs/{}", _console_name, key)
     });
 
     Ok(Json(ConsoleResponse {
+        cmd_response_url,
         cmd_response: response_text,
+        cmd_response_key,
         sol_key_detected,
     }))
 }
@@ -68,22 +74,27 @@ mod tests {
     #[test]
     fn test_console_response_serialization() {
         let resp = ConsoleResponse {
+            cmd_response_url: None,
             cmd_response: "IEE114I ACTIVE SYSTEM".to_string(),
+            cmd_response_key: Some("C1234567".to_string()),
             sol_key_detected: None,
         };
 
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"cmd-response\":\"IEE114I ACTIVE SYSTEM\""));
+        assert!(json.contains("\"cmd-response-key\":\"C1234567\""));
     }
 
     #[test]
     fn test_console_response_with_sol_key() {
         let resp = ConsoleResponse {
+            cmd_response_url: None,
             cmd_response: "response data".to_string(),
-            sol_key_detected: Some("MYKEY".to_string()),
+            cmd_response_key: None,
+            sol_key_detected: Some(true),
         };
 
         let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains("\"sol-key-detected\":\"MYKEY\""));
+        assert!(json.contains("\"sol-key-detected\":true"));
     }
 }

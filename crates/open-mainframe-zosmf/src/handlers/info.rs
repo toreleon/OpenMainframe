@@ -18,8 +18,10 @@ pub fn routes() -> Router<Arc<AppState>> {
 async fn get_info(State(state): State<Arc<AppState>>) -> Json<ZosmfInfo> {
     let info = ZosmfInfo {
         api_version: "1".to_string(),
-        zosmf_version: "27.0".to_string(),
+        zosmf_version: "27".to_string(),
+        zosmf_full_version: "27.0".to_string(),
         zosmf_hostname: state.config.zosmf_info.hostname.clone(),
+        zosmf_port: state.config.server.port.to_string(),
         zos_version: "02.05.00".to_string(),
         zosmf_saf_realm: state.config.zosmf_info.saf_realm.clone(),
         plugins: vec![
@@ -51,8 +53,10 @@ mod tests {
     fn test_info_response_structure() {
         let info = ZosmfInfo {
             api_version: "1".to_string(),
-            zosmf_version: "27.0".to_string(),
+            zosmf_version: "27".to_string(),
+            zosmf_full_version: "27.0".to_string(),
             zosmf_hostname: "testhost".to_string(),
+            zosmf_port: "443".to_string(),
             zos_version: "02.05.00".to_string(),
             zosmf_saf_realm: "TestRealm".to_string(),
             plugins: vec![],

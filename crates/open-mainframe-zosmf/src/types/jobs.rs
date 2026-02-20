@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A job entry in list and status responses.
+/// A job entry in list, status, and submit responses.
+///
+/// Real z/OSMF returns the same full object for submit, list, and status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobResponse {
     /// Job ID (e.g., JOB00042).
@@ -18,9 +20,13 @@ pub struct JobResponse {
     pub job_type: String,
     /// Job class.
     pub class: String,
-    /// Return code (e.g., "CC 0000").
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Return code (e.g., "CC 0000"), null while active.
     pub retcode: Option<String>,
+    /// Subsystem (JES2 or JES3).
+    pub subsystem: String,
+    /// Job correlator — unique opaque identifier.
+    #[serde(rename = "job-correlator")]
+    pub job_correlator: String,
     /// URL for this job resource.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -35,22 +41,13 @@ pub struct JobResponse {
     pub phase_name: Option<String>,
 }
 
-/// Response for job submit.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobSubmitResponse {
-    /// Assigned job ID.
-    pub jobid: String,
-    /// Job name from JCL.
-    pub jobname: String,
-    /// Owner userid.
-    pub owner: String,
-    /// Initial status (INPUT).
-    pub status: String,
-}
-
 /// A spool file entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpoolFile {
+    /// Job ID this spool file belongs to.
+    pub jobid: String,
+    /// Job name.
+    pub jobname: String,
     /// Spool file numeric ID.
     pub id: u32,
     /// DD name.
@@ -63,12 +60,21 @@ pub struct SpoolFile {
     pub procstep: Option<String>,
     /// Output class.
     pub class: String,
+    /// Record format (F, FB, V, VB, U).
+    pub recfm: String,
+    /// Logical record length.
+    pub lrecl: u32,
     /// Byte count.
     #[serde(rename = "byte-count")]
     pub byte_count: u64,
     /// Record count.
     #[serde(rename = "record-count")]
     pub record_count: u64,
+    /// Job correlator.
+    #[serde(rename = "job-correlator")]
+    pub job_correlator: String,
+    /// Subsystem (JES2).
+    pub subsystem: String,
     /// URL to fetch records.
     #[serde(rename = "records-url", skip_serializing_if = "Option::is_none")]
     pub records_url: Option<String>,

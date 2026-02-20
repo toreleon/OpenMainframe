@@ -36,6 +36,9 @@ sha2 = "0.10"
 # Concurrent data structures
 dashmap = "6"
 
+# Date/time
+chrono = "0.4"
+
 # Internal crates
 open-mainframe-racf = { workspace = true }
 open-mainframe-dataset = { workspace = true }

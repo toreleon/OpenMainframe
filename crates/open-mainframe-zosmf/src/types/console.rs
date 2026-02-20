@@ -21,10 +21,16 @@ pub struct ConsoleRequest {
 /// Console command response body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsoleResponse {
+    /// Command response URL for follow-up.
+    #[serde(rename = "cmd-response-url", skip_serializing_if = "Option::is_none")]
+    pub cmd_response_url: Option<String>,
     /// Command response text.
     #[serde(rename = "cmd-response")]
     pub cmd_response: String,
-    /// Solicitation key detected in response.
+    /// Command response key for follow-up requests.
+    #[serde(rename = "cmd-response-key", skip_serializing_if = "Option::is_none")]
+    pub cmd_response_key: Option<String>,
+    /// Whether the solicitation keyword was detected in the response.
     #[serde(rename = "sol-key-detected", skip_serializing_if = "Option::is_none")]
-    pub sol_key_detected: Option<String>,
+    pub sol_key_detected: Option<bool>,
 }

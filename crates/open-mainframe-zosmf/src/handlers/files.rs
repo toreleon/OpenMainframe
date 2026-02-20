@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -44,28 +45,40 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/zosmf/restfiles/fs/{*path}", delete(delete_path))
 }
 
-/// USS directory entry in list responses.
+/// USS directory entry in list responses (matches real z/OSMF format).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UssEntry {
     /// File or directory name.
     pub name: String,
-    /// Type: "file" or "directory".
+    /// Unix permission string (e.g., "-rwxr-xr-x" or "drwxr-xr-x").
     pub mode: String,
     /// Size in bytes.
     pub size: u64,
+    /// User ID.
+    pub uid: u32,
+    /// User name.
+    pub user: String,
+    /// Group ID.
+    pub gid: u32,
+    /// Group name.
+    pub group: String,
+    /// Last modification time (ISO 8601).
+    pub mtime: String,
 }
 
 /// USS directory listing response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UssListResponse {
     /// Directory entries.
     pub items: Vec<UssEntry>,
     /// Number of items returned.
-    #[serde(rename = "returnedRows")]
     pub returned_rows: usize,
     /// Total items.
-    #[serde(rename = "totalRows")]
     pub total_rows: usize,
+    /// JSON format version.
+    #[serde(rename = "JSONversion")]
+    pub json_version: i32,
 }
 
 /// Resolve the USS path to the configured root.
@@ -114,7 +127,7 @@ async fn delete_path(
 
 async fn read_or_list_impl(
     state: &AppState,
-    _auth: &AuthContext,
+    auth: &AuthContext,
     uss_path: &str,
 ) -> std::result::Result<axum::response::Response, ZosmfErrorResponse> {
     let full_path = resolve_uss_path(state, uss_path);
@@ -141,14 +154,64 @@ async fn read_or_list_impl(
                 ZosmfErrorResponse::internal(format!("Metadata error: {}", e))
             })?;
 
+            // Build Unix permission string like "-rwxr-xr-x" or "drwxr-xr-x".
+            let mode_str = {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let perm = metadata.permissions().mode();
+                    let file_type = if metadata.is_dir() { 'd' } else if metadata.is_symlink() { 'l' } else { '-' };
+                    let bits = [
+                        if perm & 0o400 != 0 { 'r' } else { '-' },
+                        if perm & 0o200 != 0 { 'w' } else { '-' },
+                        if perm & 0o100 != 0 { 'x' } else { '-' },
+                        if perm & 0o040 != 0 { 'r' } else { '-' },
+                        if perm & 0o020 != 0 { 'w' } else { '-' },
+                        if perm & 0o010 != 0 { 'x' } else { '-' },
+                        if perm & 0o004 != 0 { 'r' } else { '-' },
+                        if perm & 0o002 != 0 { 'w' } else { '-' },
+                        if perm & 0o001 != 0 { 'x' } else { '-' },
+                    ];
+                    format!("{}{}", file_type, bits.iter().collect::<String>())
+                }
+                #[cfg(not(unix))]
+                {
+                    if metadata.is_dir() { "drwxr-xr-x".to_string() } else { "-rw-r--r--".to_string() }
+                }
+            };
+
+            // Get uid/gid on Unix.
+            let (uid, gid) = {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    (metadata.uid(), metadata.gid())
+                }
+                #[cfg(not(unix))]
+                { (0u32, 0u32) }
+            };
+
+            // Get mtime as ISO 8601.
+            let mtime = metadata.modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| {
+                    let secs = d.as_secs() as i64;
+                    let dt = chrono::DateTime::from_timestamp(secs, 0)
+                        .unwrap_or_default();
+                    dt.format("%Y-%m-%dT%H:%M:%S").to_string()
+                })
+                .unwrap_or_else(|| "1970-01-01T00:00:00".to_string());
+
             items.push(UssEntry {
                 name: entry.file_name().to_string_lossy().to_string(),
-                mode: if metadata.is_dir() {
-                    "directory".to_string()
-                } else {
-                    "file".to_string()
-                },
+                mode: mode_str,
                 size: metadata.len(),
+                uid,
+                user: auth.userid.clone(),
+                gid,
+                group: "OMVSGRP".to_string(),
+                mtime,
             });
         }
 
@@ -159,6 +222,7 @@ async fn read_or_list_impl(
             items,
             returned_rows: total,
             total_rows: total,
+            json_version: 1,
         };
 
         Ok(Json(resp).into_response())
@@ -300,14 +364,20 @@ mod tests {
     fn test_uss_entry_serialization() {
         let entry = UssEntry {
             name: "hello.txt".to_string(),
-            mode: "file".to_string(),
+            mode: "-rw-r--r--".to_string(),
             size: 1024,
+            uid: 0,
+            user: "IBMUSER".to_string(),
+            gid: 1,
+            group: "OMVSGRP".to_string(),
+            mtime: "2025-01-15T10:30:00".to_string(),
         };
 
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"name\":\"hello.txt\""));
-        assert!(json.contains("\"mode\":\"file\""));
-        assert!(json.contains("\"size\":1024"));
+        assert!(json.contains("\"mode\":\"-rw-r--r--\""));
+        assert!(json.contains("\"uid\":0"));
+        assert!(json.contains("\"mtime\":\"2025-01-15T10:30:00\""));
     }
 
     #[test]
@@ -316,21 +386,33 @@ mod tests {
             items: vec![
                 UssEntry {
                     name: "dir1".to_string(),
-                    mode: "directory".to_string(),
+                    mode: "drwxr-xr-x".to_string(),
                     size: 4096,
+                    uid: 0,
+                    user: "IBMUSER".to_string(),
+                    gid: 0,
+                    group: "OMVSGRP".to_string(),
+                    mtime: "2025-01-15T10:30:00".to_string(),
                 },
                 UssEntry {
                     name: "file1.txt".to_string(),
-                    mode: "file".to_string(),
+                    mode: "-rw-r--r--".to_string(),
                     size: 100,
+                    uid: 0,
+                    user: "IBMUSER".to_string(),
+                    gid: 0,
+                    group: "OMVSGRP".to_string(),
+                    mtime: "2025-01-15T10:30:00".to_string(),
                 },
             ],
             returned_rows: 2,
             total_rows: 2,
+            json_version: 1,
         };
 
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"returnedRows\":2"));
         assert!(json.contains("\"totalRows\":2"));
+        assert!(json.contains("\"JSONversion\":1"));
     }
 }

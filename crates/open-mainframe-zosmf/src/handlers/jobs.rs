@@ -23,7 +23,7 @@ use crate::state::AppState;
 use crate::types::auth::AuthContext;
 use crate::types::error::ZosmfErrorResponse;
 use crate::types::jobs::{
-    JobActionRequest, JobFeedback, JobListQuery, JobResponse, JobSubmitResponse, SpoolFile,
+    JobActionRequest, JobFeedback, JobListQuery, JobResponse, SpoolFile,
 };
 
 /// Register job routes.
@@ -119,6 +119,17 @@ fn job_state_to_phase_name(state: &JobState) -> &'static str {
     }
 }
 
+/// Generate a job correlator string.
+fn generate_job_correlator(job: &Job) -> String {
+    let jobid = format_job_id(job.id);
+    format!(
+        "{}{}{}00000000",
+        jobid,
+        job.name,
+        "D00000000000000000000000".get(..24 - job.name.len()).unwrap_or("")
+    )
+}
+
 /// Convert a Job to JobResponse.
 fn job_to_response(job: &Job) -> JobResponse {
     let jobid = format_job_id(job.id);
@@ -134,6 +145,8 @@ fn job_to_response(job: &Job) -> JobResponse {
         } else {
             None
         },
+        subsystem: "JES2".to_string(),
+        job_correlator: generate_job_correlator(job),
         url: Some(format!(
             "/zosmf/restjobs/jobs/{}/{}",
             job.name, jobid
@@ -225,7 +238,7 @@ async fn submit_job(
     State(state): State<Arc<AppState>>,
     auth: AuthContext,
     body: Body,
-) -> std::result::Result<(StatusCode, Json<JobSubmitResponse>), ZosmfErrorResponse> {
+) -> std::result::Result<(StatusCode, Json<JobResponse>), ZosmfErrorResponse> {
     let bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|_| ZosmfErrorResponse::bad_request("Failed to read request body"))?;
@@ -255,17 +268,13 @@ async fn submit_job(
         let _ = jes.spool.write(spool_key, line);
     }
 
-    let jobid_str = format_job_id(job_id);
+    // Return full JobResponse (same as list/status) per real z/OSMF behavior.
+    let job = jes.get_job(job_id).ok_or_else(|| {
+        ZosmfErrorResponse::internal("Job disappeared after submit")
+    })?;
+    let response = job_to_response(job);
 
-    Ok((
-        StatusCode::CREATED,
-        Json(JobSubmitResponse {
-            jobid: jobid_str,
-            jobname: job_name,
-            owner: auth.userid,
-            status: "INPUT".to_string(),
-        }),
-    ))
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 /// GET /zosmf/restjobs/jobs/:jobname/:jobid/files — list spool files.
@@ -287,6 +296,11 @@ async fn list_spool_files(
         ZosmfErrorResponse::not_found(format!("Job {} ({}) not found", jobname, jobid))
     })?;
 
+    let job = jes.get_job(id).ok_or_else(|| {
+        ZosmfErrorResponse::not_found(format!("Job {} ({}) not found", jobname, jobid))
+    })?;
+    let correlator = generate_job_correlator(job);
+
     let spool_datasets = jes.spool.list_for_job(id);
 
     let files: Vec<SpoolFile> = spool_datasets
@@ -297,13 +311,19 @@ async fn list_spool_files(
             let byte_count: u64 = sd.data.iter().map(|l| l.len() as u64 + 1).sum();
 
             SpoolFile {
+                jobid: jobid.clone(),
+                jobname: jobname.clone(),
                 id: idx as u32,
                 ddname: sd.dd_name.clone(),
                 stepname: Some(sd.step_name.clone()),
                 procstep: None,
                 class: sd.sysout_class.to_string(),
+                recfm: "VB".to_string(),
+                lrecl: 137,
                 byte_count,
                 record_count,
+                job_correlator: correlator.clone(),
+                subsystem: "JES2".to_string(),
                 records_url: Some(format!(
                     "/zosmf/restjobs/jobs/{}/{}/files/{}/records",
                     jobname, jobid, idx
@@ -518,6 +538,8 @@ mod tests {
             job_type: "JOB".to_string(),
             class: "A".to_string(),
             retcode: None,
+            subsystem: "JES2".to_string(),
+            job_correlator: "JOB00042PAYROLLD00000000000000000".to_string(),
             url: None,
             files_url: None,
             phase: Some(10),
@@ -527,6 +549,8 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"jobid\":\"JOB00042\""));
         assert!(json.contains("\"type\":\"JOB\""));
+        assert!(json.contains("\"subsystem\":\"JES2\""));
+        assert!(json.contains("\"job-correlator\""));
         assert!(json.contains("\"phase-name\":\"Job is actively executing\""));
     }
 }
