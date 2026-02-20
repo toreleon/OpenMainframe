@@ -1,0 +1,47 @@
+[package]
+name = "open-mainframe-zosmf"
+description = "z/OSMF-compatible REST API server for OpenMainframe Zowe integration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Error handling
+miette = { workspace = true }
+thiserror = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP framework
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+
+# Authentication
+base64 = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
+
+# Concurrent data structures
+dashmap = "6"
+
+# Internal crates
+open-mainframe-racf = { workspace = true }
+open-mainframe-dataset = { workspace = true }
+open-mainframe-jes2 = { workspace = true }
+open-mainframe-tso = { workspace = true }
+open-mainframe-encoding = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
