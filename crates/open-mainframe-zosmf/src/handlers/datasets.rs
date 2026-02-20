@@ -240,23 +240,29 @@ async fn read_dataset(
         .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
 
     if let Some(member_name) = member {
-        // Read PDS member.
-        let dsref = catalog.lookup_member(ds_name, member_name).map_err(|_| {
+        // Read PDS member via Pds API.
+        let dsref = catalog.lookup(ds_name).map_err(|_| {
             ZosmfErrorResponse::not_found(format!(
-                "Member '{}({})' not found",
-                ds_name.to_uppercase(),
-                member_name.to_uppercase()
+                "Dataset '{}' not found",
+                ds_name.to_uppercase()
             ))
         })?;
 
-        let path = dsref
+        let pds_path = dsref
             .path
             .as_ref()
-            .ok_or_else(|| ZosmfErrorResponse::not_found("Member path not resolved"))?;
+            .ok_or_else(|| ZosmfErrorResponse::not_found("Dataset path not resolved"))?;
 
-        let content = std::fs::read(path).map_err(|_| {
+        let pds = Pds::open(pds_path).map_err(|_| {
             ZosmfErrorResponse::not_found(format!(
-                "Cannot read member '{}({})'",
+                "PDS '{}' not found or not a PDS",
+                ds_name.to_uppercase()
+            ))
+        })?;
+
+        let content = pds.read_member(member_name).map_err(|_| {
+            ZosmfErrorResponse::not_found(format!(
+                "Member '{}({})' not found",
                 ds_name.to_uppercase(),
                 member_name.to_uppercase()
             ))
