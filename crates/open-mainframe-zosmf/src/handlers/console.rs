@@ -6,9 +6,10 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use axum::routing::put;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use open_mainframe_jes2::commands::{execute_command, parse_command, Initiator};
+use serde::Serialize;
 
 use crate::state::AppState;
 use crate::types::auth::AuthContext;
@@ -17,10 +18,19 @@ use crate::types::error::ZosmfErrorResponse;
 
 /// Register console routes.
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new().route(
-        "/zosmf/restconsoles/consoles/{console_name}",
-        put(issue_command),
-    )
+    Router::new()
+        .route(
+            "/zosmf/restconsoles/consoles/{console_name}",
+            put(issue_command),
+        )
+        .route(
+            "/zosmf/restconsoles/consoles/{console_name}/solmsgs/{key}",
+            get(get_solicited_message),
+        )
+        .route(
+            "/zosmf/restconsoles/consoles/{console_name}/detections/{key}",
+            get(get_detection),
+        )
 }
 
 /// PUT /zosmf/restconsoles/consoles/:name — issue MVS console command.
@@ -59,6 +69,11 @@ async fn issue_command(
         format!("/zosmf/restconsoles/consoles/{}/solmsgs/{}", _console_name, key)
     });
 
+    // Store response for later retrieval via GET solmsgs endpoint.
+    if let Some(ref key) = cmd_response_key {
+        state.console_responses.insert(key.clone(), response_text.clone());
+    }
+
     let cmd_response_uri = cmd_response_url.clone();
     Ok(Json(ConsoleResponse {
         cmd_response_url,
@@ -67,6 +82,48 @@ async fn issue_command(
         sol_key_detected,
         cmd_response_uri,
     }))
+}
+
+/// Solicited message response body.
+#[derive(Debug, Clone, Serialize)]
+struct SolicitedMessageResponse {
+    #[serde(rename = "cmd-response")]
+    cmd_response: String,
+}
+
+/// GET /zosmf/restconsoles/consoles/:name/solmsgs/:key — retrieve solicited message.
+async fn get_solicited_message(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Path((_console_name, key)): Path<(String, String)>,
+) -> std::result::Result<Json<SolicitedMessageResponse>, ZosmfErrorResponse> {
+    let response = state.console_responses.get(&key).ok_or_else(|| {
+        ZosmfErrorResponse::not_found(format!("Response key '{}' not found", key))
+    })?;
+
+    Ok(Json(SolicitedMessageResponse {
+        cmd_response: response.clone(),
+    }))
+}
+
+/// Detection status response body.
+#[derive(Debug, Clone, Serialize)]
+struct DetectionResponse {
+    status: String,
+    message: String,
+}
+
+/// GET /zosmf/restconsoles/consoles/:name/detections/:key — check unsolicited message detection.
+async fn get_detection(
+    State(_state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Path((_console_name, _key)): Path<(String, String)>,
+) -> Json<DetectionResponse> {
+    // Stub: we don't have real MVS unsolicited messages.
+    Json(DetectionResponse {
+        status: "not-detected".to_string(),
+        message: String::new(),
+    })
 }
 
 #[cfg(test)]

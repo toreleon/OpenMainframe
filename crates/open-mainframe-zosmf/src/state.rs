@@ -28,6 +28,8 @@ pub struct AppState {
     pub token_store: DashMap<String, AuthenticatedUser>,
     /// Server configuration.
     pub config: Arc<ZosmfConfig>,
+    /// Console command responses: response-key → response text.
+    pub console_responses: DashMap<String, String>,
 }
 
 /// Handle to a TSO session stored in the session map.
@@ -53,6 +55,7 @@ impl AppState {
             tso_sessions: DashMap::new(),
             token_store: DashMap::new(),
             config: Arc::new(config),
+            console_responses: DashMap::new(),
         }
     }
 }

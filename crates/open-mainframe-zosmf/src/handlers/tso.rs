@@ -31,6 +31,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/zosmf/tsoApp/tso/{servlet_key}", put(send_command))
         .route("/zosmf/tsoApp/tso/{servlet_key}", get(receive_response))
         .route("/zosmf/tsoApp/tso/{servlet_key}", delete(stop_session))
+        .route("/zosmf/tsoApp/tso/ping/{servlet_key}", put(ping_session))
         // V1 stateless TSO API (used by Zowe CLI v3+ when z/OS >= V2R4).
         .route("/zosmf/tsoApp/v1/tso", put(v1_stateless_command))
 }
@@ -200,6 +201,25 @@ async fn stop_session(
         })?;
 
     Ok(StatusCode::OK)
+}
+
+/// PUT /zosmf/tsoApp/tso/ping/:servletKey — verify TSO session is alive.
+async fn ping_session(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Path(servlet_key): Path<String>,
+) -> std::result::Result<Json<serde_json::Value>, ZosmfErrorResponse> {
+    if !state.tso_sessions.contains_key(&servlet_key) {
+        return Err(ZosmfErrorResponse::not_found(format!(
+            "TSO session '{}' not found",
+            servlet_key
+        )));
+    }
+
+    Ok(Json(serde_json::json!({
+        "servletKey": servlet_key,
+        "ver": "0100",
+    })))
 }
 
 /// PUT /zosmf/tsoApp/v1/tso — V1 stateless TSO command (Zowe CLI v3+).

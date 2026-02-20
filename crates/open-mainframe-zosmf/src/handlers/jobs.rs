@@ -17,7 +17,9 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, put};
 use axum::{Json, Router};
+use open_mainframe_dataset::Pds;
 use open_mainframe_jes2::{Job, JobClass, JobId, JobState};
+use serde::Deserialize;
 
 use crate::state::AppState;
 use crate::types::auth::AuthContext;
@@ -250,8 +252,13 @@ async fn submit_job(
         .await
         .map_err(|_| ZosmfErrorResponse::bad_request("Failed to read request body"))?;
 
-    let jcl = String::from_utf8(bytes.to_vec())
-        .map_err(|_| ZosmfErrorResponse::bad_request("Invalid UTF-8 in JCL body"))?;
+    // Check if JSON body with "file" field for dataset-based submission.
+    let jcl = if let Ok(submit_req) = serde_json::from_slice::<JobSubmitFromDataset>(&bytes) {
+        read_jcl_from_dataset(&state, &submit_req.file)?
+    } else {
+        String::from_utf8(bytes.to_vec())
+            .map_err(|_| ZosmfErrorResponse::bad_request("Invalid UTF-8 in JCL body"))?
+    };
 
     // Extract job name and class from JCL.
     let job_name = extract_job_name(&jcl).unwrap_or_else(|| "NONAME".to_string());
@@ -282,6 +289,68 @@ async fn submit_job(
     let response = job_to_response(job);
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// JSON body for submitting a job from a dataset.
+#[derive(Debug, Clone, Deserialize)]
+struct JobSubmitFromDataset {
+    /// Dataset path, e.g. "//'IBMUSER.JCL(PAYROLL)'" or "//'IBMUSER.DATA'".
+    file: String,
+}
+
+/// Read JCL content from a dataset reference like "//'DSN.NAME(MEMBER)'".
+fn read_jcl_from_dataset(
+    state: &AppState,
+    file_ref: &str,
+) -> std::result::Result<String, ZosmfErrorResponse> {
+    // Strip "//" prefix and surrounding quotes: "//'DSN.NAME(MEM)'" => "DSN.NAME(MEM)"
+    let dsn_str = file_ref
+        .trim_start_matches('/')
+        .trim_start_matches('/')
+        .trim_matches('\'')
+        .trim_matches('"');
+
+    let (ds_name, member) = if let Some(paren_pos) = dsn_str.find('(') {
+        let ds = &dsn_str[..paren_pos];
+        let member_end = dsn_str.find(')').unwrap_or(dsn_str.len());
+        let mem = &dsn_str[paren_pos + 1..member_end];
+        (ds, Some(mem))
+    } else {
+        (dsn_str, None)
+    };
+
+    let catalog = state
+        .catalog
+        .read()
+        .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
+
+    let dsref = catalog.lookup(ds_name).map_err(|_| {
+        ZosmfErrorResponse::not_found(format!("Dataset '{}' not found", ds_name))
+    })?;
+
+    let path = dsref
+        .path
+        .as_ref()
+        .ok_or_else(|| ZosmfErrorResponse::not_found("Dataset path not resolved"))?;
+
+    let content = if let Some(mem_name) = member {
+        let pds = Pds::open(path).map_err(|_| {
+            ZosmfErrorResponse::not_found(format!("PDS '{}' not found", ds_name))
+        })?;
+        pds.read_member(mem_name).map_err(|_| {
+            ZosmfErrorResponse::not_found(format!(
+                "Member '{}({})' not found",
+                ds_name, mem_name
+            ))
+        })?
+    } else {
+        std::fs::read(path).map_err(|_| {
+            ZosmfErrorResponse::not_found(format!("Cannot read dataset '{}'", ds_name))
+        })?
+    };
+
+    String::from_utf8(content)
+        .map_err(|_| ZosmfErrorResponse::bad_request("Dataset content is not valid UTF-8 JCL"))
 }
 
 /// GET /zosmf/restjobs/jobs/:jobname/:jobid/files — list spool files.
