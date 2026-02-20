@@ -84,7 +84,8 @@ async fn test_list_datasets_empty() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["returnedRows"], 0);
-    assert_eq!(json["totalRows"], 0);
+    // totalRows is now in the X-IBM-Response-Rows header, not the body.
+    assert!(json.get("totalRows").is_none());
     assert!(json["items"].as_array().unwrap().is_empty());
 }
 
@@ -430,14 +431,22 @@ async fn test_list_datasets_max_items() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    // When max-items truncates, status is 206 Partial Content.
+    assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+
+    // Verify X-IBM-Response-Rows header.
+    let response_rows = resp.headers().get("x-ibm-response-rows")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok());
+    assert_eq!(response_rows, Some(3));
 
     let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["returnedRows"], 2);
-    assert_eq!(json["totalRows"], 3);
+    // totalRows is in the header, not the body.
+    assert!(json.get("totalRows").is_none());
 }
 
 // ─── Test: z/OSMF JSON format compliance ───
@@ -488,7 +497,8 @@ async fn test_dataset_json_format_compliance() {
     // Verify z/OSMF JSON fields present
     assert!(json.get("JSONversion").is_some());
     assert!(json.get("returnedRows").is_some());
-    assert!(json.get("totalRows").is_some());
+    // totalRows is now in the X-IBM-Response-Rows header, not the body.
+    assert!(json.get("totalRows").is_none());
 
     let item = &json["items"][0];
     assert!(item.get("dsname").is_some());

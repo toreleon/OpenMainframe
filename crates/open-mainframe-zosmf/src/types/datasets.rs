@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 /// Response body for dataset list operations.
+///
+/// Note: `totalRows` is returned via the `X-IBM-Response-Rows` header, not in the body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatasetListResponse {
@@ -10,8 +12,6 @@ pub struct DatasetListResponse {
     pub items: Vec<DatasetListItem>,
     /// Number of rows returned.
     pub returned_rows: usize,
-    /// Total rows matching the query.
-    pub total_rows: usize,
     /// JSON format version.
     #[serde(rename = "JSONversion")]
     pub json_version: i32,
@@ -84,6 +84,8 @@ pub struct DatasetListItem {
 }
 
 /// Response body for PDS member list operations.
+///
+/// Note: `totalRows` is returned via the `X-IBM-Response-Rows` header, not in the body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemberListResponse {
@@ -91,8 +93,6 @@ pub struct MemberListResponse {
     pub items: Vec<MemberListItem>,
     /// Number of rows returned.
     pub returned_rows: usize,
-    /// Total rows.
-    pub total_rows: usize,
     /// JSON format version.
     #[serde(rename = "JSONversion")]
     pub json_version: i32,
@@ -191,4 +191,21 @@ pub struct DatasetListQuery {
     /// Dataset level filter pattern (e.g., `HLQ.*`).
     #[serde(rename = "dslevel")]
     pub dslevel: String,
+    /// Volume serial filter.
+    #[serde(default)]
+    pub volser: Option<String>,
+    /// Start after this dataset name (pagination).
+    #[serde(default)]
+    pub start: Option<String>,
+}
+
+/// Query parameters for member list.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MemberListQuery {
+    /// Member name pattern (supports `*` wildcard).
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// Start after this member name (pagination).
+    #[serde(default)]
+    pub start: Option<String>,
 }

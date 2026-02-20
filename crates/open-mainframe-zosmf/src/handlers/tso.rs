@@ -255,12 +255,17 @@ async fn v1_stateless_command(
     // Append READY prompt.
     cmd_response.push(serde_json::json!({ "message": "READY" }));
 
+    // Check if any output line contains the READY prompt.
+    let prompt_received = result.output.iter().any(|l| l.trim().starts_with("READY"));
+
     Ok(Json(serde_json::json!({
         "servletKey": serde_json::Value::Null,
         "ver": "0100",
         "cmdResponse": cmd_response,
         "reused": false,
         "timeout": false,
+        "tsoPromptReceived": if prompt_received { "Y" } else { "N" },
+        "keywordDetected": "N",
     })))
 }
 

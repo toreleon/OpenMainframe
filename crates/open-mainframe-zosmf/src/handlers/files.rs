@@ -12,7 +12,7 @@ use std::time::UNIX_EPOCH;
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -100,9 +100,14 @@ pub struct UssEntry {
     pub group: String,
     /// Last modification time (ISO 8601).
     pub mtime: String,
+    /// File codeset tag (e.g., "t ISO8859-1", "b", "untagged").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 /// USS directory listing response.
+///
+/// Note: `totalRows` is returned via the `X-IBM-Response-Rows` header, not in the body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UssListResponse {
@@ -110,11 +115,18 @@ pub struct UssListResponse {
     pub items: Vec<UssEntry>,
     /// Number of items returned.
     pub returned_rows: usize,
-    /// Total items.
-    pub total_rows: usize,
     /// JSON format version.
     #[serde(rename = "JSONversion")]
     pub json_version: i32,
+}
+
+/// Compute a simple ETag from content bytes.
+fn compute_etag(content: &[u8]) -> String {
+    let mut hash: u32 = 0;
+    for &byte in content {
+        hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+    }
+    format!("\"{:08X}\"", hash)
 }
 
 /// Resolve the USS path to the configured root.
@@ -129,34 +141,38 @@ fn resolve_uss_path(state: &AppState, uss_path: &str) -> PathBuf {
 async fn read_or_list(
     State(state): State<Arc<AppState>>,
     auth: AuthContext,
+    headers: HeaderMap,
     Path(uss_path): Path<String>,
 ) -> std::result::Result<axum::response::Response, ZosmfErrorResponse> {
-    read_or_list_impl(&state, &auth, &uss_path).await
+    read_or_list_impl(&state, &auth, &uss_path, &headers).await
 }
 
 async fn write_file(
     State(state): State<Arc<AppState>>,
     auth: AuthContext,
+    headers: HeaderMap,
     Path(uss_path): Path<String>,
     body: Body,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
-    write_file_impl(&state, &auth, &uss_path, body).await
+    write_file_impl(&state, &auth, &uss_path, &headers, body).await
 }
 
 async fn create_dir(
     State(state): State<Arc<AppState>>,
     auth: AuthContext,
     Path(uss_path): Path<String>,
+    body: Body,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
-    create_dir_impl(&state, &auth, &uss_path).await
+    create_dir_impl(&state, &auth, &uss_path, body).await
 }
 
 async fn delete_path(
     State(state): State<Arc<AppState>>,
     auth: AuthContext,
+    headers: HeaderMap,
     Path(uss_path): Path<String>,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
-    delete_path_impl(&state, &auth, &uss_path).await
+    delete_path_impl(&state, &auth, &uss_path, &headers).await
 }
 
 // ─── Implementation functions shared by path-based and query-based handlers ───
@@ -165,7 +181,12 @@ async fn read_or_list_impl(
     state: &AppState,
     auth: &AuthContext,
     uss_path: &str,
+    headers: &HeaderMap,
 ) -> std::result::Result<axum::response::Response, ZosmfErrorResponse> {
+    let data_type = headers
+        .get("x-ibm-data-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("text");
     let full_path = resolve_uss_path(state, uss_path);
 
     if !full_path.exists() {
@@ -248,6 +269,7 @@ async fn read_or_list_impl(
                 gid,
                 group: "OMVSGRP".to_string(),
                 mtime,
+                tag: Some("untagged".to_string()),
             });
         }
 
@@ -257,23 +279,52 @@ async fn read_or_list_impl(
         let resp = UssListResponse {
             items,
             returned_rows: total,
-            total_rows: total,
             json_version: 1,
         };
 
-        Ok(Json(resp).into_response())
+        let total_str = total.to_string();
+        Ok((
+            StatusCode::OK,
+            [("x-ibm-response-rows", total_str.as_str())],
+            Json(resp),
+        )
+            .into_response())
     } else {
         let content = std::fs::read(&full_path).map_err(|e| {
             ZosmfErrorResponse::internal(format!("Failed to read file: {}", e))
         })?;
 
-        let text = String::from_utf8_lossy(&content).to_string();
-        Ok((
-            StatusCode::OK,
-            [("content-type", "text/plain; charset=UTF-8")],
-            text,
-        )
-            .into_response())
+        let etag = compute_etag(&content);
+
+        // Check If-None-Match.
+        if let Some(if_none_match) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
+            if if_none_match == etag || if_none_match == "*" {
+                return Ok((StatusCode::NOT_MODIFIED, [("etag", etag.as_str())]).into_response());
+            }
+        }
+
+        if data_type == "binary" {
+            Ok((
+                StatusCode::OK,
+                [
+                    ("content-type", "application/octet-stream"),
+                    ("etag", etag.as_str()),
+                ],
+                content,
+            )
+                .into_response())
+        } else {
+            let text = String::from_utf8_lossy(&content).to_string();
+            Ok((
+                StatusCode::OK,
+                [
+                    ("content-type", "text/plain; charset=UTF-8"),
+                    ("etag", etag.as_str()),
+                ],
+                text,
+            )
+                .into_response())
+        }
     }
 }
 
@@ -281,17 +332,47 @@ async fn write_file_impl(
     state: &AppState,
     _auth: &AuthContext,
     uss_path: &str,
+    headers: &HeaderMap,
     body: Body,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let data_type = headers
+        .get("x-ibm-data-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("text");
     let full_path = resolve_uss_path(state, uss_path);
 
     let bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|_| ZosmfErrorResponse::bad_request("Failed to read request body"))?;
 
-    // Check if this is a JSON action request.
-    if let Ok(action) = serde_json::from_slice::<UssActionRequest>(&bytes) {
-        return uss_file_action(state, uss_path, &full_path, &action);
+    // Binary writes skip the JSON action check.
+    if data_type != "binary" {
+        // Check if this is a JSON action request.
+        if let Ok(action) = serde_json::from_slice::<UssActionRequest>(&bytes) {
+            return uss_file_action(state, uss_path, &full_path, &action);
+        }
+    }
+
+    // If-Match: verify ETag before writing (optimistic concurrency).
+    if let Some(if_match) = headers.get("if-match").and_then(|v| v.to_str().ok()) {
+        if full_path.exists() && full_path.is_file() {
+            if let Ok(current_content) = std::fs::read(&full_path) {
+                let current_etag = compute_etag(&current_content);
+                if if_match != current_etag && if_match != "*" {
+                    return Err(ZosmfErrorResponse {
+                        status: StatusCode::PRECONDITION_FAILED,
+                        body: crate::types::error::ZosmfErrorBody {
+                            rc: 4,
+                            reason: 0,
+                            category: 1,
+                            message: "ETag mismatch — content has been modified".to_string(),
+                            details: Vec::new(),
+                            stack: None,
+                        },
+                    });
+                }
+            }
+        }
     }
 
     // Content write path.
@@ -484,16 +565,73 @@ fn write_file_content(
     }
 }
 
+/// JSON body for USS create requests.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+struct UssCreateRequest {
+    /// Type of resource: "mkdir" or "file".
+    #[serde(rename = "type", default)]
+    create_type: Option<String>,
+    /// Unix permissions mode (e.g., "rwxr-xr-x" or "755").
+    #[serde(default)]
+    mode: Option<String>,
+}
+
 async fn create_dir_impl(
     state: &AppState,
     _auth: &AuthContext,
     uss_path: &str,
+    body: Body,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
     let full_path = resolve_uss_path(state, uss_path);
 
-    std::fs::create_dir_all(&full_path).map_err(|e| {
-        ZosmfErrorResponse::internal(format!("Failed to create directory: {}", e))
-    })?;
+    let bytes = axum::body::to_bytes(body, 1024 * 1024)
+        .await
+        .map_err(|_| ZosmfErrorResponse::bad_request("Failed to read request body"))?;
+
+    let create_req: Option<UssCreateRequest> = if bytes.is_empty() {
+        None
+    } else {
+        serde_json::from_slice(&bytes).ok()
+    };
+
+    let create_type = create_req
+        .as_ref()
+        .and_then(|r| r.create_type.as_deref())
+        .unwrap_or("mkdir");
+
+    let mode = create_req
+        .as_ref()
+        .and_then(|r| r.mode.as_deref());
+
+    if create_type == "file" {
+        // Create an empty file.
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ZosmfErrorResponse::internal(format!("Failed to create parent: {}", e))
+            })?;
+        }
+        std::fs::write(&full_path, b"").map_err(|e| {
+            ZosmfErrorResponse::internal(format!("Failed to create file: {}", e))
+        })?;
+    } else {
+        // Default: create directory.
+        std::fs::create_dir_all(&full_path).map_err(|e| {
+            ZosmfErrorResponse::internal(format!("Failed to create directory: {}", e))
+        })?;
+    }
+
+    // Apply mode if specified.
+    if let Some(mode_str) = mode {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode_val = u32::from_str_radix(mode_str.trim(), 8).unwrap_or(0o755);
+            let perms = std::fs::Permissions::from_mode(mode_val);
+            let _ = std::fs::set_permissions(&full_path, perms);
+        }
+        let _ = mode_str; // suppress unused warning on non-unix
+    }
 
     Ok(StatusCode::CREATED)
 }
@@ -502,7 +640,14 @@ async fn delete_path_impl(
     state: &AppState,
     _auth: &AuthContext,
     uss_path: &str,
+    headers: &HeaderMap,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let recursive = headers
+        .get("x-ibm-option")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_lowercase().contains("recursive"))
+        .unwrap_or(false);
+
     let full_path = resolve_uss_path(state, uss_path);
 
     if !full_path.exists() {
@@ -513,9 +658,19 @@ async fn delete_path_impl(
     }
 
     if full_path.is_dir() {
-        std::fs::remove_dir_all(&full_path).map_err(|e| {
-            ZosmfErrorResponse::internal(format!("Failed to delete directory: {}", e))
-        })?;
+        if recursive {
+            std::fs::remove_dir_all(&full_path).map_err(|e| {
+                ZosmfErrorResponse::internal(format!("Failed to delete directory: {}", e))
+            })?;
+        } else {
+            // Without recursive flag, only empty directories can be deleted.
+            std::fs::remove_dir(&full_path).map_err(|_| {
+                ZosmfErrorResponse::bad_request(format!(
+                    "Directory '{}' is not empty; use X-IBM-Option: recursive",
+                    uss_path
+                ))
+            })?;
+        }
     } else {
         std::fs::remove_file(&full_path).map_err(|e| {
             ZosmfErrorResponse::internal(format!("Failed to delete file: {}", e))
@@ -531,14 +686,29 @@ async fn delete_path_impl(
 async fn read_or_list_query(
     State(state): State<Arc<AppState>>,
     auth: AuthContext,
+    headers: HeaderMap,
     Query(query): Query<UssPathQuery>,
 ) -> std::result::Result<axum::response::Response, ZosmfErrorResponse> {
     let uss_path = query.path.unwrap_or_else(|| "/".to_string());
-    read_or_list_impl(&state, &auth, &uss_path).await
+    read_or_list_impl(&state, &auth, &uss_path, &headers).await
 }
 
 /// PUT /zosmf/restfiles/fs?path=/file — write file content.
 async fn write_file_query(
+    State(state): State<Arc<AppState>>,
+    auth: AuthContext,
+    headers: HeaderMap,
+    Query(query): Query<UssPathQuery>,
+    body: Body,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let uss_path = query
+        .path
+        .ok_or_else(|| ZosmfErrorResponse::bad_request("Missing 'path' query parameter"))?;
+    write_file_impl(&state, &auth, &uss_path, &headers, body).await
+}
+
+/// POST /zosmf/restfiles/fs?path=/dir — create directory.
+async fn create_dir_query(
     State(state): State<Arc<AppState>>,
     auth: AuthContext,
     Query(query): Query<UssPathQuery>,
@@ -547,31 +717,20 @@ async fn write_file_query(
     let uss_path = query
         .path
         .ok_or_else(|| ZosmfErrorResponse::bad_request("Missing 'path' query parameter"))?;
-    write_file_impl(&state, &auth, &uss_path, body).await
-}
-
-/// POST /zosmf/restfiles/fs?path=/dir — create directory.
-async fn create_dir_query(
-    State(state): State<Arc<AppState>>,
-    auth: AuthContext,
-    Query(query): Query<UssPathQuery>,
-) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
-    let uss_path = query
-        .path
-        .ok_or_else(|| ZosmfErrorResponse::bad_request("Missing 'path' query parameter"))?;
-    create_dir_impl(&state, &auth, &uss_path).await
+    create_dir_impl(&state, &auth, &uss_path, body).await
 }
 
 /// DELETE /zosmf/restfiles/fs?path=/file — delete file or directory.
 async fn delete_path_query(
     State(state): State<Arc<AppState>>,
     auth: AuthContext,
+    headers: HeaderMap,
     Query(query): Query<UssPathQuery>,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
     let uss_path = query
         .path
         .ok_or_else(|| ZosmfErrorResponse::bad_request("Missing 'path' query parameter"))?;
-    delete_path_impl(&state, &auth, &uss_path).await
+    delete_path_impl(&state, &auth, &uss_path, &headers).await
 }
 
 #[cfg(test)]
@@ -589,6 +748,7 @@ mod tests {
             gid: 1,
             group: "OMVSGRP".to_string(),
             mtime: "2025-01-15T10:30:00".to_string(),
+            tag: Some("untagged".to_string()),
         };
 
         let json = serde_json::to_string(&entry).unwrap();
@@ -611,6 +771,7 @@ mod tests {
                     gid: 0,
                     group: "OMVSGRP".to_string(),
                     mtime: "2025-01-15T10:30:00".to_string(),
+                    tag: None,
                 },
                 UssEntry {
                     name: "file1.txt".to_string(),
@@ -621,16 +782,16 @@ mod tests {
                     gid: 0,
                     group: "OMVSGRP".to_string(),
                     mtime: "2025-01-15T10:30:00".to_string(),
+                    tag: None,
                 },
             ],
             returned_rows: 2,
-            total_rows: 2,
             json_version: 1,
         };
 
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"returnedRows\":2"));
-        assert!(json.contains("\"totalRows\":2"));
+        assert!(!json.contains("\"totalRows\""));
         assert!(json.contains("\"JSONversion\":1"));
     }
 }

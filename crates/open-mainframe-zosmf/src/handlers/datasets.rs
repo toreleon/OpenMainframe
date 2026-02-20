@@ -23,9 +23,19 @@ use crate::state::AppState;
 use crate::types::auth::AuthContext;
 use crate::types::datasets::{
     DatasetCreateParams, DatasetListItem, DatasetListQuery, DatasetListResponse, MemberListItem,
-    MemberListResponse,
+    MemberListQuery, MemberListResponse,
 };
 use crate::types::error::ZosmfErrorResponse;
+
+/// Compute a simple ETag from content bytes using a hash.
+fn compute_etag(content: &[u8]) -> String {
+    // Simple CRC32-like hash for ETag.
+    let mut hash: u32 = 0;
+    for &byte in content {
+        hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+    }
+    format!("\"{:08X}\"", hash)
+}
 
 /// JSON body for dataset action requests (rename, copy, migrate, recall).
 #[derive(Debug, Clone, Deserialize)]
@@ -103,26 +113,34 @@ async fn list_datasets(
     _auth: AuthContext,
     headers: HeaderMap,
     Query(query): Query<DatasetListQuery>,
-) -> std::result::Result<Json<DatasetListResponse>, ZosmfErrorResponse> {
+) -> std::result::Result<impl IntoResponse, ZosmfErrorResponse> {
     // X-IBM-Max-Items: 0 means unlimited per z/OSMF spec.
-    let max_items: usize = headers
+    let max_items_raw: Option<usize> = headers
         .get("x-ibm-max-items")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse().ok())
-        .map(|n: usize| if n == 0 { usize::MAX } else { n })
+        .and_then(|v| v.parse().ok());
+    let max_items: usize = max_items_raw
+        .map(|n| if n == 0 { usize::MAX } else { n })
         .unwrap_or(usize::MAX);
 
     let attributes_filter = headers
         .get("x-ibm-attributes")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("base");
+        .unwrap_or("dsname");
 
     let catalog = state
         .catalog
         .read()
         .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
 
-    let all_names = catalog.list(&query.dslevel);
+    let mut all_names = catalog.list(&query.dslevel);
+
+    // Apply start filter for pagination.
+    if let Some(ref start) = query.start {
+        let start_upper = start.to_uppercase();
+        all_names.retain(|n| n.to_uppercase() > start_upper);
+    }
+
     let total_rows = all_names.len();
 
     let items: Vec<DatasetListItem> = all_names
@@ -130,7 +148,7 @@ async fn list_datasets(
         .take(max_items)
         .map(|dsn| {
             // Try to get full attributes via lookup.
-            if attributes_filter != "base" {
+            if attributes_filter == "base" || attributes_filter == "vol" {
                 if let Ok(dsref) = catalog.lookup(&dsn) {
                     return DatasetListItem {
                         dsname: dsn,
@@ -187,13 +205,27 @@ async fn list_datasets(
         .collect();
 
     let returned_rows = items.len();
+    let truncated = max_items_raw.is_some() && max_items_raw.unwrap() > 0 && total_rows > returned_rows;
 
-    Ok(Json(DatasetListResponse {
+    let status = if truncated {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+
+    let resp = DatasetListResponse {
         items,
         returned_rows,
-        total_rows,
         json_version: 1,
-    }))
+    };
+
+    let total_rows_str = total_rows.to_string();
+    Ok((
+        status,
+        [("x-ibm-response-rows", total_rows_str.as_str())],
+        Json(resp),
+    )
+        .into_response())
 }
 
 /// GET /zosmf/restfiles/ds/:dsn/member — list PDS members.
@@ -202,13 +234,15 @@ async fn list_members(
     _auth: AuthContext,
     headers: HeaderMap,
     Path(dsn): Path<String>,
-) -> std::result::Result<Json<MemberListResponse>, ZosmfErrorResponse> {
+    Query(member_query): Query<MemberListQuery>,
+) -> std::result::Result<impl IntoResponse, ZosmfErrorResponse> {
     // X-IBM-Max-Items: 0 means unlimited per z/OSMF spec.
-    let max_items: usize = headers
+    let max_items_raw: Option<usize> = headers
         .get("x-ibm-max-items")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse().ok())
-        .map(|n: usize| if n == 0 { usize::MAX } else { n })
+        .and_then(|v| v.parse().ok());
+    let max_items: usize = max_items_raw
+        .map(|n| if n == 0 { usize::MAX } else { n })
         .unwrap_or(usize::MAX);
 
     let catalog = state
@@ -233,9 +267,35 @@ async fn list_members(
     })?;
 
     let all_members = pds.list_members();
-    let total_rows = all_members.len();
 
-    let items: Vec<MemberListItem> = all_members
+    // Apply pattern filter (supports `*` wildcard).
+    let filtered_members: Vec<_> = all_members
+        .into_iter()
+        .filter(|m| {
+            if let Some(ref pat) = member_query.pattern {
+                let pat_upper = pat.to_uppercase();
+                if pat_upper.contains('*') {
+                    let prefix = pat_upper.split('*').next().unwrap_or("");
+                    m.name.to_uppercase().starts_with(prefix)
+                } else {
+                    m.name.to_uppercase() == pat_upper
+                }
+            } else {
+                true
+            }
+        })
+        .filter(|m| {
+            if let Some(ref start) = member_query.start {
+                m.name.to_uppercase() > start.to_uppercase()
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    let total_rows = filtered_members.len();
+
+    let items: Vec<MemberListItem> = filtered_members
         .iter()
         .take(max_items)
         .map(|m| {
@@ -265,21 +325,79 @@ async fn list_members(
         .collect();
 
     let returned_rows = items.len();
+    let truncated = max_items_raw.is_some() && max_items_raw.unwrap() > 0 && total_rows > returned_rows;
 
-    Ok(Json(MemberListResponse {
+    let status = if truncated {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+
+    let resp = MemberListResponse {
         items,
         returned_rows,
-        total_rows,
         json_version: 1,
-    }))
+    };
+
+    let total_rows_str = total_rows.to_string();
+    Ok((
+        status,
+        [("x-ibm-response-rows", total_rows_str.as_str())],
+        Json(resp),
+    )
+        .into_response())
+}
+
+/// Build a content response with ETag header, supporting If-None-Match.
+fn build_content_response(
+    content: &[u8],
+    data_type: &str,
+    headers: &HeaderMap,
+) -> std::result::Result<axum::response::Response, ZosmfErrorResponse> {
+    let etag = compute_etag(content);
+
+    // Check If-None-Match.
+    if let Some(if_none_match) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
+        if if_none_match == etag || if_none_match == "*" {
+            return Ok((StatusCode::NOT_MODIFIED, [("etag", etag.as_str())]).into_response());
+        }
+    }
+
+    if data_type == "binary" {
+        Ok((
+            StatusCode::OK,
+            [
+                ("content-type", "application/octet-stream"),
+                ("etag", etag.as_str()),
+            ],
+            content.to_vec(),
+        )
+            .into_response())
+    } else {
+        let text = String::from_utf8_lossy(content).to_string();
+        Ok((
+            StatusCode::OK,
+            [
+                ("content-type", "text/plain; charset=UTF-8"),
+                ("etag", etag.as_str()),
+            ],
+            text,
+        )
+            .into_response())
+    }
 }
 
 /// GET /zosmf/restfiles/ds/:dsn — read dataset or member content.
 async fn read_dataset(
     State(state): State<Arc<AppState>>,
     _auth: AuthContext,
+    headers: HeaderMap,
     Path(dsn): Path<String>,
 ) -> std::result::Result<impl IntoResponse, ZosmfErrorResponse> {
+    let data_type = headers
+        .get("x-ibm-data-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("text");
     let (ds_name, member) = parse_dsn(&dsn);
 
     let catalog = state
@@ -316,12 +434,7 @@ async fn read_dataset(
             ))
         })?;
 
-        let text = String::from_utf8_lossy(&content).to_string();
-        Ok((
-            StatusCode::OK,
-            [("content-type", "text/plain; charset=UTF-8")],
-            text,
-        ))
+        build_content_response(&content, data_type, &headers)
     } else {
         // Read sequential dataset.
         let dsref = catalog.lookup(ds_name).map_err(|_| {
@@ -350,12 +463,7 @@ async fn read_dataset(
             ))
         })?;
 
-        let text = String::from_utf8_lossy(&content).to_string();
-        Ok((
-            StatusCode::OK,
-            [("content-type", "text/plain; charset=UTF-8")],
-            text,
-        ))
+        build_content_response(&content, data_type, &headers)
     }
 }
 
@@ -366,16 +474,61 @@ async fn read_dataset(
 async fn write_dataset(
     State(state): State<Arc<AppState>>,
     _auth: AuthContext,
+    headers: HeaderMap,
     Path(dsn): Path<String>,
     body: Body,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let data_type = headers
+        .get("x-ibm-data-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("text");
+
     let bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|_| ZosmfErrorResponse::bad_request("Failed to read request body"))?;
 
-    // Check if this is a JSON action request by attempting to parse.
-    if let Ok(action) = serde_json::from_slice::<DatasetActionRequest>(&bytes) {
-        return dataset_action(&state, &dsn, &action);
+    // Binary writes skip the JSON action check — raw bytes are never JSON actions.
+    if data_type != "binary" {
+        // Check if this is a JSON action request by attempting to parse.
+        if let Ok(action) = serde_json::from_slice::<DatasetActionRequest>(&bytes) {
+            return dataset_action(&state, &dsn, &action);
+        }
+    }
+
+    // If-Match: verify ETag before writing (optimistic concurrency).
+    if let Some(if_match) = headers.get("if-match").and_then(|v| v.to_str().ok()) {
+        let (ds_name, member) = parse_dsn(&dsn);
+        let catalog = state
+            .catalog
+            .read()
+            .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
+
+        let current_content = if let Some(member_name) = member {
+            let dsref = catalog.lookup(ds_name).ok();
+            dsref
+                .and_then(|d| d.path.as_ref().and_then(|p| Pds::open(p).ok()))
+                .and_then(|pds| pds.read_member(member_name).ok())
+        } else {
+            let dsref = catalog.lookup(ds_name).ok();
+            dsref.and_then(|d| d.path.as_ref().and_then(|p| std::fs::read(p).ok()))
+        };
+
+        if let Some(content) = current_content {
+            let current_etag = compute_etag(&content);
+            if if_match != current_etag && if_match != "*" {
+                return Err(ZosmfErrorResponse {
+                    status: StatusCode::PRECONDITION_FAILED,
+                    body: crate::types::error::ZosmfErrorBody {
+                        rc: 4,
+                        reason: 0,
+                        category: 1,
+                        message: "ETag mismatch — content has been modified".to_string(),
+                        details: Vec::new(),
+                        stack: None,
+                    },
+                });
+            }
+        }
     }
 
     // Content write path.
@@ -792,7 +945,6 @@ mod tests {
                 dsntp: None,
             }],
             returned_rows: 1,
-            total_rows: 1,
             json_version: 1,
         };
 
@@ -816,7 +968,6 @@ mod tests {
                 inorc: Some(100),
             }],
             returned_rows: 1,
-            total_rows: 1,
             json_version: 1,
         };
 

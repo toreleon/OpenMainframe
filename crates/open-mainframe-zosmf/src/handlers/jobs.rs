@@ -195,6 +195,11 @@ async fn list_jobs(
     let owner_filter = query.owner.as_deref().unwrap_or(&auth.userid);
     let prefix_filter = query.prefix.as_deref().unwrap_or("*");
 
+    let max_jobs: usize = query
+        .max_jobs
+        .map(|n| if n == 0 { usize::MAX } else { n })
+        .unwrap_or(usize::MAX);
+
     let jobs: Vec<JobResponse> = jes
         .all_jobs()
         .into_iter()
@@ -214,6 +219,7 @@ async fn list_jobs(
                 .unwrap_or(true);
             owner_match && prefix_match && status_match && jobid_match
         })
+        .take(max_jobs)
         .map(job_to_response)
         .collect();
 
