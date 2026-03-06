@@ -38,6 +38,7 @@ members = [
     "crates/open-mainframe-focus",
     "crates/open-mainframe-drda",
     "crates/open-mainframe-symbolic",
+    "crates/open-mainframe-wiki",
     "crates/open-mainframe",
 ]
 
@@ -124,6 +125,7 @@ open-mainframe-focus = { path = "crates/open-mainframe-focus" }
 open-mainframe-rexx = { path = "crates/open-mainframe-rexx" }
 open-mainframe-drda = { path = "crates/open-mainframe-drda" }
 open-mainframe-symbolic = { path = "crates/open-mainframe-symbolic" }
+open-mainframe-wiki = { path = "crates/open-mainframe-wiki" }
 open-mainframe-lib = { path = "crates/open-mainframe", package = "open-mainframe" }
 
 # Z3 theorem prover

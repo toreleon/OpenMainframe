@@ -1507,6 +1507,7 @@ dependencies = [
  "open-mainframe-precompilers",
  "open-mainframe-runtime",
  "open-mainframe-tui",
+ "open-mainframe-wiki",
  "serde",
  "serde_json",
  "thiserror",
@@ -1916,6 +1917,23 @@ name = "open-mainframe-utilities"
 version = "0.1.0"
 dependencies = [
  "miette",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "open-mainframe-wiki"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "open-mainframe-assess",
+ "open-mainframe-cics",
+ "open-mainframe-cobol",
+ "open-mainframe-dataset",
+ "open-mainframe-encoding",
+ "open-mainframe-jcl",
  "serde",
  "serde_json",
  "thiserror",

@@ -31,6 +31,8 @@ struct Cli {
 enum Commands {
     /// Run an interactive CICS terminal session (3270 TUI).
     Cics(CicsArgs),
+    /// Generate a Mainframe Code Wiki from source files.
+    Wiki(open_mainframe_wiki::WikiArgs),
 }
 
 #[derive(Parser)]
@@ -75,6 +77,23 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Wiki(args) => {
+            let verbose = args.verbose;
+            if verbose || std::env::var("RUST_LOG").is_ok() {
+                let filter = if std::env::var("RUST_LOG").is_ok() {
+                    tracing_subscriber::EnvFilter::from_default_env()
+                } else {
+                    tracing_subscriber::EnvFilter::new("info")
+                };
+                tracing_subscriber::fmt()
+                    .with_env_filter(filter)
+                    .init();
+            }
+            if let Err(e) = open_mainframe_wiki::run_wiki(args) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
         Commands::Cics(args) => {
             let headless = args.headless;
 

@@ -21,6 +21,7 @@ open-mainframe-runtime.workspace = true
 open-mainframe-cics.workspace = true
 open-mainframe-tui.workspace = true
 open-mainframe-precompilers.workspace = true
+open-mainframe-wiki.workspace = true
 
 clap.workspace = true
 serde.workspace = true
