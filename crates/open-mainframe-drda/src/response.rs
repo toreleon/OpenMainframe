@@ -174,44 +174,41 @@ pub fn build_sqldard(columns: &[ColumnDesc]) -> DdmObject {
     let mut payload = BytesMut::new();
 
     // ── SQLCAGRP (full SQLCA, matching Derby's writeSQLCAGRP) ──
-    // Derby sends a full SQLCAGRP with SQLCODE=0, not a null indicator
     write_sqlcagrp_success(&mut payload);
 
-    // ── SQLDHROW (holdability group) — DB2 format ──
-    // pydrda expects: null_ind(1) + 12 bytes + VCM(sqlrdbnam) + parse_name(sqlschema)
-    // The 12 bytes appear to be: SQLDHOLD(2) + SQLSENSITIVITY(2) + padding(8)
-    // SQLDHOLD and padding are skipped by pydrda (rest = rest[13:])
-    // VCM/VCS lengths use big-endian (parse_string hardcodes 'big')
-    payload.put_u8(0x00);            // present
-    payload.put_u16(1);              // SQLDHOLD = 1 (part of 12-byte block, skipped)
-    payload.extend_from_slice(&[0x00; 10]); // remaining 10 bytes of the 12-byte block
-    // SQLDRDBNAM (VCM: 2-byte length) — big-endian
+    // ── SQLDHGRP (descriptor header group, SQLAM >= 7) ──
+    // Format: null_ind(1) + 6 x INT16 fields (12 bytes) + VCS/VCM strings
+    // Fields: SQLDHOLD, SQLDRETURN, SQLDSCROLL, SQLDSENSITIVE, SQLDFCODE, SQLDKEYTYPE
+    // All INT16 fields use endian from TYPDEFNAM (LE for QTDSQLX86).
+    // VCM/VCS lengths always big-endian.
+    payload.put_u8(0x00);               // present
+    payload.put_u16_le(0);              // SQLDHOLD (0 = no hold)
+    payload.put_u16_le(0);              // SQLDRETURN
+    payload.put_u16_le(0);              // SQLDSCROLL (0 = non-scrollable)
+    payload.put_u16_le(0);              // SQLDSENSITIVE (0 = insensitive)
+    payload.put_u16_le(0);              // SQLDFCODE
+    payload.put_u16_le(0);              // SQLDKEYTYPE
+    // SQLDRDBNAM (VCS) — big-endian length
     payload.put_u16(0);
-    // SQLDSCHEMA (VCM + VCS) — big-endian
-    payload.put_u16(0);              // VCM length = 0
-    payload.put_u16(0);              // VCS length = 0
+    // SQLDSCHEMA (VCM + VCS) — big-endian lengths
+    payload.put_u16(0);                 // VCM length = 0
+    payload.put_u16(0);                 // VCS length = 0
 
     // ── SQLD (number of columns, little-endian) ──
     payload.put_u16_le(columns.len() as u16);
 
-    // ── Per-column SQLDAGRP entries (DB2 format, matching pydrda expectations) ──
+    // ── Per-column SQLDAGRP entries (standard DRDA / Derby format) ──
     //
-    // DB2 column descriptor layout (from pydrda _parse_column_db2):
-    //   [0:2]   SQLPRECISION
-    //   [2:4]   SQLSCALE
-    //   [4:12]  SQLLENGTH (8 bytes, long form)
-    //   [12:14] SQLTYPE
-    //   [14:16] SQLCCSID
-    //   [16:22] 6 bytes: DB2 extension fields (skipped by pydrda `b = b[6:]`)
-    //   SQLDOPTGRP:
-    //     [0]     null_ind (0x00 = present)
-    //     [1:3]   SQLUNAMED (2 bytes)
-    //     ...     SQLNAME (VCM + VCS)
-    //     ...     SQLLABEL (VCM + VCS)
-    //     ...     SQLCOMMENTS (VCM + VCS)
-    //     [7 bytes] trailing (SQLUDTGRP + SQLDXGRP, skipped by pydrda `b = b[7:]`)
+    // Standard DRDA SQLDAGRP (SQLAM 7):
+    //   SQLPRECISION (2), SQLSCALE (2), SQLLENGTH (8), SQLTYPE (2), SQLCCSID (2) = 16 bytes
+    //   SQLDOPTGRP (nullable group)
+    //   SQLUDTGRP  (nullable group)
+    //   SQLDXGRP   (nullable group)
+    //
+    // No proprietary 6-byte extension between SQLCCSID and SQLDOPTGRP.
+    // Both ibm_db (CLI) and pydrda (db_type='derby') parse this format.
     for col in columns {
-        // Basic column fields (16 bytes, all little-endian for QTDSQLX86)
+        // Basic column fields (16 bytes, LE for QTDSQLX86 except SQLCCSID)
         let precision = if col.precision == 0 {
             default_precision(col.data_type)
         } else {
@@ -228,20 +225,16 @@ pub fn build_sqldard(columns: &[ColumnDesc]) -> DdmObject {
         };
         payload.put_u16(ccsid); // big-endian (pydrda hardcodes 'big' for sqlccsid)
 
-        // ── DB2 extension (6 bytes, skipped by pydrda: `b = b[6:]`) ──
-        // These appear to be SQLDAGRP extension fields present in DB2 format.
-        payload.extend_from_slice(&[0x00; 6]);
-
-        // ── SQLDOPTGRP ──
+        // ── SQLDOPTGRP (not null) ──
         payload.put_u8(0x00);       // not null
         payload.put_u16(0);         // SQLUNAMED = 0 (named)
-        // SQLNAME (VCM + VCS) — VCM/VCS lengths are always big-endian
+        // SQLNAME (VCM + VCS) — VCM/VCS lengths always big-endian
         let name_bytes = col.name.as_bytes();
         if name_bytes.is_empty() {
             payload.put_u16(0);     // VCM = empty
             payload.put_u16(0);     // VCS = empty
         } else {
-            payload.put_u16(name_bytes.len() as u16); // VCM length (big-endian)
+            payload.put_u16(name_bytes.len() as u16); // VCM length
             payload.extend_from_slice(name_bytes);
             payload.put_u16(0);     // VCS = empty
         }
@@ -252,11 +245,28 @@ pub fn build_sqldard(columns: &[ColumnDesc]) -> DdmObject {
         payload.put_u16(0);
         payload.put_u16(0);
 
-        // ── Trailing 7 bytes (skipped by pydrda: `b = b[7:]`) ──
-        // SQLUDTGRP null indicator + SQLDXGRP (null/compact form)
-        payload.put_u8(0xFF);       // SQLUDTGRP null
-        payload.put_u8(0xFF);       // SQLDXGRP null
-        payload.extend_from_slice(&[0x00; 5]); // remaining 5 bytes of trailing block
+        // ── SQLUDTGRP (null — no user-defined type info) ──
+        payload.put_u8(0xFF);
+
+        // ── SQLDXGRP (not null — required by Derby/pydrda parser) ──
+        // Format: null_ind(1) + 8 fixed bytes + VCS(sqlxrdbnam) +
+        //         VCM+VCS(sqlxcolname) + VCM+VCS(sqlxbasename) +
+        //         VCM+VCS(sqlxschema) + VCM+VCS(sqlxname)
+        payload.put_u8(0x00);       // not null
+        payload.extend_from_slice(&[0x00; 8]); // 8 fixed bytes (SQLXKEYMEM etc.)
+        payload.put_u16(0);         // SQLXRDBNAM VCS = empty
+        // SQLXCOLNAME (VCM + VCS)
+        payload.put_u16(0);
+        payload.put_u16(0);
+        // SQLXBASENAME (VCM + VCS)
+        payload.put_u16(0);
+        payload.put_u16(0);
+        // SQLXSCHEMA (VCM + VCS)
+        payload.put_u16(0);
+        payload.put_u16(0);
+        // SQLXNAME (VCM + VCS)
+        payload.put_u16(0);
+        payload.put_u16(0);
     }
 
     DdmObject::new(SQLDARD, payload.to_vec())

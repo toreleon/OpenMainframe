@@ -140,11 +140,12 @@ impl QueryState {
         let row_count = rows.len();
 
         // Build initial response with first batch of rows
+        let opnqryrm = response::build_opnqryrm();
+        let sqlcard = response::build_sqlcard_success(0);
         let qrydsc = response::build_qrydsc(&columns);
         let qrydta = response::build_qrydta(&rows, &columns);
-        let opnqryrm = response::build_opnqryrm();
 
-        // If we returned all rows, send ENDQRYRM; otherwise keep cursor open
+        // Store cursor for potential CNTQRY follow-ups
         let cursor = QueryCursor {
             columns,
             rows: Vec::new(), // all rows already sent
@@ -152,31 +153,20 @@ impl QueryState {
         };
         self.cursors.insert(cursor_id, cursor);
 
-        // Response format:
-        //   OPNQRYRM (Reply, chained)
-        //   → QRYDSC (Object, chained)
-        //   → QRYDTA (Object, chained)
-        //   → ENDQRYRM (Reply, chained)
-        //   → SQLCARD (Object, last)
-        let endqryrm = response::build_endqryrm();
-        let sqlcard = response::build_sqlcard_not_found();
-
-        let mut segments = vec![
+        // Derby-compatible response format for initial OPNQRY:
+        //   OPNQRYRM (Reply DSS, chained)
+        //   → SQLCARD  (Object DSS, chained) — status/warnings
+        //   → QRYDSC   (Object DSS, chained) — column format
+        //   → QRYDTA   (Object DSS, last)    — row data
+        //
+        // No ENDQRYRM in initial response. End-of-data is signaled when
+        // the client sends CNTQRY and the cursor is exhausted.
+        Ok(vec![
             response::reply_dss_chained_same_corr(correlation_id, &opnqryrm),
-        ];
-
-        if row_count > 0 {
-            segments.push(response::object_dss_chained_same_corr(correlation_id, &qrydsc));
-            segments.push(response::object_dss_chained_same_corr(correlation_id, &qrydta));
-            segments.push(response::reply_dss_chained_same_corr(correlation_id, &endqryrm));
-            segments.push(response::object_dss(correlation_id, &sqlcard));
-        } else {
-            segments.push(response::object_dss_chained_same_corr(correlation_id, &qrydsc));
-            segments.push(response::reply_dss_chained_same_corr(correlation_id, &endqryrm));
-            segments.push(response::object_dss(correlation_id, &sqlcard));
-        }
-
-        Ok(segments)
+            response::object_dss_chained_same_corr(correlation_id, &sqlcard),
+            response::object_dss_chained_same_corr(correlation_id, &qrydsc),
+            response::object_dss(correlation_id, &qrydta),
+        ])
     }
 
     /// Handle CNTQRY (Continue Query — fetch more rows).
@@ -238,17 +228,14 @@ impl QueryState {
         // SQLCARD after PRPSQLSTT must be Object DSS (type=3), not Reply DSS
         let sql_upper = sql.trim().to_uppercase();
         if sql_upper.starts_with("SELECT") {
-            // For SELECT: send SQLDARD (Reply DSS) + SQLCARD (Object DSS)
-            // Both at the same correlation ID to complete the PRPSQLSTT response.
-            // Without the SQLCARD, the client sees the next command's reply
-            // (e.g., OPNQRYRM) as an invalid code point for PRPSQLSTT.
+            // For SELECT: send SQLDARD as Object DSS (type 3).
+            // SQLDARD is a data object, not a reply message — must use Object DSS.
+            // Reply DSS (type 2) is only for "RM" suffix reply messages.
+            // SQLDARD already contains an embedded SQLCAGRP with SQLCODE/SQLSTATE.
+            // SQLDARD and SQLCARD are mutually exclusive for PRPSQLSTT.
             let (columns, _) = self.generate_mock_results(&sql);
             let sqldard = response::build_sqldard(&columns);
-            let sqlcard = response::build_sqlcard_success(0);
-            Ok(vec![
-                response::reply_dss(correlation_id, &sqldard),
-                response::object_dss(correlation_id, &sqlcard),
-            ])
+            Ok(vec![response::object_dss(correlation_id, &sqldard)])
         } else {
             let sqlcard = response::build_sqlcard_success(0);
             Ok(vec![response::object_dss(correlation_id, &sqlcard)])
