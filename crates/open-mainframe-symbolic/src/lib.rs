@@ -25,6 +25,7 @@
 //! ```
 
 pub mod cli;
+pub mod gnucobol;
 pub mod interpreter;
 pub mod lowering;
 pub mod model_checker;
@@ -33,6 +34,7 @@ pub mod solver;
 pub mod sort;
 pub mod spec;
 pub mod state;
+pub mod testgen;
 pub mod value;
 
 // Re-export key types at crate root for convenience.
@@ -47,4 +49,8 @@ pub use sort::Sort;
 pub use lowering::{lower_cobol_file, lower_cobol_source, LoweringResult, LoweringStats};
 pub use spec::{Property, PropertyLocation};
 pub use state::{CallFrame, ExecutionState};
+pub use testgen::{
+    generate_test_suite, TestCase, TestCategory, TestSuite, TestValue,
+    EquivalenceResult, GenerationStats,
+};
 pub use value::{ExprOp, SymbolicValue};

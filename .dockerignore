@@ -8,3 +8,4 @@ packaging/
 scripts/
 .github/
 .claude/
+tmp/

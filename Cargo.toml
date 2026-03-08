@@ -129,5 +129,5 @@ open-mainframe-wiki = { path = "crates/open-mainframe-wiki" }
 open-mainframe-lib = { path = "crates/open-mainframe", package = "open-mainframe" }
 
 # Z3 theorem prover
-z3 = { version = "0.12", features = ["static-link-z3"] }
-z3-sys = "0.9"
+z3 = { version = "0.12" }
+z3-sys = "0.8"

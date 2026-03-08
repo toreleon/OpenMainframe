@@ -12,3 +12,6 @@
 *.pdb
 
 carddemo-config/*
+
+# Temporary files
+tmp/
