@@ -37,6 +37,7 @@ members = [
     "crates/open-mainframe-natural",
     "crates/open-mainframe-focus",
     "crates/open-mainframe-drda",
+    "crates/open-mainframe-symbolic",
     "crates/open-mainframe",
 ]
 
@@ -122,4 +123,9 @@ open-mainframe-natural = { path = "crates/open-mainframe-natural" }
 open-mainframe-focus = { path = "crates/open-mainframe-focus" }
 open-mainframe-rexx = { path = "crates/open-mainframe-rexx" }
 open-mainframe-drda = { path = "crates/open-mainframe-drda" }
+open-mainframe-symbolic = { path = "crates/open-mainframe-symbolic" }
 open-mainframe-lib = { path = "crates/open-mainframe", package = "open-mainframe" }
+
+# Z3 theorem prover
+z3 = { version = "0.12", features = ["static-link-z3"] }
+z3-sys = "0.9"

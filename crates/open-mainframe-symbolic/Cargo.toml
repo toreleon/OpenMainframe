@@ -1,0 +1,23 @@
+[package]
+name = "open-mainframe-symbolic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Symbolic execution and formal verification engine for OpenMainframe"
+
+[[bin]]
+name = "openmf-symbolic"
+path = "src/main.rs"
+
+[dependencies]
+open-mainframe-lang-core = { workspace = true }
+open-mainframe-cobol = { path = "../open-mainframe-cobol" }
+z3 = { workspace = true }
+thiserror = { workspace = true }
+rust_decimal = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
