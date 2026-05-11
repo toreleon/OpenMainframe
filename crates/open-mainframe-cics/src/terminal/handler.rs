@@ -3,6 +3,7 @@
 //! Represents a 3270 terminal with screen buffer and input handling.
 
 use super::screen::{ScreenBuffer, ScreenPosition};
+use super::SendMapOptions;
 use crate::bms::{BmsField, BmsMap, MapRenderer, ScreenSize};
 use crate::runtime::eib::aid;
 use crate::{CicsError, CicsResult};
@@ -99,26 +100,28 @@ impl Terminal {
         &mut self,
         map: &BmsMap,
         renderer: &MapRenderer,
-        cursor: Option<ScreenPosition>,
+        options: &SendMapOptions,
     ) -> CicsResult<()> {
         let (_, cols) = self.screen.dimensions();
 
         for field in &map.fields {
-            // Write attribute
-            let attr_pos = ScreenPosition::from_offset(field.attribute_position(cols), cols);
-            self.screen.write_attribute(attr_pos, field.attributes.to_attribute_byte());
+            if !options.dataonly {
+                let attr_pos = ScreenPosition::from_offset(field.attribute_position(cols), cols);
+                self.screen
+                    .write_attribute(attr_pos, field.attributes.to_attribute_byte());
+            }
 
             // Write field data
             let field_pos = ScreenPosition::new(field.row, field.column);
-            let data = self.get_field_display_data(field, renderer);
-            self.screen.write_string(field_pos, &data);
+            if !options.maponly {
+                let data = self.get_field_display_data(field, renderer);
+                self.screen.write_string(field_pos, &data);
+            }
 
             // Store field position
             if !field.name.is_empty() {
-                self.field_positions.insert(
-                    field.name.to_uppercase(),
-                    (field_pos, field.length)
-                );
+                self.field_positions
+                    .insert(field.name.to_uppercase(), (field_pos, field.length));
             }
 
             // Set cursor if field has IC attribute
@@ -128,7 +131,7 @@ impl Terminal {
         }
 
         // Override cursor if specified
-        if let Some(pos) = cursor {
+        if let Some(pos) = options.cursor {
             self.screen.set_cursor(pos);
         }
 
@@ -136,15 +139,8 @@ impl Terminal {
         Ok(())
     }
 
-    fn get_field_display_data(&self, field: &BmsField, _renderer: &MapRenderer) -> Vec<u8> {
-        // This is a simplified version - in practice would use the renderer
-        if let Some(initial) = &field.initial {
-            let mut data = initial.as_bytes().to_vec();
-            data.resize(field.length, b' ');
-            data
-        } else {
-            vec![b' '; field.length]
-        }
+    fn get_field_display_data(&self, field: &BmsField, renderer: &MapRenderer) -> Vec<u8> {
+        renderer.field_display_data(field)
     }
 
     /// Extract map data from screen buffer.
@@ -280,13 +276,51 @@ NAME     DFHMDF POS=(1,12),LENGTH=20,ATTRB=(UNPROT,IC)
         let map = create_test_map();
         let renderer = MapRenderer::new(ScreenSize::Model2);
 
-        term.apply_map(&map, &renderer, None).unwrap();
+        term.apply_map(&map, &renderer, &SendMapOptions::default())
+            .unwrap();
 
         assert_eq!(term.current_map(), None); // Must be set explicitly
         assert_eq!(term.state(), TerminalState::WaitingForInput);
 
         // Check cursor is at NAME field (IC attribute)
         assert_eq!(term.cursor(), ScreenPosition::new(1, 12));
+    }
+
+    #[test]
+    fn test_apply_map_dataonly_updates_data_without_attributes() {
+        let mut term = Terminal::new("T001", ScreenSize::Model2);
+        let mut map = create_test_map();
+        let renderer = MapRenderer::new(ScreenSize::Model2);
+
+        term.apply_map(&map, &renderer, &SendMapOptions::default())
+            .unwrap();
+
+        let (_, cols) = term.screen.dimensions();
+        let name_field_index = 1;
+        let attr_pos = ScreenPosition::from_offset(
+            map.fields[name_field_index].attribute_position(cols),
+            cols,
+        );
+        let before_attr = term.screen.get(attr_pos).and_then(|cell| cell.attribute);
+        assert!(before_attr.is_some());
+        assert!(!before_attr.unwrap().is_protected());
+
+        map.fields[name_field_index].attributes.protected = true;
+        let mut update_renderer = MapRenderer::new(ScreenSize::Model2);
+        update_renderer.set_field_string("NAME", "UPDATED");
+        let options = SendMapOptions {
+            dataonly: true,
+            ..Default::default()
+        };
+
+        term.apply_map(&map, &update_renderer, &options).unwrap();
+
+        let after_attr = term.screen.get(attr_pos).and_then(|cell| cell.attribute);
+        assert_eq!(after_attr, before_attr);
+        assert_eq!(
+            term.screen.read_range(ScreenPosition::new(1, 12), 7),
+            b"UPDATED"
+        );
     }
 
     #[test]
@@ -320,7 +354,8 @@ NAME     DFHMDF POS=(1,12),LENGTH=20,ATTRB=(UNPROT,IC)
         let renderer = MapRenderer::new(ScreenSize::Model2);
 
         // Apply map
-        term.apply_map(&map, &renderer, None).unwrap();
+        term.apply_map(&map, &renderer, &SendMapOptions::default())
+            .unwrap();
         term.set_current_map(Some(map.name.clone()));
 
         // Set input
@@ -331,7 +366,10 @@ NAME     DFHMDF POS=(1,12),LENGTH=20,ATTRB=(UNPROT,IC)
         // Extract
         let data = term.extract_map_data(&map).unwrap();
 
-        assert_eq!(data.get("NAME").map(|v| v.as_slice()), Some(b"Test User".as_slice()));
+        assert_eq!(
+            data.get("NAME").map(|v| v.as_slice()),
+            Some(b"Test User".as_slice())
+        );
     }
 
     // === Story 203.2: Dynamic terminal screen size ===

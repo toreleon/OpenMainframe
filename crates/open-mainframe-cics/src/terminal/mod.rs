@@ -11,7 +11,7 @@ mod screen;
 pub use handler::{Terminal, TerminalState};
 pub use screen::{ScreenBuffer, ScreenPosition};
 
-use crate::bms::{BmsMap, ScreenSize, MapRenderer};
+use crate::bms::{BmsMap, MapRenderer, ScreenSize};
 use crate::{CicsError, CicsResult};
 use std::collections::HashMap;
 
@@ -35,10 +35,7 @@ pub trait TerminalCallback: Send {
 
     /// Called when a RECEIVE MAP command needs user input.
     /// Returns the AID key pressed and a map of field name -> field data.
-    fn on_receive_map(
-        &mut self,
-        map: &BmsMap,
-    ) -> CicsResult<(u8, HashMap<String, Vec<u8>>)>;
+    fn on_receive_map(&mut self, map: &BmsMap) -> CicsResult<(u8, HashMap<String, Vec<u8>>)>;
 
     /// Called when a RECEIVE command needs raw terminal input.
     /// Returns raw input data and the AID key.
@@ -143,7 +140,7 @@ impl TerminalManager {
         }
 
         // Apply map to terminal screen buffer
-        terminal.apply_map(map, &renderer, options.cursor)?;
+        terminal.apply_map(map, &renderer, &options)?;
 
         // Record map name
         terminal.set_current_map(Some(map.name.clone()));
@@ -164,10 +161,7 @@ impl TerminalManager {
         let count = pages.len();
 
         if count > 0 {
-            self.delivered_pages
-                .entry(tid)
-                .or_default()
-                .push(pages);
+            self.delivered_pages.entry(tid).or_default().push(pages);
         }
 
         Ok(count)
@@ -228,11 +222,7 @@ impl TerminalManager {
     }
 
     /// Execute RECEIVE.
-    pub fn receive(
-        &mut self,
-        terminal_id: &str,
-        max_length: usize,
-    ) -> CicsResult<(Vec<u8>, u8)> {
+    pub fn receive(&mut self, terminal_id: &str, max_length: usize) -> CicsResult<(Vec<u8>, u8)> {
         let terminal = self.get_mut(terminal_id).ok_or_else(|| {
             CicsError::InvalidRequest(format!("Terminal {} not found", terminal_id))
         })?;
@@ -418,7 +408,9 @@ STATUS   DFHMDF POS=(7,10),LENGTH=15,ATTRB=(PROT)
 
         // First send the map
         let data = HashMap::new();
-        manager.send_map("T001", &map, &data, SendMapOptions::initial()).unwrap();
+        manager
+            .send_map("T001", &map, &data, SendMapOptions::initial())
+            .unwrap();
 
         // Simulate user input
         let mut input = HashMap::new();
@@ -429,8 +421,14 @@ STATUS   DFHMDF POS=(7,10),LENGTH=15,ATTRB=(PROT)
         // Receive map data
         let received = manager.receive_map("T001", &map).unwrap();
 
-        assert_eq!(received.get("NAME").map(|v| v.as_slice()), Some(b"Jane Smith".as_slice()));
-        assert_eq!(received.get("AMOUNT").map(|v| v.as_slice()), Some(b"2500".as_slice()));
+        assert_eq!(
+            received.get("NAME").map(|v| v.as_slice()),
+            Some(b"Jane Smith".as_slice())
+        );
+        assert_eq!(
+            received.get("AMOUNT").map(|v| v.as_slice()),
+            Some(b"2500".as_slice())
+        );
     }
 
     #[test]
@@ -440,7 +438,10 @@ STATUS   DFHMDF POS=(7,10),LENGTH=15,ATTRB=(PROT)
         let result = manager.send_text(
             "T001",
             "Welcome to the system",
-            SendTextOptions { erase: true, ..Default::default() }
+            SendTextOptions {
+                erase: true,
+                ..Default::default()
+            },
         );
 
         assert!(result.is_ok());
@@ -501,7 +502,9 @@ STATUS   DFHMDF POS=(7,10),LENGTH=15,ATTRB=(PROT)
             ..Default::default()
         };
 
-        manager.send_map("T001", &map, &data1, opts.clone()).unwrap();
+        manager
+            .send_map("T001", &map, &data1, opts.clone())
+            .unwrap();
         manager.send_map("T001", &map, &data2, opts).unwrap();
 
         // Should have 2 accumulated maps
