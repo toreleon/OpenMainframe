@@ -120,9 +120,75 @@ impl ZosmfConfig {
     /// Load configuration from a TOML file.
     pub fn from_file(path: &str) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
-        let config: Self = toml::from_str(&content)?;
+        let mut config: Self = toml::from_str(&content)?;
+        config.expand_paths();
         Ok(config)
     }
+
+    /// Expand environment-backed path placeholders in filesystem-oriented config.
+    fn expand_paths(&mut self) {
+        for mount in &mut self.mounts {
+            mount.host_path = expand_path_vars(&mount.host_path);
+        }
+
+        for path in &mut self.cics.system_copybooks {
+            *path = expand_path_vars(path);
+        }
+
+        for profile in self.cics.apps.values_mut() {
+            profile.program = expand_path_vars(&profile.program);
+            profile.include_paths = profile
+                .include_paths
+                .iter()
+                .map(|path| expand_path_vars(path))
+                .collect();
+            profile.bms_dir = profile.bms_dir.as_deref().map(expand_path_vars);
+            profile.program_dir = profile.program_dir.as_deref().map(expand_path_vars);
+            profile.data_files = profile
+                .data_files
+                .iter()
+                .map(|spec| expand_path_vars(spec))
+                .collect();
+        }
+    }
+}
+
+fn expand_path_vars(input: &str) -> String {
+    let carddemo_dir = || {
+        std::env::var("CARDDEMO_DIR")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or_else(detect_carddemo_dir)
+    };
+
+    let mut output = input.to_string();
+    if output.contains("${CARDDEMO_DIR}") {
+        if let Some(value) = carddemo_dir() {
+            output = output.replace("${CARDDEMO_DIR}", &value);
+        }
+    }
+    if output.contains("$CARDDEMO_DIR") {
+        if let Some(value) = carddemo_dir() {
+            output = output.replace("$CARDDEMO_DIR", &value);
+        }
+    }
+    output
+}
+
+fn detect_carddemo_dir() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let candidates = [
+        cwd.join("../carddemo"),
+        cwd.join("../OpenMainframeWorkspace/carddemo"),
+        cwd.join("../../carddemo"),
+        cwd.join("../../OpenMainframeWorkspace/carddemo"),
+        cwd.join("carddemo"),
+    ];
+
+    candidates
+        .into_iter()
+        .find(|path| path.join("app/cbl").is_dir() && path.join("app/bms").is_dir())
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 impl Default for ServerConfig {
@@ -342,5 +408,59 @@ saf_realm = "TestRealm"
         assert_eq!(config.auth.token_ttl_seconds, 3600);
         assert_eq!(config.uss.root_directory, "/tmp/uss");
         assert_eq!(config.zosmf_info.hostname, "testhost");
+    }
+
+    #[test]
+    fn test_carddemo_dir_expansion() {
+        let toml_str = r#"
+[cics]
+system_copybooks = ["${CARDDEMO_DIR}/copybooks"]
+
+[cics.apps.CARDDEMO]
+program = "${CARDDEMO_DIR}/app/cbl/COSGN00C.cbl"
+include_paths = ["${CARDDEMO_DIR}/app/cpy"]
+bms_dir = "${CARDDEMO_DIR}/app/bms"
+program_dir = "${CARDDEMO_DIR}/app/cbl"
+data_files = ["USRSEC=${CARDDEMO_DIR}/app/data/ASCII/usrsec.txt:8:80"]
+
+[[mounts]]
+type = "dataset-pds"
+host_path = "${CARDDEMO_DIR}/app/cbl"
+virtual_path = "IBMUSER.CARDDEMO.COBOL"
+"#;
+        let temp_root = std::env::temp_dir().join(format!(
+            "openmainframe-carddemo-config-{}",
+            std::process::id()
+        ));
+        let carddemo_dir = temp_root.join("carddemo");
+        std::fs::create_dir_all(carddemo_dir.join("app/cbl")).unwrap();
+        std::fs::create_dir_all(carddemo_dir.join("app/bms")).unwrap();
+
+        std::env::set_var("CARDDEMO_DIR", &carddemo_dir);
+        let mut config: ZosmfConfig = toml::from_str(toml_str).unwrap();
+        config.expand_paths();
+        std::env::remove_var("CARDDEMO_DIR");
+
+        let app = config.cics.apps.get("CARDDEMO").unwrap();
+        assert_eq!(
+            app.program,
+            carddemo_dir
+                .join("app/cbl/COSGN00C.cbl")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(
+            app.data_files[0],
+            format!(
+                "USRSEC={}/app/data/ASCII/usrsec.txt:8:80",
+                carddemo_dir.to_string_lossy()
+            )
+        );
+        assert_eq!(
+            config.mounts[0].host_path,
+            carddemo_dir.join("app/cbl").to_string_lossy().to_string()
+        );
+
+        let _ = std::fs::remove_dir_all(temp_root);
     }
 }

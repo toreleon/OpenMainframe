@@ -30,11 +30,11 @@ use tracing::{debug, info, warn};
 
 use open_mainframe_cics::bms::{BmsMap, BmsMapset, BmsParser};
 use open_mainframe_cics::runtime::{
-    CicsDispatcher, CicsFile, CicsRuntime, CommandParamBlock, DispatchResult,
-    FileMode, FileRecord, ProgramRegistry,
+    CicsDispatcher, CicsFile, CicsRuntime, CommandParamBlock, DispatchResult, FileMode, FileRecord,
+    ProgramRegistry,
 };
-use open_mainframe_cics::time::{AbsTime, TimeServices};
 use open_mainframe_cics::terminal::{ScreenPosition, SendMapOptions};
+use open_mainframe_cics::time::{AbsTime, TimeServices};
 use open_mainframe_cics::{CicsError, CicsResponse};
 
 use open_mainframe_runtime::interpreter::{CicsCommandHandler, Environment, InterpreterError};
@@ -65,9 +65,7 @@ pub enum BridgeAction {
         commarea: Option<Vec<u8>>,
     },
     /// ABEND — abnormal end.
-    Abend {
-        code: String,
-    },
+    Abend { code: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -107,9 +105,7 @@ impl CicsBridge {
     /// The `session` is `Rc<RefCell<..>>` because the outer session loop
     /// also needs access to it for rendering and cleanup.  Terminal I/O
     /// (wait_for_input) is handled by the main loop, not the bridge.
-    pub fn new(
-        session: Rc<RefCell<Session>>,
-    ) -> Self {
+    pub fn new(session: Rc<RefCell<Session>>) -> Self {
         Self {
             runtime: CicsRuntime::new("DFLT"),
             registry: ProgramRegistry::new(),
@@ -189,8 +185,7 @@ impl CicsBridge {
                         self.bms_maps.insert(map.name.to_uppercase(), map.clone());
                     }
                     // Also store the mapset so we can look up maps by mapset name.
-                    self.bms_mapsets
-                        .insert(mapset.name.to_uppercase(), mapset);
+                    self.bms_mapsets.insert(mapset.name.to_uppercase(), mapset);
                 }
                 Err(e) => {
                     warn!("Failed to parse BMS file {}: {}", path.display(), e);
@@ -267,10 +262,7 @@ impl CicsBridge {
                     }
                 }
             } else {
-                debug!(
-                    "Registered file {} (no data file at {})",
-                    ddname, file_path
-                );
+                debug!("Registered file {} (no data file at {})", ddname, file_path);
             }
         }
     }
@@ -330,12 +322,16 @@ impl CicsBridge {
                 if chunk.is_empty() {
                     continue;
                 }
-                let key = if key_len > 0 && chunk.len() >= key_len {
-                    chunk[..key_len].to_vec()
+                let data = if looks_like_ebcdic(chunk) {
+                    decode_ebcdic_record(chunk)
+                } else {
+                    chunk.to_vec()
+                };
+                let key = if key_len > 0 && data.len() >= key_len {
+                    data[..key_len].to_vec()
                 } else {
                     Vec::new()
                 };
-                let data = chunk.to_vec();
                 records.push(FileRecord::new(key, data));
             }
         }
@@ -425,9 +421,7 @@ impl CicsBridge {
                     map_name, mapset_name
                 );
                 // MAPFAIL condition — set EIBRESP and continue
-                self.runtime.eib.set_response(
-                    CicsResponse::Mapfail,
-                );
+                self.runtime.eib.set_response(CicsResponse::Mapfail);
                 return Ok(());
             }
         };
@@ -447,9 +441,7 @@ impl CicsBridge {
             .on_send_map(&bms_map, &field_data, &send_opts);
 
         // Update EIB
-        self.runtime
-            .eib
-            .set_response(CicsResponse::Normal);
+        self.runtime.eib.set_response(CicsResponse::Normal);
 
         Ok(())
     }
@@ -524,7 +516,8 @@ impl CicsBridge {
             // Skip control options
             if matches!(
                 name_upper.as_str(),
-                "MAP" | "MAPSET"
+                "MAP"
+                    | "MAPSET"
                     | "FROM"
                     | "ERASE"
                     | "ERASEAUP"
@@ -570,9 +563,7 @@ impl CicsBridge {
                             let cols = 80usize; // default
                             let row = pos / cols + 1;
                             let col = pos % cols + 1;
-                            opts.cursor = Some(
-                                ScreenPosition::new(row, col),
-                            );
+                            opts.cursor = Some(ScreenPosition::new(row, col));
                         }
                     }
                 }
@@ -598,9 +589,7 @@ impl CicsBridge {
         let erase = self.has_option(options, "ERASE");
 
         self.session.borrow_mut().on_send_text(&text, erase);
-        self.runtime
-            .eib
-            .set_response(CicsResponse::Normal);
+        self.runtime.eib.set_response(CicsResponse::Normal);
 
         Ok(())
     }
@@ -626,7 +615,8 @@ impl CicsBridge {
             Some(input) => input,
             None => {
                 return Err(InterpreterError {
-                    message: "RECEIVE MAP: no pending input — pseudo-conversational wait required".to_string(),
+                    message: "RECEIVE MAP: no pending input — pseudo-conversational wait required"
+                        .to_string(),
                 });
             }
         };
@@ -636,15 +626,11 @@ impl CicsBridge {
 
         // Also set EIBAID in the COBOL environment so the program can
         // inspect DFHEIBLK directly.
-        let _ = env.set("EIBAID", CobolValue::Alphanumeric(
-            String::from(aid as char),
-        ));
         let _ = env.set(
-            "EIBRESP",
-            CobolValue::from_i64(
-                CicsResponse::Normal as i64,
-            ),
+            "EIBAID",
+            CobolValue::Alphanumeric(String::from(aid as char)),
         );
+        let _ = env.set("EIBRESP", CobolValue::from_i64(CicsResponse::Normal as i64));
 
         // Set field values back into COBOL variables.
         // The naming convention is <FIELD>I for input data.
@@ -663,18 +649,12 @@ impl CicsBridge {
             let flag_var = format!("{}F", field_upper);
             // BMS convention: flag byte = 0x80 if data received
             if !field_data.is_empty() {
-                let _ = env.set(
-                    &flag_var,
-                    CobolValue::Alphanumeric("\u{0080}".to_string()),
-                );
+                let _ = env.set(&flag_var, CobolValue::Alphanumeric("\u{0080}".to_string()));
             }
 
             // Set the length variable (FIELDL) to the actual data length
             let len_var = format!("{}L", field_upper);
-            let _ = env.set(
-                &len_var,
-                CobolValue::from_i64(field_data.len() as i64),
-            );
+            let _ = env.set(&len_var, CobolValue::from_i64(field_data.len() as i64));
         }
 
         // If the BMS map is known, also look up fields that were NOT returned
@@ -689,19 +669,14 @@ impl CicsBridge {
                 if !fields.contains_key(&field_upper) {
                     // Field not in the modified set — clear the flag
                     let flag_var = format!("{}F", field_upper);
-                    let _ = env.set(
-                        &flag_var,
-                        CobolValue::Alphanumeric("\u{0000}".to_string()),
-                    );
+                    let _ = env.set(&flag_var, CobolValue::Alphanumeric("\u{0000}".to_string()));
                     let len_var = format!("{}L", field_upper);
                     let _ = env.set(&len_var, CobolValue::from_i64(0));
                 }
             }
         }
 
-        self.runtime
-            .eib
-            .set_response(CicsResponse::Normal);
+        self.runtime.eib.set_response(CicsResponse::Normal);
         Ok(())
     }
 
@@ -779,9 +754,7 @@ impl CicsBridge {
 
         warn!("EXEC CICS ABEND ABCODE({})", code);
 
-        self.pending_action = Some(BridgeAction::Abend {
-            code: code.clone(),
-        });
+        self.pending_action = Some(BridgeAction::Abend { code: code.clone() });
 
         Err(InterpreterError {
             message: format!("ABEND {}", code),
@@ -796,10 +769,7 @@ impl CicsBridge {
         env: &mut Environment,
     ) -> Result<()> {
         // Each option name is a system field the program wants to retrieve.
-        let field_names: Vec<&str> = options
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect();
+        let field_names: Vec<&str> = options.iter().map(|(name, _)| name.as_str()).collect();
         let values = self.runtime.assign(&field_names);
 
         // Store each retrieved value into the COBOL environment.
@@ -816,24 +786,16 @@ impl CicsBridge {
                 };
 
                 if !target_var.is_empty() {
-                    let _ = env.set(
-                        &target_var,
-                        CobolValue::Alphanumeric(system_value.clone()),
-                    );
+                    let _ = env.set(&target_var, CobolValue::Alphanumeric(system_value.clone()));
                 }
 
                 // Also set the field name directly (for programs that check
                 // WS-SYSID after ASSIGN SYSID(WS-SYSID))
-                let _ = env.set(
-                    &field_upper,
-                    CobolValue::Alphanumeric(system_value.clone()),
-                );
+                let _ = env.set(&field_upper, CobolValue::Alphanumeric(system_value.clone()));
             }
         }
 
-        self.runtime
-            .eib
-            .set_response(CicsResponse::Normal);
+        self.runtime.eib.set_response(CicsResponse::Normal);
         Ok(())
     }
 
@@ -868,18 +830,12 @@ impl CicsBridge {
 
         match self.runtime.files.read(&file_name, ridfld.as_bytes(), mode) {
             Ok(record) => {
-                self.runtime
-                    .eib
-                    .set_response(CicsResponse::Normal);
+                self.runtime.eib.set_response(CicsResponse::Normal);
 
                 // If INTO is specified, set the record data into the COBOL var
                 if let Some(into_var) = self.find_option_value(options, "INTO") {
-                    let data_str =
-                        String::from_utf8_lossy(&record.data).to_string();
-                    let _ = env.set(
-                        &into_var.to_uppercase(),
-                        CobolValue::Alphanumeric(data_str),
-                    );
+                    let data_str = String::from_utf8_lossy(&record.data).to_string();
+                    let _ = env.set(&into_var.to_uppercase(), CobolValue::Alphanumeric(data_str));
                 }
 
                 // Set EIBRESP in environment
@@ -919,16 +875,11 @@ impl CicsBridge {
 
         self.runtime.eib.set_filename(&file_name);
 
-        let record = FileRecord::new(
-            ridfld.into_bytes(),
-            from_data.into_bytes(),
-        );
+        let record = FileRecord::new(ridfld.into_bytes(), from_data.into_bytes());
 
         match self.runtime.files.write(&file_name, record) {
             Ok(()) => {
-                self.runtime
-                    .eib
-                    .set_response(CicsResponse::Normal);
+                self.runtime.eib.set_response(CicsResponse::Normal);
                 let _ = env.set("EIBRESP", CobolValue::from_i64(0));
             }
             Err(e) => {
@@ -955,21 +906,13 @@ impl CicsBridge {
             .trim()
             .to_uppercase();
 
-        let from_data = self
-            .find_option_value(options, "FROM")
-            .unwrap_or_default();
+        let from_data = self.find_option_value(options, "FROM").unwrap_or_default();
 
         self.runtime.eib.set_filename(&file_name);
 
-        match self
-            .runtime
-            .files
-            .rewrite(&file_name, from_data.as_bytes())
-        {
+        match self.runtime.files.rewrite(&file_name, from_data.as_bytes()) {
             Ok(()) => {
-                self.runtime
-                    .eib
-                    .set_response(CicsResponse::Normal);
+                self.runtime.eib.set_response(CicsResponse::Normal);
                 let _ = env.set("EIBRESP", CobolValue::from_i64(0));
             }
             Err(e) => {
@@ -1004,9 +947,7 @@ impl CicsBridge {
 
         match self.runtime.files.delete(&file_name, key_bytes) {
             Ok(()) => {
-                self.runtime
-                    .eib
-                    .set_response(CicsResponse::Normal);
+                self.runtime.eib.set_response(CicsResponse::Normal);
                 let _ = env.set("EIBRESP", CobolValue::from_i64(0));
             }
             Err(e) => {
@@ -1041,17 +982,11 @@ impl CicsBridge {
 
         debug!("STARTBR file={} ridfld={:?}", file_name, ridfld);
 
-        match self
-            .runtime
-            .files
-            .startbr(&file_name, ridfld.as_bytes())
-        {
+        match self.runtime.files.startbr(&file_name, ridfld.as_bytes()) {
             Ok(token) => {
                 self.browse_tokens.insert(file_name.clone(), token);
                 debug!("STARTBR success: file={} token={}", file_name, token);
-                self.runtime
-                    .eib
-                    .set_response(CicsResponse::Normal);
+                self.runtime.eib.set_response(CicsResponse::Normal);
                 let _ = env.set("EIBRESP", CobolValue::from_i64(0));
             }
             Err(e) => {
@@ -1083,15 +1018,8 @@ impl CicsBridge {
         let token = match self.browse_tokens.get(&file_name) {
             Some(&t) => t,
             None => {
-                self.runtime
-                    .eib
-                    .set_response(CicsResponse::Invreq);
-                let _ = env.set(
-                    "EIBRESP",
-                    CobolValue::from_i64(
-                        CicsResponse::Invreq as i64,
-                    ),
-                );
+                self.runtime.eib.set_response(CicsResponse::Invreq);
+                let _ = env.set("EIBRESP", CobolValue::from_i64(CicsResponse::Invreq as i64));
                 return Ok(());
             }
         };
@@ -1100,31 +1028,33 @@ impl CicsBridge {
 
         match self.runtime.files.readnext(token) {
             Ok(record) => {
-                self.runtime
-                    .eib
-                    .set_response(CicsResponse::Normal);
+                self.runtime.eib.set_response(CicsResponse::Normal);
 
-                debug!("READNEXT success: key={:?} data_len={}", String::from_utf8_lossy(&record.key), record.data.len());
+                debug!(
+                    "READNEXT success: key={:?} data_len={}",
+                    String::from_utf8_lossy(&record.key),
+                    record.data.len()
+                );
 
                 // Set INTO variable
                 if let Some(into_var) = self.find_option_value(options, "INTO") {
-                    let data_str =
-                        String::from_utf8_lossy(&record.data).to_string();
-                    debug!("READNEXT INTO {} = {:?}", into_var, &data_str[..data_str.len().min(80)]);
-                    let _ = env.set(
-                        &into_var.to_uppercase(),
-                        CobolValue::Alphanumeric(data_str),
+                    let data_str = String::from_utf8_lossy(&record.data).to_string();
+                    debug!(
+                        "READNEXT INTO {} = {:?}",
+                        into_var,
+                        &data_str[..data_str.len().min(80)]
                     );
+                    let _ = env.set(&into_var.to_uppercase(), CobolValue::Alphanumeric(data_str));
                 } else {
-                    debug!("READNEXT: no INTO variable found. Options: {:?}", options.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>());
+                    debug!(
+                        "READNEXT: no INTO variable found. Options: {:?}",
+                        options.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>()
+                    );
                 }
 
                 // Set RIDFLD to the record key
-                if let Some(ridfld_var) =
-                    self.find_option_value(options, "RIDFLD")
-                {
-                    let key_str =
-                        String::from_utf8_lossy(&record.key).to_string();
+                if let Some(ridfld_var) = self.find_option_value(options, "RIDFLD") {
+                    let key_str = String::from_utf8_lossy(&record.key).to_string();
                     let _ = env.set(
                         &ridfld_var.to_uppercase(),
                         CobolValue::Alphanumeric(key_str),
@@ -1161,9 +1091,7 @@ impl CicsBridge {
         if let Some(token) = self.browse_tokens.remove(&file_name) {
             match self.runtime.files.endbr(token) {
                 Ok(()) => {
-                    self.runtime
-                        .eib
-                        .set_response(CicsResponse::Normal);
+                    self.runtime.eib.set_response(CicsResponse::Normal);
                     let _ = env.set("EIBRESP", CobolValue::from_i64(0));
                 }
                 Err(e) => {
@@ -1173,15 +1101,8 @@ impl CicsBridge {
                 }
             }
         } else {
-            self.runtime
-                .eib
-                .set_response(CicsResponse::Invreq);
-            let _ = env.set(
-                "EIBRESP",
-                CobolValue::from_i64(
-                    CicsResponse::Invreq as i64,
-                ),
-            );
+            self.runtime.eib.set_response(CicsResponse::Invreq);
+            let _ = env.set("EIBRESP", CobolValue::from_i64(CicsResponse::Invreq as i64));
         }
 
         Ok(())
@@ -1204,9 +1125,7 @@ impl CicsBridge {
                 .handle_condition(&condition.to_uppercase(), label.trim());
         }
 
-        self.runtime
-            .eib
-            .set_response(CicsResponse::Normal);
+        self.runtime.eib.set_response(CicsResponse::Normal);
         Ok(())
     }
 
@@ -1222,9 +1141,7 @@ impl CicsBridge {
 
         self.runtime.handle_abend(label.trim());
 
-        self.runtime
-            .eib
-            .set_response(CicsResponse::Normal);
+        self.runtime.eib.set_response(CicsResponse::Normal);
         Ok(())
     }
 
@@ -1249,12 +1166,8 @@ impl CicsBridge {
             params.set(&name.to_uppercase(), val_str.trim());
         }
 
-        match CicsDispatcher::dispatch(
-            &call_name,
-            &params,
-            &mut self.runtime,
-            Some(&self.registry),
-        ) {
+        match CicsDispatcher::dispatch(&call_name, &params, &mut self.runtime, Some(&self.registry))
+        {
             Ok(result) => {
                 self.apply_dispatch_result(&result, options, env);
             }
@@ -1278,32 +1191,20 @@ impl CicsBridge {
         env: &mut Environment,
     ) {
         // Set EIBRESP / EIBRESP2
-        let _ = env.set(
-            "EIBRESP",
-            CobolValue::from_i64(result.eibresp as i64),
-        );
-        let _ = env.set(
-            "EIBRESP2",
-            CobolValue::from_i64(result.eibresp2 as i64),
-        );
+        let _ = env.set("EIBRESP", CobolValue::from_i64(result.eibresp as i64));
+        let _ = env.set("EIBRESP2", CobolValue::from_i64(result.eibresp2 as i64));
 
         // If there is output data and an INTO variable, set it
         if let Some(ref data) = result.output_data {
             if let Some(into_var) = self.find_option_value(options, "INTO") {
                 let data_str = String::from_utf8_lossy(data).to_string();
-                let _ = env.set(
-                    &into_var.to_uppercase(),
-                    CobolValue::Alphanumeric(data_str),
-                );
+                let _ = env.set(&into_var.to_uppercase(), CobolValue::Alphanumeric(data_str));
             }
         }
 
         // Apply output fields
         for (key, value) in &result.output_fields {
-            let _ = env.set(
-                &key.to_uppercase(),
-                CobolValue::Alphanumeric(value.clone()),
-            );
+            let _ = env.set(&key.to_uppercase(), CobolValue::Alphanumeric(value.clone()));
         }
     }
 
@@ -1339,11 +1240,7 @@ impl CicsBridge {
     }
 
     /// Check whether a flag option is present (value may be `None`).
-    fn has_option(
-        &self,
-        options: &[(String, Option<CobolValue>)],
-        name: &str,
-    ) -> bool {
+    fn has_option(&self, options: &[(String, Option<CobolValue>)], name: &str) -> bool {
         let name_upper = name.to_uppercase();
         options.iter().any(|(n, _)| n.to_uppercase() == name_upper)
     }
@@ -1538,6 +1435,29 @@ impl CicsBridge {
     }
 }
 
+fn looks_like_ebcdic(bytes: &[u8]) -> bool {
+    let sample_len = bytes.len().min(256);
+    let sample = &bytes[..sample_len];
+    let ebcdic_markers = sample
+        .iter()
+        .filter(|&&b| b == 0x40 || (0x81..=0xF9).contains(&b))
+        .count();
+    let ascii_printable = sample
+        .iter()
+        .filter(|&&b| b == b'\t' || b == b'\r' || b == b'\n' || (0x20..=0x7E).contains(&b))
+        .count();
+
+    ebcdic_markers > ascii_printable && ebcdic_markers * 2 >= sample_len
+}
+
+fn decode_ebcdic_record(bytes: &[u8]) -> Vec<u8> {
+    use open_mainframe_encoding::CP037;
+    bytes
+        .iter()
+        .map(|&byte| CP037.ebcdic_to_ascii_byte(byte))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // CicsCommandHandler implementation
 // ---------------------------------------------------------------------------
@@ -1561,17 +1481,11 @@ impl CicsCommandHandler for CicsBridge {
         // Write RESP/RESP2 back to the COBOL variables.
         if let Some(ref var_name) = resp_var {
             let resp_code = self.runtime.eib.eibresp as i64;
-            let _ = env.set(
-                &var_name.to_uppercase(),
-                CobolValue::from_i64(resp_code),
-            );
+            let _ = env.set(&var_name.to_uppercase(), CobolValue::from_i64(resp_code));
         }
         if let Some(ref var_name) = resp2_var {
             let resp2_code = self.runtime.eib.eibresp2 as i64;
-            let _ = env.set(
-                &var_name.to_uppercase(),
-                CobolValue::from_i64(resp2_code),
-            );
+            let _ = env.set(&var_name.to_uppercase(), CobolValue::from_i64(resp2_code));
         }
 
         result
@@ -1579,6 +1493,27 @@ impl CicsCommandHandler for CicsBridge {
 
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_and_decodes_ebcdic_fixed_records() {
+        let bytes = [0xC1, 0xC4, 0xD4, 0xC9, 0xD5, 0xF0, 0xF0, 0xF1, 0x40];
+
+        assert!(looks_like_ebcdic(&bytes));
+        assert_eq!(decode_ebcdic_record(&bytes), b"ADMIN001 ");
+    }
+
+    #[test]
+    fn leaves_ascii_fixed_records_unchanged() {
+        let bytes = b"ADMIN001 ";
+
+        assert!(!looks_like_ebcdic(bytes));
+        assert_eq!(decode_ebcdic_record(&[0xC1]), b"A");
     }
 }
 
@@ -1591,8 +1526,20 @@ impl CicsBridge {
         options: &[(String, Option<CobolValue>)],
         env: &mut Environment,
     ) -> Result<()> {
-        if cmd == "STARTBR" || cmd == "READNEXT" || cmd == "READPREV" || cmd == "ENDBR" || cmd == "RESETBR" {
-            debug!("execute_inner: cmd={} options={:?}", cmd, options.iter().map(|(k, v)| (k.as_str(), v.as_ref().map(|vv| vv.to_display_string()))).collect::<Vec<_>>());
+        if cmd == "STARTBR"
+            || cmd == "READNEXT"
+            || cmd == "READPREV"
+            || cmd == "ENDBR"
+            || cmd == "RESETBR"
+        {
+            debug!(
+                "execute_inner: cmd={} options={:?}",
+                cmd,
+                options
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_ref().map(|vv| vv.to_display_string())))
+                    .collect::<Vec<_>>()
+            );
         }
 
         match cmd {
@@ -1600,9 +1547,7 @@ impl CicsBridge {
             "SEND" => {
                 if self.has_option(options, "MAP") {
                     self.handle_send_map(options, env)
-                } else if self.has_option(options, "TEXT")
-                    || self.has_option(options, "FROM")
-                {
+                } else if self.has_option(options, "TEXT") || self.has_option(options, "FROM") {
                     self.handle_send_text(options, env)
                 } else {
                     // Plain SEND — delegate
@@ -1644,18 +1589,14 @@ impl CicsBridge {
             "ABEND" => self.handle_abend(options, env),
 
             // -- Condition handling -------------------------------------------
-            "HANDLE CONDITION" | "HANDLE" => {
-                self.handle_handle_condition(options, env)
-            }
+            "HANDLE CONDITION" | "HANDLE" => self.handle_handle_condition(options, env),
             "HANDLE ABEND" => self.handle_handle_abend(options, env),
             "IGNORE CONDITION" | "IGNORE" => {
                 // IGNORE CONDITION — remove handlers
                 for (condition, _) in options {
                     self.runtime.ignore_condition(&condition.to_uppercase());
                 }
-                self.runtime
-                    .eib
-                    .set_response(CicsResponse::Normal);
+                self.runtime.eib.set_response(CicsResponse::Normal);
                 Ok(())
             }
 
@@ -1663,24 +1604,16 @@ impl CicsBridge {
             "ASSIGN" => self.handle_assign(options, env),
 
             // -- Queue operations (delegate) ---------------------------------
-            "WRITEQ" | "READQ" | "DELETEQ" => {
-                self.dispatch_via_cics(command, options, env)
-            }
+            "WRITEQ" | "READQ" | "DELETEQ" => self.dispatch_via_cics(command, options, env),
 
             // -- Storage management (delegate) -------------------------------
-            "GETMAIN" | "FREEMAIN" => {
-                self.dispatch_via_cics(command, options, env)
-            }
+            "GETMAIN" | "FREEMAIN" => self.dispatch_via_cics(command, options, env),
 
             // -- ENQ/DEQ (delegate) ------------------------------------------
-            "ENQ" | "DEQ" => {
-                self.dispatch_via_cics(command, options, env)
-            }
+            "ENQ" | "DEQ" => self.dispatch_via_cics(command, options, env),
 
             // -- Container operations (delegate) -----------------------------
-            "PUT" | "GET" | "DELETE CONTAINER" => {
-                self.dispatch_via_cics(command, options, env)
-            }
+            "PUT" | "GET" | "DELETE CONTAINER" => self.dispatch_via_cics(command, options, env),
 
             // -- Miscellaneous -----------------------------------------------
             "ASKTIME" => self.handle_asktime(options, env),

@@ -21,8 +21,24 @@ set -euo pipefail
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
-CARDDEMO_DIR="${CARDDEMO_DIR:-/Users/ThangLT4/Desktop/code/carddemo}"
-OMFRAME_DIR="${OMFRAME_DIR:-/Users/ThangLT4/Desktop/code/OpenMainframe}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OMFRAME_DIR="${OMFRAME_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+detect_carddemo_dir() {
+    local base
+    base="$(cd "$OMFRAME_DIR/.." && pwd)"
+    for candidate in \
+        "$base/carddemo" \
+        "$base/OpenMainframeWorkspace/carddemo" \
+        "$OMFRAME_DIR/../carddemo" \
+        "$OMFRAME_DIR/../OpenMainframeWorkspace/carddemo"; do
+        if [ -d "$candidate/app/jcl" ] && [ -d "$candidate/app/cbl" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+CARDDEMO_DIR="${CARDDEMO_DIR:-$(detect_carddemo_dir || true)}"
 ZOSMF_HOST="localhost"
 ZOSMF_PORT="${ZOSMF_PORT:-10443}"
 ZOSMF_USER="IBMUSER"

@@ -14,10 +14,25 @@ RESET=$'\033[0m'
 
 ZOSMF_HOST="${ZOSMF_HOST:-localhost}"
 ZOSMF_PORT="${ZOSMF_PORT:-10443}"
-ZOSMF_URL="http://${ZOSMF_HOST}:${ZOSMF_PORT}"
-CARDDEMO_DIR="${CARDDEMO_DIR:-$(cd "$(dirname "$0")/../.." && [ -d carddemo ] && echo "$PWD/carddemo")}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ZOSMF_URL="http://${ZOSMF_HOST}:${ZOSMF_PORT}"
+detect_carddemo_dir() {
+    local base
+    base="$(cd "$SCRIPT_DIR/../.." && pwd)"
+    for candidate in \
+        "$base/carddemo" \
+        "$base/OpenMainframeWorkspace/carddemo" \
+        "$PROJECT_DIR/../carddemo" \
+        "$PROJECT_DIR/../OpenMainframeWorkspace/carddemo"; do
+        if [ -d "$candidate/app/cbl" ] && [ -d "$candidate/app/bms" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+CARDDEMO_DIR="${CARDDEMO_DIR:-$(detect_carddemo_dir || true)}"
 SERVER_BIN="$PROJECT_DIR/target/release/zosmf-server"
 SERVER_PID=""
 TOKEN=""
