@@ -212,6 +212,8 @@ pub struct ClistInterpreter {
     tso: Option<Box<dyn TsoEnvironment>>,
     /// Label positions (label -> statement index).
     labels: HashMap<String, usize>,
+    /// Current executable statement list for subprocedure dispatch.
+    current_statements: Vec<ClistStatement>,
     /// Error handler.
     error_handler: Option<Vec<ClistStatement>>,
     /// Attention handler.
@@ -238,6 +240,7 @@ impl ClistInterpreter {
             control: ControlOptions::default(),
             tso: None,
             labels: HashMap::new(),
+            current_statements: Vec::new(),
             error_handler: None,
             attn_handler: None,
             nest_depth: 0,
@@ -290,16 +293,62 @@ impl ClistInterpreter {
                 self.labels.insert(name.clone(), i);
             }
         }
+        self.current_statements = ast.statements.clone();
 
         self.execute_top_level(&ast.statements)
     }
 
     fn execute_nested_source(&mut self, source: &str) -> ExecResult<i32> {
         let saved_labels = self.labels.clone();
+        let saved_statements = self.current_statements.clone();
         let ast = parse_clist(source)?;
         let result = self.execute_ast(&ast);
         self.labels = saved_labels;
+        self.current_statements = saved_statements;
         result
+    }
+
+    fn execute_from_label(&mut self, stmts: &[ClistStatement], label: &str) -> ExecResult<i32> {
+        let mut pc = self
+            .labels
+            .get(label)
+            .map(|target| target + 1)
+            .ok_or_else(|| InterpreterError::LabelNotFound(label.to_string()))?;
+        let mut iterations: u64 = 0;
+
+        while pc < stmts.len() {
+            iterations += 1;
+            if iterations > self.max_iterations {
+                return Err(InterpreterError::MaxIterations);
+            }
+
+            let result = self.execute_statement(&stmts[pc]);
+            match result {
+                Ok(StmtResult::Continue) => pc += 1,
+                Ok(StmtResult::Goto(label)) => {
+                    if let Some(&target) = self.labels.get(&label) {
+                        pc = target + 1;
+                    } else {
+                        return Err(InterpreterError::LabelNotFound(label));
+                    }
+                }
+                Ok(StmtResult::Return(code)) => return Ok(code),
+                Ok(StmtResult::Exit(code)) => return Err(InterpreterError::Exit(code)),
+                Err(InterpreterError::Exit(code)) => return Err(InterpreterError::Exit(code)),
+                Err(e) => {
+                    self.last_cc = 12;
+                    self.update_cc(12);
+                    if let Some(handler) = self.error_handler.clone() {
+                        self.execute_block(&handler)?;
+                        pc += 1;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Ok(0)
     }
 
     /// Top-level executor that handles GOTO by label lookup.
@@ -534,21 +583,19 @@ impl ClistInterpreter {
             }
 
             ClistStatement::SysCall { label, args } => {
-                // Find the label and execute the subprocedure
                 let arg_values: Vec<String> = args
                     .iter()
                     .map(|a| self.eval_expression(a))
                     .collect::<ExecResult<Vec<_>>>()?;
 
-                // Set SYSREASON variables
                 for (i, val) in arg_values.iter().enumerate() {
+                    self.variables.set(&(i + 1).to_string(), val.clone());
                     self.variables.set(&format!("SYSREASON{}", i + 1), val.clone());
                 }
 
-                if self.labels.contains_key(label) {
-                    // Execute from label to RETURN
-                    self.output.push(format!("SYSCALL {label}"));
-                }
+                let stmts = self.current_statements.clone();
+                let rc = self.execute_from_label(&stmts, label)?;
+                self.update_cc(rc);
                 Ok(StmtResult::Continue)
             }
 
@@ -1029,6 +1076,34 @@ SKIP: SET &X = 1
         let globals = interp.variables.globals_ref();
         let g = globals.lock().unwrap();
         assert_eq!(g.get("SHARED"), Some(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_syscall_executes_labeled_subprocedure() {
+        let mut interp = ClistInterpreter::new();
+        let source = r#"
+SYSCALL ADD 2 3
+WRITE &RESULT
+EXIT 0
+ADD: PROC 2
+SET &RESULT = &1 + &2
+RETURN 4
+"#;
+
+        let rc = interp.execute(source).unwrap();
+
+        assert_eq!(rc, 0);
+        assert_eq!(interp.variables.get("RESULT"), Some("5".to_string()));
+        assert_eq!(interp.last_cc(), 4);
+        assert_eq!(interp.output(), &["5"]);
+    }
+
+    #[test]
+    fn test_syscall_missing_label_errors() {
+        let mut interp = ClistInterpreter::new();
+        let err = interp.execute("SYSCALL MISSING").unwrap_err();
+
+        assert!(matches!(err, InterpreterError::LabelNotFound(label) if label == "MISSING"));
     }
 
     // ─── CL-101: Integration ───
