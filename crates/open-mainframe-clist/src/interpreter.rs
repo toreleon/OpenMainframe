@@ -294,6 +294,14 @@ impl ClistInterpreter {
         self.execute_top_level(&ast.statements)
     }
 
+    fn execute_nested_source(&mut self, source: &str) -> ExecResult<i32> {
+        let saved_labels = self.labels.clone();
+        let ast = parse_clist(source)?;
+        let result = self.execute_ast(&ast);
+        self.labels = saved_labels;
+        result
+    }
+
     /// Top-level executor that handles GOTO by label lookup.
     fn execute_top_level(&mut self, stmts: &[ClistStatement]) -> ExecResult<i32> {
         let mut pc = 0;
@@ -554,12 +562,26 @@ impl ClistInterpreter {
                 Ok(StmtResult::Continue)
             }
 
-            ClistStatement::Exec { name, args: _ } => {
+            ClistStatement::Exec { name, args } => {
                 // Nested CLIST execution
                 self.nest_depth += 1;
                 self.system_vars.insert("SYSNEST".to_string(), self.nest_depth.to_string());
-                // In a real implementation, we'd load and execute the named CLIST
-                self.output.push(format!("EXEC {name}"));
+                let arg_values = args
+                    .iter()
+                    .map(|arg| self.eval_expression(arg))
+                    .collect::<ExecResult<Vec<_>>>()?;
+                self.system_vars.insert("SYSPCMD".to_string(), name.clone());
+                self.system_vars.insert("SYSICMD".to_string(), arg_values.join(" "));
+
+                let loaded = self.tso.as_ref().and_then(|tso| tso.load_clist(name));
+                if let Some(source) = loaded {
+                    let rc = self.execute_nested_source(&source)?;
+                    self.last_cc = rc;
+                    self.update_cc(rc);
+                } else {
+                    self.output.push(format!("EXEC {name}"));
+                }
+
                 self.nest_depth -= 1;
                 self.system_vars.insert("SYSNEST".to_string(), self.nest_depth.to_string());
                 Ok(StmtResult::Continue)

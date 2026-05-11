@@ -27,6 +27,11 @@ pub trait TsoEnvironment: Send {
 
     /// Set an ISPF shared variable.
     fn set_ispf_variable(&self, name: &str, value: &str);
+
+    /// Load a CLIST source for nested EXEC.
+    fn load_clist(&self, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 // ─────────────────────── Dataset Attributes ───────────────────────
@@ -79,6 +84,8 @@ pub struct MockTsoEnvironment {
     ispf_vars: std::sync::Mutex<std::collections::HashMap<String, String>>,
     /// Command history.
     commands: std::sync::Mutex<Vec<String>>,
+    /// Registered nested CLIST sources.
+    clists: std::collections::HashMap<String, String>,
 }
 
 impl MockTsoEnvironment {
@@ -88,6 +95,7 @@ impl MockTsoEnvironment {
             datasets: std::collections::HashMap::new(),
             ispf_vars: std::sync::Mutex::new(std::collections::HashMap::new()),
             commands: std::sync::Mutex::new(Vec::new()),
+            clists: std::collections::HashMap::new(),
         }
     }
 
@@ -99,6 +107,11 @@ impl MockTsoEnvironment {
     /// Get command history.
     pub fn command_history(&self) -> Vec<String> {
         self.commands.lock().unwrap().clone()
+    }
+
+    /// Register a CLIST source for nested EXEC.
+    pub fn add_clist(&mut self, name: &str, source: &str) {
+        self.clists.insert(name.to_uppercase(), source.to_string());
     }
 }
 
@@ -142,6 +155,10 @@ impl TsoEnvironment for MockTsoEnvironment {
         if let Ok(mut vars) = self.ispf_vars.lock() {
             vars.insert(name.to_uppercase(), value.to_string());
         }
+    }
+
+    fn load_clist(&self, name: &str) -> Option<String> {
+        self.clists.get(&name.to_uppercase()).cloned()
     }
 }
 
@@ -227,6 +244,19 @@ mod tests {
         let mut interp = ClistInterpreter::new();
         interp.execute("EXEC 'MYCLIST'").unwrap();
         assert!(interp.output().iter().any(|o| o.contains("MYCLIST")));
+    }
+
+    #[test]
+    fn test_nested_exec_loads_registered_clist() {
+        let mut interp = ClistInterpreter::new();
+        let mut mock = MockTsoEnvironment::new();
+        mock.add_clist("MYCLIST", "WRITE 'nested ran'");
+        interp.set_tso(Box::new(mock));
+
+        interp.execute("EXEC 'MYCLIST'").unwrap();
+
+        assert!(interp.output().iter().any(|o| o == "nested ran"));
+        assert!(!interp.output().iter().any(|o| o == "EXEC MYCLIST"));
     }
 
     // ─── CL-104.6: PROC Statement ───
