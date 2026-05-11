@@ -159,7 +159,14 @@ submit_jcl_curl() {
 submit_jcl_zowe() {
     local jcl_file="$1"
     local resp
-    resp=$(zowe jobs submit local-file "$jcl_file" --zosmf-profile "$PROFILE_NAME" --response-format-json 2>/dev/null)
+    resp=$(zowe jobs submit local-file "$jcl_file" \
+        --host "$ZOSMF_HOST" \
+        --port "$ZOSMF_PORT" \
+        --user "$ZOSMF_USER" \
+        --password "$ZOSMF_PASS" \
+        --reject-unauthorized false \
+        --protocol http \
+        --response-format-json 2>/dev/null)
 
     local jobid jobname
     jobid=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('jobid',''))" 2>/dev/null || echo "")
@@ -183,7 +190,14 @@ poll_job_status() {
     while [[ $elapsed -lt $POLL_TIMEOUT ]]; do
         local resp status retcode
         if $USE_ZOWE; then
-            resp=$(zowe jobs view job-status-by-jobid "$jobid" --zosmf-profile "$PROFILE_NAME" --response-format-json 2>/dev/null || echo '{}')
+            resp=$(zowe jobs view job-status-by-jobid "$jobid" \
+                --host "$ZOSMF_HOST" \
+                --port "$ZOSMF_PORT" \
+                --user "$ZOSMF_USER" \
+                --password "$ZOSMF_PASS" \
+                --reject-unauthorized false \
+                --protocol http \
+                --response-format-json 2>/dev/null || echo '{}')
             status=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('status','UNKNOWN'))" 2>/dev/null || echo "UNKNOWN")
             retcode=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('retcode',''))" 2>/dev/null || echo "")
         else
@@ -361,17 +375,7 @@ log_header "Authentication"
 AUTH_TOKEN=""
 
 if $USE_ZOWE; then
-    # Create Zowe profile
-    log_info "Creating Zowe z/OSMF profile '$PROFILE_NAME'..."
-    zowe profiles create zosmf-profile "$PROFILE_NAME" \
-        --host "$ZOSMF_HOST" \
-        --port "$ZOSMF_PORT" \
-        --user "$ZOSMF_USER" \
-        --password "$ZOSMF_PASS" \
-        --reject-unauthorized false \
-        --overwrite 2>/dev/null || \
-    zowe config set "profiles.${PROFILE_NAME}.properties.host" "$ZOSMF_HOST" 2>/dev/null || true
-
+    log_info "Using explicit Zowe connection options for ${ZOSMF_BASE_URL}"
     # Also get a curl token for any direct API calls
     get_auth_token && log_info "JWT token obtained" || log_info "Token auth skipped (Zowe handles it)"
 else
