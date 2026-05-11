@@ -230,7 +230,7 @@ impl<'a> Scanner<'a> {
 
             // Unknown character
             _ => {
-                self.pos += 1;
+                self.pos += ch.len_utf8();
                 let line_info = self.current_line();
                 let line_num = line_info.map(|l| l.line_number).unwrap_or(1);
                 self.errors.push(CobolError::InvalidCharacter {
@@ -349,67 +349,78 @@ impl<'a> Scanner<'a> {
     /// Scan a numeric literal.
     fn scan_number(&mut self, content: &str) -> Option<TokenKind> {
         let start = self.pos;
-        let chars: Vec<char> = content.chars().collect();
 
         // Collect integer part
-        while self.pos < chars.len() && chars[self.pos].is_ascii_digit() {
-            self.pos += 1;
+        while let Some(ch) = content[self.pos..].chars().next() {
+            if ch.is_ascii_digit() {
+                self.pos += ch.len_utf8();
+            } else {
+                break;
+            }
         }
 
         // Check if this is actually a numeric-prefixed paragraph name (e.g., 2000-OUTFILE-OPEN)
         // In COBOL, paragraph names can start with digits if they contain letters
-        if self.pos < chars.len() && chars[self.pos] == '-' {
+        if content[self.pos..].starts_with('-') {
             let peek_pos = self.pos + 1;
-            if peek_pos < chars.len() && chars[peek_pos].is_ascii_alphabetic() {
-                // This is a paragraph name, scan as identifier
-                while self.pos < chars.len() {
-                    let ch = chars[self.pos];
-                    if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                        self.pos += 1;
-                    } else {
-                        break;
+            if let Some(next) = content[peek_pos..].chars().next() {
+                if !next.is_ascii_alphabetic() {
+                    // Not a paragraph name.
+                } else {
+                    // This is a paragraph name, scan as identifier
+                    while let Some(ch) = content[self.pos..].chars().next() {
+                        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                            self.pos += ch.len_utf8();
+                        } else {
+                            break;
+                        }
                     }
+                    // Trim trailing hyphens
+                    while self.pos > start && content.as_bytes()[self.pos - 1] == b'-' {
+                        self.pos -= 1;
+                    }
+                    let text = content[start..self.pos].to_string();
+                    return Some(TokenKind::Identifier(text.to_uppercase()));
                 }
-                // Trim trailing hyphens
-                while self.pos > start && chars[self.pos - 1] == '-' {
-                    self.pos -= 1;
-                }
-                let text: String = chars[start..self.pos].iter().collect();
-                return Some(TokenKind::Identifier(text.to_uppercase()));
             }
         }
 
         // Check for decimal point
-        let has_decimal =
-            self.pos < chars.len() && chars[self.pos] == '.' && self.pos + 1 < chars.len() && {
-                // Make sure it's not a period terminator (followed by space or end)
-                chars
-                    .get(self.pos + 1)
-                    .map(|c| c.is_ascii_digit())
-                    .unwrap_or(false)
-            };
+        let has_decimal = content[self.pos..].starts_with('.')
+            && content[self.pos + 1..]
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false);
 
         if has_decimal {
             self.pos += 1; // Skip '.'
-            while self.pos < chars.len() && chars[self.pos].is_ascii_digit() {
-                self.pos += 1;
+            while let Some(ch) = content[self.pos..].chars().next() {
+                if ch.is_ascii_digit() {
+                    self.pos += ch.len_utf8();
+                } else {
+                    break;
+                }
             }
         }
 
         // Check for exponent
-        let has_exponent =
-            self.pos < chars.len() && (chars[self.pos] == 'E' || chars[self.pos] == 'e');
+        let has_exponent = matches!(content[self.pos..].chars().next(), Some('E' | 'e'));
         if has_exponent {
             self.pos += 1;
-            if self.pos < chars.len() && (chars[self.pos] == '+' || chars[self.pos] == '-') {
-                self.pos += 1;
+            if let Some(ch @ ('+' | '-')) = content[self.pos..].chars().next() {
+                self.pos += ch.len_utf8();
             }
-            while self.pos < chars.len() && chars[self.pos].is_ascii_digit() {
-                self.pos += 1;
+            while let Some(ch) = content[self.pos..].chars().next() {
+                if ch.is_ascii_digit() {
+                    self.pos += ch.len_utf8();
+                } else {
+                    break;
+                }
             }
         }
 
-        let text: String = chars[start..self.pos].iter().collect();
+        let text = content[start..self.pos].to_string();
 
         if has_decimal || has_exponent {
             Some(TokenKind::DecimalLiteral(text))
@@ -425,25 +436,23 @@ impl<'a> Scanner<'a> {
     /// Scan an identifier or keyword.
     fn scan_identifier(&mut self, content: &str) -> Option<TokenKind> {
         let start = self.pos;
-        let chars: Vec<char> = content.chars().collect();
 
         // COBOL identifiers can contain letters, digits, and hyphens
         // Must start with a letter
-        while self.pos < chars.len() {
-            let ch = chars[self.pos];
+        while let Some(ch) = content[self.pos..].chars().next() {
             if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                self.pos += 1;
+                self.pos += ch.len_utf8();
             } else {
                 break;
             }
         }
 
         // Trim trailing hyphens (not valid)
-        while self.pos > start && chars[self.pos - 1] == '-' {
+        while self.pos > start && content.as_bytes()[self.pos - 1] == b'-' {
             self.pos -= 1;
         }
 
-        let text: String = chars[start..self.pos].iter().collect();
+        let text = content[start..self.pos].to_string();
 
         // Check for PIC/PICTURE keyword to enter picture mode
         let upper = text.to_uppercase();
@@ -497,32 +506,29 @@ impl<'a> Scanner<'a> {
 
         let start = self.pos;
         let start_offset = base_offset + start as u32;
-        let chars: Vec<char> = content.chars().collect();
 
         // PICTURE characters: A B E G N P S V X Z 9 0 1 + - , . * / $ CR DB ( )
         // Also supports currency symbols and editing characters
         let mut paren_depth = 0;
 
-        while self.pos < chars.len() {
-            let ch = chars[self.pos];
-
+        while let Some(ch) = content[self.pos..].chars().next() {
             if ch == '(' {
                 paren_depth += 1;
-                self.pos += 1;
+                self.pos += ch.len_utf8();
             } else if ch == ')' {
                 if paren_depth > 0 {
                     paren_depth -= 1;
-                    self.pos += 1;
+                    self.pos += ch.len_utf8();
                 } else {
                     break;
                 }
             } else if ch == '.' {
                 // Period is special: it's part of the picture only if followed by a picture char
                 // (like 9(3).99), otherwise it's the statement terminator
-                let next_char = chars.get(self.pos + 1);
-                if let Some(&next) = next_char {
+                let next_char = content[self.pos + ch.len_utf8()..].chars().next();
+                if let Some(next) = next_char {
                     if is_picture_char_no_period(next) || next == '(' {
-                        self.pos += 1;
+                        self.pos += ch.len_utf8();
                     } else {
                         // Trailing period - statement terminator
                         break;
@@ -532,16 +538,16 @@ impl<'a> Scanner<'a> {
                     break;
                 }
             } else if is_picture_char_no_period(ch) || (paren_depth > 0 && ch.is_ascii_digit()) {
-                self.pos += 1;
+                self.pos += ch.len_utf8();
             } else if ch.is_whitespace() && paren_depth > 0 {
                 // Allow spaces inside parentheses (unusual but sometimes seen)
-                self.pos += 1;
+                self.pos += ch.len_utf8();
             } else {
                 break;
             }
         }
 
-        let pic_string: String = chars[start..self.pos].iter().collect();
+        let pic_string = content[start..self.pos].to_string();
         let end_offset = base_offset + self.pos as u32;
         let span = Span::new(self.source.id, start_offset, end_offset);
         self.tokens
@@ -705,5 +711,11 @@ mod tests {
         assert!(tokens[2].is_keyword(Keyword::To));
         assert!(matches!(&tokens[3].kind, TokenKind::Identifier(s) if s == "WS-FIELD"));
         assert_eq!(tokens[4].kind, TokenKind::Period);
+    }
+
+    #[test]
+    fn test_scan_multibyte_invalid_character_does_not_panic() {
+        let (_tokens, errors) = scan_text("DISPLAY 計画配送");
+        assert!(!errors.is_empty());
     }
 }

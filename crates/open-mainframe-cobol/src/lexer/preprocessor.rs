@@ -9,7 +9,9 @@
 //! - Circular inclusion detection
 
 use crate::error::CobolError;
-use crate::lexer::copybook::{apply_replacements, CopybookConfig, CopybookResolver, Replacement, ReplacementMode};
+use crate::lexer::copybook::{
+    apply_replacements, CopybookConfig, CopybookResolver, Replacement, ReplacementMode,
+};
 use crate::lexer::source::SourceFormat;
 
 /// Result type for preprocessor operations.
@@ -59,16 +61,19 @@ impl Preprocessor {
             // Find next DFHRESP( occurrence (case-insensitive)
             if let Some(pos) = find_dfhresp(remaining) {
                 // Copy everything before the match
-                result.push_str(&source[source.len() - remaining.len()..source.len() - remaining.len() + pos]);
+                result.push_str(
+                    &source[source.len() - remaining.len()..source.len() - remaining.len() + pos],
+                );
                 remaining = &remaining[pos..];
 
                 // Find the matching closing paren
                 let prefix_len = b"DFHRESP(".len();
                 if remaining.len() > prefix_len {
                     if let Some(close) = remaining[prefix_len..].iter().position(|&b| b == b')') {
-                        let condition = std::str::from_utf8(&remaining[prefix_len..prefix_len + close])
-                            .unwrap_or("")
-                            .trim();
+                        let condition =
+                            std::str::from_utf8(&remaining[prefix_len..prefix_len + close])
+                                .unwrap_or("")
+                                .trim();
                         let code = dfhresp_code(condition);
                         result.push_str(&code.to_string());
                         remaining = &remaining[prefix_len + close + 1..];
@@ -76,7 +81,9 @@ impl Preprocessor {
                     }
                 }
                 // No closing paren found, copy the DFHRESP literally
-                result.push_str(&source[source.len() - remaining.len()..source.len() - remaining.len() + 1]);
+                result.push_str(
+                    &source[source.len() - remaining.len()..source.len() - remaining.len() + 1],
+                );
                 remaining = &remaining[1..];
             } else {
                 // No more DFHRESP found, copy the rest
@@ -116,8 +123,9 @@ impl Preprocessor {
                 continue;
             }
 
-            // Get content starting from column 8 (index 7)
-            let content = if line.len() > 7 { &line[7..] } else { "" };
+            // Get fixed-format code area (columns 8-72). Use character
+            // columns instead of byte offsets so UTF-8 source does not panic.
+            let content = fixed_code_area_from_char_columns(line);
 
             // Check if continuing a multi-line COPY
             if in_copy {
@@ -219,10 +227,7 @@ impl Preprocessor {
         }
 
         // Get copybook name (strip quotes if present)
-        let copybook_name = parts[1]
-            .trim_matches('\'')
-            .trim_matches('"')
-            .to_string();
+        let copybook_name = parts[1].trim_matches('\'').trim_matches('"').to_string();
         let mut idx = 2;
 
         // Check for IN/OF library
@@ -351,6 +356,25 @@ fn find_dfhresp(haystack: &[u8]) -> Option<usize> {
         }
     }
     None
+}
+
+fn fixed_code_area_from_char_columns(line: &str) -> &str {
+    let start = line
+        .char_indices()
+        .nth(7)
+        .map(|(idx, _)| idx)
+        .unwrap_or(line.len());
+    let end = line
+        .char_indices()
+        .nth(72)
+        .map(|(idx, _)| idx)
+        .unwrap_or(line.len());
+
+    if start < end {
+        &line[start..end]
+    } else {
+        ""
+    }
 }
 
 /// Map a CICS condition name to its numeric response code.
@@ -536,5 +560,22 @@ mod tests {
         let source = "      *COPY DFHATTR.\n";
         let result = preprocessor.preprocess(source).unwrap();
         assert_eq!(result, source);
+    }
+
+    #[test]
+    fn test_preprocess_multibyte_fixed_line_does_not_panic() {
+        let mut preprocessor = Preprocessor::new(test_config(), SourceFormat::Fixed);
+        let source = "       FD   Ｉ１０配車情報ファイル\n";
+        let result = preprocessor.preprocess(source).unwrap();
+        assert_eq!(result, source);
+    }
+
+    #[test]
+    fn test_fixed_code_area_ignores_identification_columns() {
+        let line = format!("000100 {:<65}KHYB100", "COPY KHY010FI.");
+        assert_eq!(
+            fixed_code_area_from_char_columns(&line).trim(),
+            "COPY KHY010FI."
+        );
     }
 }
