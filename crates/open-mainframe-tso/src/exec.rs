@@ -87,8 +87,13 @@ fn cmd_exec(session: &mut TsoSession, cmd: &ParsedCommand) -> CommandResult {
         }
     };
 
-    // Extract argument string (second positional, if any)
-    let args = cmd.positional.get(1).cloned().unwrap_or_default();
+    // Extract argument string after the exec name.
+    let mut arg_parts = Vec::new();
+    if cmd.positional.len() > 1 {
+        arg_parts.extend(cmd.positional[1..].iter().cloned());
+    }
+    arg_parts.extend(cmd.flags.iter().cloned());
+    let args = arg_parts.join(" ");
 
     // Detect exec type
     let exec_type = detect_exec_type(&source);
@@ -150,7 +155,7 @@ fn execute_clist(
 // ---------------------------------------------------------------------------
 
 /// Lex, parse, and interpret a REXX source string using the REXX crate.
-fn execute_rexx_source(dsn: &str, source: &str, _args: &str) -> CommandResult {
+fn execute_rexx_source(dsn: &str, source: &str, args: &str) -> CommandResult {
     let mut lines = vec![format!("IKJ56471I EXECUTING {dsn} (REXX)")];
 
     let tokens = match open_mainframe_rexx::lex(source) {
@@ -169,7 +174,7 @@ fn execute_rexx_source(dsn: &str, source: &str, _args: &str) -> CommandResult {
         }
     };
 
-    match open_mainframe_rexx::interpret(&program) {
+    match open_mainframe_rexx::interpret_with_args(&program, args) {
         Ok(result) => {
             lines.extend(result.output);
             CommandResult {
@@ -333,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_rexx_stub() {
+    fn test_exec_rexx() {
         let mut s = test_session();
         write_exec(&s, "MY.REXX", "/* REXX */\nsay 'hello'\nexit 0\n");
 
@@ -341,6 +346,21 @@ mod tests {
         let result = try_execute(&mut s, &cmd).unwrap();
         assert_eq!(result.rc, 0);
         assert!(result.output.iter().any(|l| l.contains("REXX")));
+    }
+
+    #[test]
+    fn test_exec_rexx_passes_argument_string() {
+        let mut s = test_session();
+        write_exec(&s, "ARGTEST.REXX", "/* REXX */\narg first second\nsay first || '-' || second\nexit 0\n");
+
+        let cmd = parse_command("EXEC ARGTEST.REXX alpha beta");
+        let result = try_execute(&mut s, &cmd).unwrap();
+        assert_eq!(result.rc, 0);
+        assert!(
+            result.output.iter().any(|l| l == "ALPHA-BETA"),
+            "output was {:?}",
+            result.output
+        );
     }
 
     #[test]

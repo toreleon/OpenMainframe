@@ -23,7 +23,14 @@ use crate::value::{
 
 /// Run a parsed REXX program and return its exit code and captured output.
 pub fn interpret(program: &Program) -> Result<ExecResult, InterpError> {
+    interpret_with_args(program, "")
+}
+
+/// Run a parsed REXX program with the initial argument string available to
+/// ARG, PARSE ARG, and the ARG built-in function.
+pub fn interpret_with_args(program: &Program, args: &str) -> Result<ExecResult, InterpError> {
     let mut interp = Interpreter::new();
+    interp.vars_mut().set("ARG", args.to_string());
     interp.run(program)?;
     Ok(ExecResult {
         rc: interp.rc,
@@ -1522,6 +1529,12 @@ mod tests {
         interpret(&program).expect("interpret failed")
     }
 
+    fn run_with_args(source: &str, args: &str) -> ExecResult {
+        let tokens = lex(source).expect("lex failed");
+        let program = parse(&tokens).expect("parse failed");
+        interpret_with_args(&program, args).expect("interpret failed")
+    }
+
     #[test]
     fn test_say_string() {
         let result = run("SAY 'Hello World'");
@@ -1538,6 +1551,18 @@ mod tests {
     fn test_assignment_and_say() {
         let result = run("x = 10\nSAY x");
         assert_eq!(result.output, vec!["10"]);
+    }
+
+    #[test]
+    fn test_initial_arg_instruction_uses_exec_args() {
+        let result = run_with_args("ARG first second\nSAY first || '-' || second", "alpha beta");
+        assert_eq!(result.output, vec!["ALPHA-BETA"]);
+    }
+
+    #[test]
+    fn test_initial_arg_builtin_uses_exec_args() {
+        let result = run_with_args("SAY ARG(1)\nSAY ARG(2)", "alpha beta");
+        assert_eq!(result.output, vec!["alpha beta", ""]);
     }
 
     #[test]
