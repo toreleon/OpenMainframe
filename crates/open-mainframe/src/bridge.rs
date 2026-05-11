@@ -33,6 +33,7 @@ use open_mainframe_cics::runtime::{
     CicsDispatcher, CicsFile, CicsRuntime, CommandParamBlock, DispatchResult,
     FileMode, FileRecord, ProgramRegistry,
 };
+use open_mainframe_cics::time::{AbsTime, TimeServices};
 use open_mainframe_cics::terminal::{ScreenPosition, SendMapOptions};
 use open_mainframe_cics::{CicsError, CicsResponse};
 
@@ -1370,6 +1371,171 @@ impl CicsBridge {
             Some(var_name)
         }
     }
+
+    fn option_separator(
+        &self,
+        options: &[(String, Option<CobolValue>)],
+        name: &str,
+        default: char,
+    ) -> char {
+        self.find_option_value(options, name)
+            .and_then(|value| {
+                value
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"')
+                    .chars()
+                    .next()
+            })
+            .unwrap_or(default)
+    }
+
+    fn option_abstime(
+        &self,
+        options: &[(String, Option<CobolValue>)],
+        env: &Environment,
+    ) -> AbsTime {
+        self.resolve_var_ref(options, "ABSTIME", env)
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(AbsTime::from_raw)
+            .unwrap_or_else(AbsTime::now)
+    }
+
+    fn set_cics_option_value(
+        &self,
+        options: &[(String, Option<CobolValue>)],
+        env: &mut Environment,
+        option: &str,
+        value: impl Into<CobolValue>,
+    ) -> Result<bool> {
+        if let Some(var_name) = self.find_option_value(options, option) {
+            env.set(&var_name.to_uppercase(), value.into())?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn handle_asktime(
+        &mut self,
+        options: &[(String, Option<CobolValue>)],
+        env: &mut Environment,
+    ) -> Result<()> {
+        let services = TimeServices::new();
+        let abstime = services.asktime();
+        let formatted = services.formattime(abstime);
+
+        self.runtime
+            .eib
+            .set_time(formatted.hour, formatted.minute, formatted.second);
+        self.runtime
+            .eib
+            .set_date(formatted.year, formatted.day_of_year);
+
+        if let Some(var_name) = self.find_option_value(options, "ABSTIME") {
+            env.set(
+                &var_name.to_uppercase(),
+                CobolValue::from_i64(abstime.raw() as i64),
+            )?;
+        }
+
+        self.runtime.eib.set_response(CicsResponse::Normal);
+        Ok(())
+    }
+
+    fn handle_formattime(
+        &mut self,
+        options: &[(String, Option<CobolValue>)],
+        env: &mut Environment,
+    ) -> Result<()> {
+        let services = TimeServices::new();
+        let abstime = self.option_abstime(options, env);
+        let formatted = services.formattime(abstime);
+        let date_sep = self.option_separator(options, "DATESEP", '/');
+        let time_sep = self.option_separator(options, "TIMESEP", ':');
+
+        self.set_cics_option_value(
+            options,
+            env,
+            "DATE",
+            CobolValue::alphanumeric(formatted.date_ddmmyy(date_sep)),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "TIME",
+            CobolValue::alphanumeric(formatted.time_with_separator(time_sep)),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "YYYYMMDD",
+            CobolValue::alphanumeric(formatted.yyyymmdd()),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "DDMMYYYY",
+            CobolValue::alphanumeric(formatted.ddmmyyyy()),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "MMDDYYYY",
+            CobolValue::alphanumeric(formatted.mmddyyyy()),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "YYMMDD",
+            CobolValue::alphanumeric(formatted.yymmdd()),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "YYDDD",
+            CobolValue::alphanumeric(formatted.yyddd()),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "YYYYDDD",
+            CobolValue::alphanumeric(formatted.yyyyddd()),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "DAYCOUNT",
+            CobolValue::from_i64(formatted.day_count_since_1900() as i64),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "DAYOFMONTH",
+            CobolValue::from_i64(formatted.day as i64),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "DAYOFWEEK",
+            CobolValue::from_i64(formatted.day_of_week as i64),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "MONTHOFYEAR",
+            CobolValue::from_i64(formatted.month as i64),
+        )?;
+        self.set_cics_option_value(
+            options,
+            env,
+            "YEAR",
+            CobolValue::from_i64(formatted.year as i64),
+        )?;
+
+        self.runtime.eib.set_response(CicsResponse::Normal);
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1517,45 +1683,9 @@ impl CicsBridge {
             }
 
             // -- Miscellaneous -----------------------------------------------
-            "ASKTIME" => {
-                // Set current time in EIB using std::time.
-                // The EIB stores time as 0HHMMSS and date as 0CYYDDD.
-                // We use UNIX_EPOCH arithmetic to derive the current UTC
-                // time — sufficient for CICS ASKTIME purposes.
-                use std::time::{SystemTime, UNIX_EPOCH};
-                let secs = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
+            "ASKTIME" => self.handle_asktime(options, env),
 
-                // Convert seconds-since-epoch to hours/minutes/seconds of day
-                let time_of_day = secs % 86400;
-                let hour = (time_of_day / 3600) as u8;
-                let minute = ((time_of_day % 3600) / 60) as u8;
-                let second = (time_of_day % 60) as u8;
-                self.runtime.eib.set_time(hour, minute, second);
-
-                // Approximate year/day-of-year from epoch seconds.
-                // This is a simplified calculation; for CICS simulation it is
-                // adequate.
-                let days_since_epoch = (secs / 86400) as i64;
-                let (year, day_of_year) =
-                    epoch_days_to_year_doy(days_since_epoch);
-                self.runtime
-                    .eib
-                    .set_date(year as u16, day_of_year as u16);
-
-                self.runtime
-                    .eib
-                    .set_response(CicsResponse::Normal);
-                Ok(())
-            }
-
-            "FORMATTIME" => {
-                // Delegate to dispatcher or handle inline.
-                // For now, set a formatted date/time in the target variable.
-                self.dispatch_via_cics(command, options, env)
-            }
+            "FORMATTIME" => self.handle_formattime(options, env),
 
             // -- Catch-all: delegate to CicsDispatcher -----------------------
             _ => {
@@ -1564,29 +1694,4 @@ impl CicsBridge {
             }
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Utility: convert days since Unix epoch to (year, day_of_year)
-// ---------------------------------------------------------------------------
-
-/// Convert days since the Unix epoch (1970-01-01) to a (year, day-of-year)
-/// pair.  Day-of-year is 1-based.  This uses a simple loop over years which
-/// is perfectly adequate for the range of dates we care about (1970–2100).
-fn epoch_days_to_year_doy(mut days: i64) -> (i64, i64) {
-    let mut year: i64 = 1970;
-
-    loop {
-        let days_in_year = if is_leap(year) { 366 } else { 365 };
-        if days < days_in_year {
-            return (year, days + 1); // 1-based DOY
-        }
-        days -= days_in_year;
-        year += 1;
-    }
-}
-
-/// Determine whether `year` is a leap year.
-fn is_leap(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
