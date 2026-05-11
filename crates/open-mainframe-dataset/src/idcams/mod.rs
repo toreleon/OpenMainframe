@@ -104,7 +104,12 @@ impl Idcams {
     fn execute_command(&mut self, cmd: &IdcamsCommand) -> Result<(), DatasetError> {
         // Reset LASTCC for data commands only — IF/SET are control flow
         // and should see the LASTCC from the previous data command.
-        let is_control_flow = matches!(cmd, IdcamsCommand::IfThen { .. } | IdcamsCommand::SetMaxcc { .. });
+        let is_control_flow = matches!(
+            cmd,
+            IdcamsCommand::IfThen { .. }
+                | IdcamsCommand::Sequence { .. }
+                | IdcamsCommand::SetMaxcc { .. }
+        );
         if !is_control_flow {
             self.last_cc = 0;
         }
@@ -161,7 +166,14 @@ impl Idcams {
                 tokey,
                 skip,
                 count,
-            } => self.repro(indataset, outdataset, fromkey.as_deref(), tokey.as_deref(), *skip, *count),
+            } => self.repro(
+                indataset,
+                outdataset,
+                fromkey.as_deref(),
+                tokey.as_deref(),
+                *skip,
+                *count,
+            ),
 
             IdcamsCommand::Verify { dataset } => self.verify(dataset),
 
@@ -192,11 +204,19 @@ impl Idcams {
                 Ok(())
             }
 
+            IdcamsCommand::Sequence { commands } => {
+                for command in commands {
+                    self.execute_command(command)?;
+                }
+                Ok(())
+            }
+
             IdcamsCommand::IfThen {
                 variable,
                 operator,
                 value,
                 action,
+                else_action,
             } => {
                 let test_value = match variable {
                     ConditionVariable::LastCc => self.last_cc,
@@ -212,6 +232,8 @@ impl Idcams {
                 };
                 if condition_met {
                     self.execute_command(action)?;
+                } else if let Some(else_action) = else_action {
+                    self.execute_command(else_action)?;
                 }
                 Ok(())
             }
@@ -243,10 +265,8 @@ impl Idcams {
         // Check if cluster already exists — return LASTCC=12 (duplicate define)
         // rather than a fatal error. JCL patterns use IF LASTCC/MAXCC to suppress.
         if path.exists() {
-            self.output.push_str(&format!(
-                "IDC0004I CLUSTER {} ALREADY EXISTS\n",
-                name
-            ));
+            self.output
+                .push_str(&format!("IDC0004I CLUSTER {} ALREADY EXISTS\n", name));
             self.last_cc = 12;
             return Ok(());
         }
@@ -312,10 +332,8 @@ impl Idcams {
                     .push_str(&format!("IDC0002I GDG {} DEFINED\n", name));
             }
             Err(e) => {
-                self.output.push_str(&format!(
-                    "IDC3009I COMMAND FAILED: {}\n",
-                    e
-                ));
+                self.output
+                    .push_str(&format!("IDC3009I COMMAND FAILED: {}\n", e));
                 self.last_cc = 12;
                 return Ok(());
             }
@@ -536,14 +554,14 @@ impl Idcams {
                 }
             };
             if matches {
-                self.output.push_str(&format!("  {} (MOUNTED)\n", dsn_upper));
+                self.output
+                    .push_str(&format!("  {} (MOUNTED)\n", dsn_upper));
                 found_entries = true;
             }
         }
 
         if !found_entries {
-            self.output
-                .push_str("IDC3002E NO ENTRIES FOUND\n");
+            self.output.push_str("IDC3002E NO ENTRIES FOUND\n");
             self.last_cc = 4;
         }
 
@@ -560,8 +578,7 @@ impl Idcams {
             let base = GdgBase::open(name, &self.base_dir)?;
             let info = base.list_info();
             self.output.push_str("  TYPE: GDG\n");
-            self.output
-                .push_str(&format!("  LIMIT: {}\n", info.limit));
+            self.output.push_str(&format!("  LIMIT: {}\n", info.limit));
             self.output
                 .push_str(&format!("  SCRATCH: {}\n", info.scratch));
             self.output
@@ -573,8 +590,10 @@ impl Idcams {
         let vsam_path = path.with_extension("vsam");
         if vsam_path.exists() {
             if let Ok(cluster) = VsamCluster::open(&vsam_path) {
-                self.output.push_str(&format!("  TYPE: VSAM {:?}\n", cluster.vsam_type()));
-                self.output.push_str(&format!("  RECORD SIZE: {}\n", cluster.record_size()));
+                self.output
+                    .push_str(&format!("  TYPE: VSAM {:?}\n", cluster.vsam_type()));
+                self.output
+                    .push_str(&format!("  RECORD SIZE: {}\n", cluster.record_size()));
                 return Ok(());
             }
         }
@@ -670,8 +689,10 @@ impl Idcams {
             self.output.push('\n');
         }
 
-        self.output
-            .push_str(&format!("IDC0002I {} RECORDS PRINTED\n", slice.len() / 16 + 1));
+        self.output.push_str(&format!(
+            "IDC0002I {} RECORDS PRINTED\n",
+            slice.len() / 16 + 1
+        ));
         Ok(())
     }
 
@@ -690,16 +711,20 @@ impl Idcams {
         skip: usize,
         count: usize,
     ) -> Result<(), DatasetError> {
-        self.output
-            .push_str(&format!("IDC0001I REPRO - {} TO {}\n", indataset, outdataset));
+        self.output.push_str(&format!(
+            "IDC0001I REPRO - {} TO {}\n",
+            indataset, outdataset
+        ));
 
         let raw_in = self.name_to_path(indataset);
         let in_path = self.resolve_read_path(&raw_in);
         let out_path = self.name_to_path(outdataset);
 
         if !in_path.exists() {
-            self.output
-                .push_str(&format!("IDC3002E REPRO FAILED - {} NOT FOUND\n", indataset));
+            self.output.push_str(&format!(
+                "IDC3002E REPRO FAILED - {} NOT FOUND\n",
+                indataset
+            ));
             self.last_cc = 8;
             return Ok(());
         }
@@ -715,11 +740,10 @@ impl Idcams {
                 .push_str(&format!("IDC0002I {} BYTES COPIED\n", metadata.len()));
         } else {
             // Record-level filtering: read line by line
-            let input_data = std::fs::read_to_string(&in_path).map_err(|e| {
-                DatasetError::IoError {
+            let input_data =
+                std::fs::read_to_string(&in_path).map_err(|e| DatasetError::IoError {
                     message: format!("Failed to read {}: {}", in_path.display(), e),
-                }
-            })?;
+                })?;
 
             let mut output_lines = Vec::new();
             let mut skipped = 0usize;
@@ -815,7 +839,11 @@ impl Idcams {
             std::fs::create_dir_all(parent)?;
         }
 
-        let unique_str = if unique_key { "UNIQUEKEY" } else { "NONUNIQUEKEY" };
+        let unique_str = if unique_key {
+            "UNIQUEKEY"
+        } else {
+            "NONUNIQUEKEY"
+        };
         let metadata = format!(
             "AIX={}\nRELATE={}\nKEYS={} {}\n{}\n",
             name, relate, keys.0, keys.1, unique_str
@@ -848,8 +876,10 @@ impl Idcams {
 
     /// BLDINDEX command — build an alternate index from base cluster.
     fn bldindex(&mut self, indataset: &str, outdataset: &str) -> Result<(), DatasetError> {
-        self.output
-            .push_str(&format!("IDC0001I BLDINDEX - {} TO {}\n", indataset, outdataset));
+        self.output.push_str(&format!(
+            "IDC0001I BLDINDEX - {} TO {}\n",
+            indataset, outdataset
+        ));
 
         let base_path = self.name_to_path(indataset).with_extension("vsam");
         let aix_path = self.name_to_path(outdataset).with_extension("aix");
@@ -882,8 +912,10 @@ impl Idcams {
         let built_meta = format!("{}\nBUILT=YES\nBASE={}\n", aix_meta.trim(), indataset);
         std::fs::write(&built_path, built_meta)?;
 
-        self.output
-            .push_str(&format!("IDC0002I AIX {} BUILT FROM {}\n", outdataset, indataset));
+        self.output.push_str(&format!(
+            "IDC0002I AIX {} BUILT FROM {}\n",
+            outdataset, indataset
+        ));
         Ok(())
     }
 
@@ -912,10 +944,8 @@ impl Idcams {
         let actual = match actual_path {
             Some(p) => p,
             None => {
-                self.output.push_str(&format!(
-                    "IDC3002E EXPORT FAILED - {} NOT FOUND\n",
-                    dataset
-                ));
+                self.output
+                    .push_str(&format!("IDC3002E EXPORT FAILED - {} NOT FOUND\n", dataset));
                 self.last_cc = 8;
                 return Ok(());
             }
@@ -949,15 +979,15 @@ impl Idcams {
 
     /// IMPORT command — import dataset from portable format.
     fn import(&mut self, infile: &str, outdataset: &str) -> Result<(), DatasetError> {
-        self.output
-            .push_str(&format!("IDC0001I IMPORT - {} FROM {}\n", outdataset, infile));
+        self.output.push_str(&format!(
+            "IDC0001I IMPORT - {} FROM {}\n",
+            outdataset, infile
+        ));
 
         let in_path = self.name_to_path(infile);
         if !in_path.exists() {
-            self.output.push_str(&format!(
-                "IDC3002E IMPORT FAILED - {} NOT FOUND\n",
-                infile
-            ));
+            self.output
+                .push_str(&format!("IDC3002E IMPORT FAILED - {} NOT FOUND\n", infile));
             self.last_cc = 8;
             return Ok(());
         }
@@ -1012,10 +1042,8 @@ impl Idcams {
             self.output
                 .push_str(&format!("IDC0002I {} - BCS STRUCTURE OK\n", name));
         } else {
-            self.output.push_str(&format!(
-                "IDC3002E EXAMINE FAILED - {} NOT FOUND\n",
-                name
-            ));
+            self.output
+                .push_str(&format!("IDC3002E EXAMINE FAILED - {} NOT FOUND\n", name));
             self.last_cc = 8;
         }
         Ok(())
@@ -1031,10 +1059,8 @@ impl Idcams {
             self.output
                 .push_str(&format!("IDC0002I {} - BCS/VVDS SYNCHRONIZED\n", name));
         } else {
-            self.output.push_str(&format!(
-                "IDC3002E DIAGNOSE FAILED - {} NOT FOUND\n",
-                name
-            ));
+            self.output
+                .push_str(&format!("IDC3002E DIAGNOSE FAILED - {} NOT FOUND\n", name));
             self.last_cc = 8;
         }
         Ok(())
@@ -1172,7 +1198,10 @@ mod tests {
         // Verify target was created
         let target_path = dir.join("TARGET/DATA");
         assert!(target_path.exists());
-        assert_eq!(fs::read_to_string(&target_path).unwrap(), "source data content");
+        assert_eq!(
+            fs::read_to_string(&target_path).unwrap(),
+            "source data content"
+        );
 
         cleanup(&dir);
     }
@@ -1497,9 +1526,7 @@ mod tests {
         fs::write(&test_path, "data").unwrap();
 
         let mut idcams = Idcams::new(&dir);
-        let result = idcams
-            .execute("ALTER OLD.NAME NEWNAME(NEW.NAME)")
-            .unwrap();
+        let result = idcams.execute("ALTER OLD.NAME NEWNAME(NEW.NAME)").unwrap();
 
         assert!(result.is_success());
         assert!(result.output.contains("RENAMED TO NEW.NAME"));
@@ -1517,9 +1544,7 @@ mod tests {
         fs::write(&test_path, "vsam-data").unwrap();
 
         let mut idcams = Idcams::new(&dir);
-        let result = idcams
-            .execute("ALTER MY.KSDS ADDVOLUMES(VOL002)")
-            .unwrap();
+        let result = idcams.execute("ALTER MY.KSDS ADDVOLUMES(VOL002)").unwrap();
 
         assert!(result.is_success());
         assert!(result.output.contains("VOLUMES ADDED: VOL002"));
@@ -1537,9 +1562,7 @@ mod tests {
         fs::write(&test_path, "vsam-data").unwrap();
 
         let mut idcams = Idcams::new(&dir);
-        let result = idcams
-            .execute("ALTER MY.KSDS FREESPACE(20 10)")
-            .unwrap();
+        let result = idcams.execute("ALTER MY.KSDS FREESPACE(20 10)").unwrap();
 
         assert!(result.is_success());
         assert!(result.output.contains("FREESPACE SET TO (20 10)"));
@@ -1562,9 +1585,7 @@ mod tests {
         let mut idcams = Idcams::new(&dir);
 
         // Export
-        let result = idcams
-            .execute("EXPORT MY.DATA OUTFILE(MY.EXPORT)")
-            .unwrap();
+        let result = idcams.execute("EXPORT MY.DATA OUTFILE(MY.EXPORT)").unwrap();
         assert!(result.is_success());
         assert!(result.output.contains("EXPORTED"));
 
@@ -1592,9 +1613,7 @@ mod tests {
         cleanup(&dir);
 
         let mut idcams = Idcams::new(&dir);
-        let result = idcams
-            .execute("EXPORT NO.SUCH.DS OUTFILE(OUT)")
-            .unwrap();
+        let result = idcams.execute("EXPORT NO.SUCH.DS OUTFILE(OUT)").unwrap();
 
         assert!(result.has_errors());
         assert!(result.output.contains("NOT FOUND"));
@@ -1615,9 +1634,7 @@ mod tests {
         fs::write(&test_path, "catalog-data").unwrap();
 
         let mut idcams = Idcams::new(&dir);
-        let result = idcams
-            .execute("EXAMINE NAME(UCAT.PROD)")
-            .unwrap();
+        let result = idcams.execute("EXAMINE NAME(UCAT.PROD)").unwrap();
 
         assert!(result.is_success());
         assert!(result.output.contains("BCS STRUCTURE OK"));
@@ -1631,9 +1648,7 @@ mod tests {
         cleanup(&dir);
 
         let mut idcams = Idcams::new(&dir);
-        let result = idcams
-            .execute("EXAMINE NAME(NO.SUCH.CAT)")
-            .unwrap();
+        let result = idcams.execute("EXAMINE NAME(NO.SUCH.CAT)").unwrap();
 
         assert!(result.has_errors());
         assert!(result.output.contains("NOT FOUND"));
@@ -1689,7 +1704,9 @@ mod tests {
         assert!(r.is_success());
 
         let r = idcams
-            .execute("DEFINE ALTERNATEINDEX (NAME(PROD.AIX) RELATE(PROD.VSAM) KEYS(20 10) UNIQUEKEY)")
+            .execute(
+                "DEFINE ALTERNATEINDEX (NAME(PROD.AIX) RELATE(PROD.VSAM) KEYS(20 10) UNIQUEKEY)",
+            )
             .unwrap();
         assert!(r.is_success());
 
@@ -1725,9 +1742,7 @@ mod tests {
         );
 
         // 6. EXAMINE + DIAGNOSE
-        let r = idcams
-            .execute("EXAMINE NAME(PROD.VSAM)")
-            .unwrap();
+        let r = idcams.execute("EXAMINE NAME(PROD.VSAM)").unwrap();
         assert!(r.is_success());
 
         let r = idcams
@@ -1781,7 +1796,11 @@ mod tests {
             )
             .unwrap();
 
-        assert!(result.is_success(), "Expected RC=0, got RC={}", result.return_code);
+        assert!(
+            result.is_success(),
+            "Expected RC=0, got RC={}",
+            result.return_code
+        );
         assert!(result.output.contains("GDG MY.GDG1 DEFINED"));
         assert!(result.output.contains("GDG MY.GDG2 DEFINED"));
 
@@ -1804,7 +1823,63 @@ mod tests {
             )
             .unwrap();
 
-        assert!(result.is_success(), "Expected RC=0 after suppression, got RC={}", result.return_code);
+        assert!(
+            result.is_success(),
+            "Expected RC=0 after suppression, got RC={}",
+            result.return_code
+        );
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_if_then_do_end_suppresses_error() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut idcams = Idcams::new(&dir);
+
+        let result = idcams
+            .execute(
+                "DELETE NO.SUCH.DATASET\n\
+                 IF LASTCC=8 THEN DO\n\
+                   SET MAXCC=0\n\
+                 END\n\
+                 ELSE DO\n\
+                   SET MAXCC=12\n\
+                 END",
+            )
+            .unwrap();
+
+        assert!(
+            result.is_success(),
+            "Expected RC=0 after THEN DO block, got RC={}",
+            result.return_code
+        );
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_if_else_single_command_runs_false_branch() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut idcams = Idcams::new(&dir);
+
+        let result = idcams
+            .execute(
+                "SET MAXCC=4\n\
+                 IF MAXCC LT 4 THEN SET MAXCC=12\n\
+                 ELSE SET MAXCC=0",
+            )
+            .unwrap();
+
+        assert!(
+            result.is_success(),
+            "Expected RC=0 after ELSE branch, got RC={}",
+            result.return_code
+        );
 
         cleanup(&dir);
     }
@@ -1822,11 +1897,12 @@ mod tests {
 
         // Simulate DEFCUST.jcl: DELETE nonexistent + DEFINE CLUSTER
         let result = idcams
-            .execute(
-                "DELETE AWS.CCDA.CUSTDATA.CLUSTER CLUSTER",
-            )
+            .execute("DELETE AWS.CCDA.CUSTDATA.CLUSTER CLUSTER")
             .unwrap();
-        assert_eq!(result.return_code, 8, "DELETE of nonexistent should give RC=8");
+        assert_eq!(
+            result.return_code, 8,
+            "DELETE of nonexistent should give RC=8"
+        );
 
         // Fresh IDCAMS for the second step (separate JCL step)
         let mut idcams2 = Idcams::new(&dir);
@@ -1844,11 +1920,20 @@ mod tests {
                  )",
             )
             .unwrap();
-        assert!(result.is_success(), "DEFINE CLUSTER should succeed, got RC={}: {}", result.return_code, result.output);
+        assert!(
+            result.is_success(),
+            "DEFINE CLUSTER should succeed, got RC={}: {}",
+            result.return_code,
+            result.output
+        );
 
         // Verify VSAM file was created
         let vsam_path = dir.join("AWS/CUSTDATA/CLUSTER.vsam");
-        assert!(vsam_path.exists(), "VSAM file should exist at {:?}", vsam_path);
+        assert!(
+            vsam_path.exists(),
+            "VSAM file should exist at {:?}",
+            vsam_path
+        );
 
         cleanup(&dir);
     }
@@ -1874,7 +1959,12 @@ mod tests {
         let result = idcams
             .execute("REPRO INDATASET(AWS.M2.CARDDEMO.DALYTRAN.PS.INIT) OUTDATASET(AWS.M2.CARDDEMO.TRANSACT.COPY)")
             .unwrap();
-        assert!(result.is_success(), "REPRO should succeed, got RC={}: {}", result.return_code, result.output);
+        assert!(
+            result.is_success(),
+            "REPRO should succeed, got RC={}: {}",
+            result.return_code,
+            result.output
+        );
 
         // Verify the copy was made
         let target = dir.join("AWS/M2/CARDDEMO/TRANSACT/COPY");
@@ -1885,7 +1975,12 @@ mod tests {
         let result2 = idcams
             .execute("REPRO INDATASET(AWS.M2.CARDDEMO.DALYTRAN.PS) OUTDATASET(AWS.M2.CARDDEMO.DALYTRAN.COPY)")
             .unwrap();
-        assert!(result2.is_success(), "REPRO from directory with data file should succeed, got RC={}: {}", result2.return_code, result2.output);
+        assert!(
+            result2.is_success(),
+            "REPRO from directory with data file should succeed, got RC={}: {}",
+            result2.return_code,
+            result2.output
+        );
 
         let target2 = dir.join("AWS/M2/CARDDEMO/DALYTRAN/COPY");
         assert!(target2.exists());
