@@ -123,7 +123,8 @@ impl MapRenderer {
 
     /// Set field data from string.
     pub fn set_field_string(&mut self, name: &str, value: &str) {
-        self.data.insert(name.to_uppercase(), value.as_bytes().to_vec());
+        self.data
+            .insert(name.to_uppercase(), value.as_bytes().to_vec());
     }
 
     /// Render map to 3270 data stream.
@@ -243,6 +244,14 @@ impl MapRenderer {
         Vec::new()
     }
 
+    /// Return display data for a field, padded or truncated to the BMS length.
+    pub fn field_display_data(&self, field: &BmsField) -> Vec<u8> {
+        let mut data = self.get_field_data(field);
+        data.truncate(field.length);
+        data.resize(field.length, b' ');
+        data
+    }
+
     fn write_sba(&mut self, position: usize) {
         self.buffer.push(orders::SBA);
         let (hi, lo) = self.encode_address(position);
@@ -333,7 +342,8 @@ impl MapRenderer {
             }
         }
 
-        screen.iter()
+        screen
+            .iter()
             .map(|row| row.iter().collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
@@ -426,7 +436,11 @@ mod tests {
         for ch in 0x20u8..0x7F {
             let ebcdic = renderer.translate_to_ebcdic(ch);
             let back = renderer.translate_to_ascii(ebcdic);
-            assert_eq!(back, ch, "Roundtrip failed for ASCII 0x{:02X} ('{}')", ch, ch as char);
+            assert_eq!(
+                back, ch,
+                "Roundtrip failed for ASCII 0x{:02X} ('{}')",
+                ch, ch as char
+            );
         }
     }
 
@@ -595,7 +609,10 @@ PLAIN    DFHMDF POS=(3,5),LENGTH=10,ATTRB=(PROT)
 
         // Should have SF but NOT SFE
         assert!(stream.contains(&orders::SF), "SF order should be present");
-        assert!(!stream.contains(&orders::SFE), "SFE should NOT be present for plain field");
+        assert!(
+            !stream.contains(&orders::SFE),
+            "SFE should NOT be present for plain field"
+        );
     }
 
     #[test]

@@ -132,6 +132,9 @@ impl Vrs {
     }
 
     /// Check if retention is still active for a dataset.
+    ///
+    /// Cycle-based retention requires collection context, so RMM evaluates it
+    /// against all matching datasets during VRSEL processing.
     pub fn is_retained(&self, dataset: &TapeDataset, now: SystemTime) -> bool {
         match &self.retention {
             RetentionType::Days(days) => {
@@ -142,7 +145,7 @@ impl Vrs {
             }
             RetentionType::WhileCatalog => dataset.cataloged,
             RetentionType::Cycles(_) => {
-                // Cycle-based retention is checked externally
+                // Cycle-based retention is checked by Rmm::has_active_retention.
                 true
             }
         }
@@ -254,12 +257,51 @@ impl Rmm {
     fn has_active_retention(&self, volume: &TapeVolume, now: SystemTime) -> bool {
         for dataset in &volume.datasets {
             if let Some(vrs) = self.find_vrs(&dataset.dsn) {
-                if vrs.is_retained(dataset, now) {
+                if self.dataset_has_active_retention(vrs, dataset, now) {
                     return true;
                 }
             }
         }
         false
+    }
+
+    /// Check if a dataset is retained by the selected VRS.
+    fn dataset_has_active_retention(
+        &self,
+        vrs: &Vrs,
+        dataset: &TapeDataset,
+        now: SystemTime,
+    ) -> bool {
+        match vrs.retention {
+            RetentionType::Cycles(cycles) => self.is_retained_cycle(vrs, dataset, cycles),
+            _ => vrs.is_retained(dataset, now),
+        }
+    }
+
+    /// Check if a dataset is within the newest N matching cycles for a VRS.
+    fn is_retained_cycle(&self, vrs: &Vrs, dataset: &TapeDataset, cycles: u32) -> bool {
+        if cycles == 0 {
+            return false;
+        }
+
+        let mut matches: Vec<&TapeDataset> = self
+            .volumes
+            .values()
+            .flat_map(|volume| volume.datasets.iter())
+            .filter(|candidate| vrs.matches_dsn(&candidate.dsn))
+            .collect();
+
+        matches.sort_by(|a, b| {
+            b.created
+                .cmp(&a.created)
+                .then_with(|| a.dsn.cmp(&b.dsn))
+                .then_with(|| a.file_seq.cmp(&b.file_seq))
+        });
+
+        matches
+            .into_iter()
+            .take(cycles as usize)
+            .any(|candidate| std::ptr::eq(candidate, dataset))
     }
 
     /// VRSEL — Vital Record Selection processing.
@@ -414,6 +456,66 @@ mod tests {
     }
 
     #[test]
+    fn test_vrs_cycle_retention_keeps_newest_generations() {
+        let mut rmm = Rmm::new();
+        rmm.add_vrs(Vrs::cycles("DAILY", "PROD.BACKUP.*", 2));
+
+        let scenarios = [
+            ("CYC001", "PROD.BACKUP.G001", 3u64),
+            ("CYC002", "PROD.BACKUP.G002", 2),
+            ("CYC003", "PROD.BACKUP.G003", 1),
+            ("CYC004", "OTHER.BACKUP.G001", 1),
+        ];
+
+        for (volser, dsn, age_days) in scenarios {
+            rmm.add_scratch_volume(volser, "POOL1");
+            rmm.allocate_volume(dsn).unwrap();
+            if let Some(vol) = rmm.get_volume_mut(volser) {
+                vol.datasets[0].created = past_time(age_days);
+            }
+        }
+
+        let (scratched, retained) = rmm.vrsel(SystemTime::now());
+
+        assert_eq!(scratched, 2);
+        assert_eq!(retained, 2);
+        assert_eq!(
+            rmm.get_volume("CYC001").unwrap().state,
+            VolumeState::Scratch
+        );
+        assert_eq!(
+            rmm.get_volume("CYC002").unwrap().state,
+            VolumeState::Retained
+        );
+        assert_eq!(
+            rmm.get_volume("CYC003").unwrap().state,
+            VolumeState::Retained
+        );
+        assert_eq!(
+            rmm.get_volume("CYC004").unwrap().state,
+            VolumeState::Scratch
+        );
+    }
+
+    #[test]
+    fn test_vrs_zero_cycle_retention_expires_matching_datasets() {
+        let mut rmm = Rmm::new();
+        rmm.add_vrs(Vrs::cycles("NONE", "TEMP.BACKUP.*", 0));
+
+        rmm.add_scratch_volume("CYC000", "POOL1");
+        rmm.allocate_volume("TEMP.BACKUP.G001").unwrap();
+
+        let (scratched, retained) = rmm.vrsel(SystemTime::now());
+
+        assert_eq!(scratched, 1);
+        assert_eq!(retained, 0);
+        assert_eq!(
+            rmm.get_volume("CYC000").unwrap().state,
+            VolumeState::Scratch
+        );
+    }
+
+    #[test]
     fn test_vrs_pattern_matching() {
         let vrs = Vrs::days("TEST", "APP.DATA.**", 30);
         assert!(vrs.matches_dsn("APP.DATA.FILE1"));
@@ -539,16 +641,16 @@ mod tests {
 
         // Create 10 volumes with different datasets
         let scenarios = [
-            ("VOL001", "TEMP.WORK1", 10u64, true),     // Expired (7-day, 10 days old)
-            ("VOL002", "TEMP.WORK2", 3, true),          // Active (7-day, 3 days old)
-            ("VOL003", "PROD.DAILY.D1", 40, true),      // Expired (30-day, 40 days old)
-            ("VOL004", "PROD.DAILY.D2", 15, true),      // Active (30-day, 15 days old)
-            ("VOL005", "PROD.ANNUAL.2025", 200, true),   // Active (365-day, 200 days old)
-            ("VOL006", "PROD.ANNUAL.2024", 400, true),   // Expired (365-day, 400 days old)
-            ("VOL007", "CRITICAL.SYS", 1000, true),      // Retained (WHILECATALOG, cataloged)
-            ("VOL008", "CRITICAL.OLD", 500, false),       // Expired (WHILECATALOG, uncataloged)
-            ("VOL009", "UNKNOWN.DS", 5, true),            // No VRS → no retention → scratch
-            ("VOL010", "TEMP.RECENT", 1, true),           // Active (7-day, 1 day old)
+            ("VOL001", "TEMP.WORK1", 10u64, true), // Expired (7-day, 10 days old)
+            ("VOL002", "TEMP.WORK2", 3, true),     // Active (7-day, 3 days old)
+            ("VOL003", "PROD.DAILY.D1", 40, true), // Expired (30-day, 40 days old)
+            ("VOL004", "PROD.DAILY.D2", 15, true), // Active (30-day, 15 days old)
+            ("VOL005", "PROD.ANNUAL.2025", 200, true), // Active (365-day, 200 days old)
+            ("VOL006", "PROD.ANNUAL.2024", 400, true), // Expired (365-day, 400 days old)
+            ("VOL007", "CRITICAL.SYS", 1000, true), // Retained (WHILECATALOG, cataloged)
+            ("VOL008", "CRITICAL.OLD", 500, false), // Expired (WHILECATALOG, uncataloged)
+            ("VOL009", "UNKNOWN.DS", 5, true),     // No VRS → no retention → scratch
+            ("VOL010", "TEMP.RECENT", 1, true),    // Active (7-day, 1 day old)
         ];
 
         for (volser, dsn, age_days, cataloged) in &scenarios {

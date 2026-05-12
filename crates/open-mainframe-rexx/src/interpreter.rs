@@ -23,7 +23,14 @@ use crate::value::{
 
 /// Run a parsed REXX program and return its exit code and captured output.
 pub fn interpret(program: &Program) -> Result<ExecResult, InterpError> {
+    interpret_with_args(program, "")
+}
+
+/// Run a parsed REXX program with the initial argument string available to
+/// ARG, PARSE ARG, and the ARG built-in function.
+pub fn interpret_with_args(program: &Program, args: &str) -> Result<ExecResult, InterpError> {
     let mut interp = Interpreter::new();
+    interp.vars_mut().set("ARG", args.to_string());
     interp.run(program)?;
     Ok(ExecResult {
         rc: interp.rc,
@@ -229,6 +236,18 @@ impl DataStack {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ConditionTrap {
+    label: String,
+}
+
+#[derive(Debug, Clone)]
+struct ConditionInfo {
+    condition: String,
+    description: String,
+    instruction: String,
+}
+
 // ---------------------------------------------------------------------------
 //  DD file simulation for EXECIO
 // ---------------------------------------------------------------------------
@@ -265,6 +284,10 @@ struct Interpreter {
     address_env: String,
     /// Previous ADDRESS environment (for ADDRESS VALUE toggling).
     prev_address_env: String,
+    /// SIGNAL ON condition traps.
+    condition_traps: HashMap<String, ConditionTrap>,
+    /// Most recent trapped condition.
+    last_condition: Option<ConditionInfo>,
 }
 
 impl Interpreter {
@@ -281,6 +304,8 @@ impl Interpreter {
             dd_files: HashMap::new(),
             address_env: "TSO".to_string(),
             prev_address_env: "TSO".to_string(),
+            condition_traps: HashMap::new(),
+            last_condition: None,
         }
     }
 
@@ -424,8 +449,18 @@ impl Interpreter {
             }
             ClauseBody::Signal(target) => match target {
                 SignalTarget::Label(lbl) => Ok(Flow::Signal(lbl.clone())),
-                SignalTarget::On { .. } | SignalTarget::Off(_) => {
-                    // Condition traps are stub — just record, don't execute.
+                SignalTarget::On { condition, name } => {
+                    let condition_upper = condition.to_uppercase();
+                    let label = name
+                        .as_ref()
+                        .map(|n| n.to_uppercase())
+                        .unwrap_or_else(|| condition_upper.clone());
+                    self.condition_traps
+                        .insert(condition_upper, ConditionTrap { label });
+                    Ok(Flow::Normal)
+                }
+                SignalTarget::Off(condition) => {
+                    self.condition_traps.remove(&condition.to_uppercase());
                     Ok(Flow::Normal)
                 }
             },
@@ -440,6 +475,9 @@ impl Interpreter {
                         let cmd = self.eval_expr(cmd_expr)?;
                         let env_upper = env.to_uppercase();
                         self.exec_in_env(&env_upper, &cmd)?;
+                        if let Some(flow) = self.trap_host_command_error(&env_upper, &cmd) {
+                            return Ok(flow);
+                        }
                     }
                     (Some(env), None) => {
                         // ADDRESS env — change default environment.
@@ -568,6 +606,9 @@ impl Interpreter {
                 let cmd = self.eval_expr(expr)?;
                 let env = self.address_env.clone();
                 self.exec_in_env(&env, &cmd)?;
+                if let Some(flow) = self.trap_host_command_error(&env, &cmd) {
+                    return Ok(flow);
+                }
                 Ok(Flow::Normal)
             }
         }
@@ -1093,12 +1134,19 @@ impl Interpreter {
                 }
             }
             "CONDITION" => {
-                // Condition trap info -- stub returning empty.
                 let option = args.first().map(|a| a.to_uppercase()).unwrap_or_else(|| "I".into());
+                let info = self.last_condition.as_ref();
                 let result = match option.as_str() {
-                    "C" | "I" => "",
-                    "D" => "",
-                    "S" => "OFF",
+                    "C" => info.map(|i| i.condition.as_str()).unwrap_or(""),
+                    "D" => info.map(|i| i.description.as_str()).unwrap_or(""),
+                    "I" => info.map(|i| i.instruction.as_str()).unwrap_or(""),
+                    "S" => {
+                        if self.condition_traps.contains_key("ERROR") {
+                            "ON"
+                        } else {
+                            "OFF"
+                        }
+                    }
                     _ => "",
                 };
                 return Some(Ok(result.to_string()));
@@ -1318,6 +1366,22 @@ impl Interpreter {
         }
     }
 
+    fn trap_host_command_error(&mut self, environment: &str, command: &str) -> Option<Flow> {
+        if self.rc == 0 {
+            return None;
+        }
+
+        let trap = self.condition_traps.get("ERROR")?.clone();
+        let rc = self.rc;
+        self.vars_mut().set("RC", rc.to_string());
+        self.last_condition = Some(ConditionInfo {
+            condition: "ERROR".to_string(),
+            description: format!("Host command returned RC {rc}"),
+            instruction: format!("ADDRESS {environment} {command}"),
+        });
+        Some(Flow::Signal(trap.label))
+    }
+
     /// Execute an ISPEXEC command (stub for ISPF dialog services).
     fn exec_ispexec_command(&mut self, _cmd: &str) -> Result<(), InterpError> {
         // ISPF dialog services will be implemented in T104.
@@ -1522,6 +1586,12 @@ mod tests {
         interpret(&program).expect("interpret failed")
     }
 
+    fn run_with_args(source: &str, args: &str) -> ExecResult {
+        let tokens = lex(source).expect("lex failed");
+        let program = parse(&tokens).expect("parse failed");
+        interpret_with_args(&program, args).expect("interpret failed")
+    }
+
     #[test]
     fn test_say_string() {
         let result = run("SAY 'Hello World'");
@@ -1538,6 +1608,18 @@ mod tests {
     fn test_assignment_and_say() {
         let result = run("x = 10\nSAY x");
         assert_eq!(result.output, vec!["10"]);
+    }
+
+    #[test]
+    fn test_initial_arg_instruction_uses_exec_args() {
+        let result = run_with_args("ARG first second\nSAY first || '-' || second", "alpha beta");
+        assert_eq!(result.output, vec!["ALPHA-BETA"]);
+    }
+
+    #[test]
+    fn test_initial_arg_builtin_uses_exec_args() {
+        let result = run_with_args("SAY ARG(1)\nSAY ARG(2)", "alpha beta");
+        assert_eq!(result.output, vec!["alpha beta", ""]);
     }
 
     #[test]
@@ -1734,6 +1816,35 @@ mod tests {
     fn test_signal_label() {
         let result = run("SIGNAL skip\nSAY 'not printed'\nskip:\nSAY 'jumped'");
         assert_eq!(result.output, vec!["jumped"]);
+    }
+
+    #[test]
+    fn test_signal_on_error_traps_nonzero_host_command_rc() {
+        let result = run(
+            "SIGNAL ON ERROR NAME hosterr\n\
+             \"EXECIO 1 DISKR MISSING (STEM LINE.\"\n\
+             SAY 'not printed'\n\
+             EXIT 0\n\
+             hosterr:\n\
+             SAY CONDITION('C')\n\
+             SAY CONDITION('S')\n\
+             SAY RC",
+        );
+        assert_eq!(result.output, vec!["ERROR", "ON", "2"]);
+    }
+
+    #[test]
+    fn test_signal_off_error_disables_trap() {
+        let result = run(
+            "SIGNAL ON ERROR NAME hosterr\n\
+             SIGNAL OFF ERROR\n\
+             \"EXECIO 1 DISKR MISSING (STEM LINE.\"\n\
+             SAY CONDITION('S')\n\
+             EXIT 0\n\
+             hosterr:\n\
+             SAY 'not printed'",
+        );
+        assert_eq!(result.output, vec!["OFF"]);
     }
 
     #[test]

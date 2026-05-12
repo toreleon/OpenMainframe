@@ -4,6 +4,10 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Milliseconds between 1900-01-01 00:00:00 and 1970-01-01 00:00:00.
+pub const CICS_EPOCH_OFFSET_MILLIS: u64 = 2_208_988_800_000;
+const DAYS_BETWEEN_CICS_AND_UNIX_EPOCH: i64 = 25_567;
+
 /// Absolute time value (CICS ABSTIME format).
 ///
 /// This is a packed decimal representation of time since
@@ -24,12 +28,8 @@ impl AbsTime {
         // Convert to milliseconds
         let millis = since_unix.as_millis() as u64;
 
-        // Add offset from 1900 to 1970 (70 years in milliseconds)
-        // 70 * 365.25 * 24 * 60 * 60 * 1000 = 2208988800000
-        let cics_epoch_offset = 2_208_988_800_000u64;
-
         Self {
-            value: millis + cics_epoch_offset,
+            value: millis + CICS_EPOCH_OFFSET_MILLIS,
         }
     }
 
@@ -41,6 +41,18 @@ impl AbsTime {
     /// Get raw value.
     pub fn raw(&self) -> u64 {
         self.value
+    }
+
+    /// Create from Unix epoch milliseconds.
+    pub fn from_unix_millis(unix_millis: u64) -> Self {
+        Self {
+            value: unix_millis + CICS_EPOCH_OFFSET_MILLIS,
+        }
+    }
+
+    /// Convert to Unix epoch milliseconds.
+    pub fn to_unix_millis(&self) -> u64 {
+        self.value.saturating_sub(CICS_EPOCH_OFFSET_MILLIS)
     }
 
     /// Convert to packed decimal bytes (15 digits).
@@ -156,6 +168,44 @@ impl FormattedTime {
         format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
     }
 
+    /// Format as DD/MM/YY using the supplied separator.
+    pub fn date_ddmmyy(&self, separator: char) -> String {
+        format!(
+            "{:02}{}{:02}{}{:02}",
+            self.day,
+            separator,
+            self.month,
+            separator,
+            self.year % 100
+        )
+    }
+
+    /// Format as YYYY/MM/DD using the supplied separator.
+    pub fn date_yyyymmdd_sep(&self, separator: char) -> String {
+        format!(
+            "{:04}{}{:02}{}{:02}",
+            self.year,
+            separator,
+            self.month,
+            separator,
+            self.day
+        )
+    }
+
+    /// Format time as HH:MM:SS using the supplied separator.
+    pub fn time_with_separator(&self, separator: char) -> String {
+        format!(
+            "{:02}{}{:02}{}{:02}",
+            self.hour, separator, self.minute, separator, self.second
+        )
+    }
+
+    /// Day count since CICS absolute-time epoch, 1900-01-01.
+    pub fn day_count_since_1900(&self) -> u32 {
+        let days_before_year = days_before_year(self.year as i32);
+        (days_before_year + self.day_of_year as i64 - 1) as u32
+    }
+
     /// Get day name.
     pub fn day_name(&self) -> &'static str {
         match self.day_of_week {
@@ -207,29 +257,25 @@ impl TimeServices {
 
     /// FORMATTIME - Format an absolute time.
     pub fn formattime(&self, abstime: AbsTime) -> FormattedTime {
-        // Convert from CICS epoch (1900) to Unix epoch (1970)
-        let cics_epoch_offset = 2_208_988_800_000u64;
-        let unix_millis = abstime.value.saturating_sub(cics_epoch_offset);
+        let cics_millis = abstime.value;
+        let cics_secs = cics_millis / 1000;
+        let millis = (cics_millis % 1000) as u16;
 
-        // Convert to seconds and remaining millis
-        let unix_secs = unix_millis / 1000;
-        let millis = (unix_millis % 1000) as u16;
-
-        // Calculate date components
-        // Days since Unix epoch
-        let days_since_epoch = unix_secs / 86400;
-        let time_of_day = unix_secs % 86400;
+        let days_since_cics_epoch = cics_secs / 86400;
+        let days_since_unix_epoch =
+            days_since_cics_epoch as i64 - DAYS_BETWEEN_CICS_AND_UNIX_EPOCH;
+        let time_of_day = cics_secs % 86400;
 
         // Hours, minutes, seconds
         let hour = (time_of_day / 3600) as u8;
         let minute = ((time_of_day % 3600) / 60) as u8;
         let second = (time_of_day % 60) as u8;
 
-        // Day of week (Jan 1, 1970 was Thursday = 4)
-        let day_of_week = ((days_since_epoch + 4) % 7) as u8;
+        // 1900-01-01 was Monday. CICS DAYOFWEEK uses Sunday=0, Saturday=6.
+        let day_of_week = ((days_since_cics_epoch + 1) % 7) as u8;
 
         // Calculate year, month, day
-        let (year, month, day, day_of_year) = days_to_ymd(days_since_epoch as i64);
+        let (year, month, day, day_of_year) = days_to_ymd(days_since_unix_epoch);
 
         FormattedTime {
             year: year as u16,
@@ -268,6 +314,14 @@ fn days_to_ymd(days: i64) -> (i32, i32, i32, i32) {
     }
 
     (year as i32, m as i32, d as i32, day_of_year)
+}
+
+fn days_before_year(year: i32) -> i64 {
+    let years = (year - 1900) as i64;
+    let y = year as i64 - 1;
+    let leap_days_before_year = y / 4 - y / 100 + y / 400;
+    let base = 1899_i64 / 4 - 1899_i64 / 100 + 1899_i64 / 400;
+    years * 365 + (leap_days_before_year - base)
 }
 
 #[cfg(test)]
@@ -327,9 +381,36 @@ mod tests {
         assert_eq!(formatted.yyyyddd(), "2026044");
         assert_eq!(formatted.hhmmss(), "143045");
         assert_eq!(formatted.time_formatted(), "14:30:45");
+        assert_eq!(formatted.time_with_separator('.'), "14.30.45");
+        assert_eq!(formatted.date_ddmmyy('/'), "13/02/26");
+        assert_eq!(formatted.date_yyyymmdd_sep('-'), "2026-02-13");
         assert_eq!(formatted.date_formatted(), "2026-02-13");
         assert_eq!(formatted.day_name(), "Friday");
         assert_eq!(formatted.month_name(), "February");
+    }
+
+    #[test]
+    fn test_ibm_cics_abstime_epoch() {
+        let services = TimeServices::new();
+        let formatted = services.formattime(AbsTime::from_raw(0));
+
+        assert_eq!(formatted.year, 1900);
+        assert_eq!(formatted.month, 1);
+        assert_eq!(formatted.day, 1);
+        assert_eq!(formatted.day_of_year, 1);
+        assert_eq!(formatted.day_count_since_1900(), 0);
+    }
+
+    #[test]
+    fn test_ibm_cics_known_abstime_formatting() {
+        let services = TimeServices::new();
+        let abstime = AbsTime::from_unix_millis(1_772_289_045_123); // 2026-02-28 14:30:45.123 UTC
+        let formatted = services.formattime(abstime);
+
+        assert_eq!(formatted.yyyymmdd(), "20260228");
+        assert_eq!(formatted.yyddd(), "26059");
+        assert_eq!(formatted.hhmmss(), "143045");
+        assert_eq!(formatted.milliseconds, 123);
     }
 
     #[test]

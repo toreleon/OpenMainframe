@@ -4,21 +4,21 @@ session_timeout_seconds = 1800
 system_copybooks = ["crates/open-mainframe-cics/copybooks"]
 
 [cics.apps.CARDDEMO]
-program = "../carddemo/app/cbl/COSGN00C.cbl"
+program = "${CARDDEMO_DIR}/app/cbl/COSGN00C.cbl"
 include_paths = [
-    "../carddemo/app/cpy",
-    "../carddemo/app/cpy-bms",
+    "${CARDDEMO_DIR}/app/cpy",
+    "${CARDDEMO_DIR}/app/cpy-bms",
     "crates/open-mainframe-cics/copybooks",
 ]
-bms_dir = "../carddemo/app/bms"
-program_dir = "../carddemo/app/cbl"
+bms_dir = "${CARDDEMO_DIR}/app/bms"
+program_dir = "${CARDDEMO_DIR}/app/cbl"
 data_files = [
-    "ACCTDAT=../carddemo/app/data/ASCII/acctdata.txt:11:300",
-    "CARDDAT=../carddemo/app/data/ASCII/carddata.txt:16:150",
-    "CUSTDAT=../carddemo/app/data/ASCII/custdata.txt:9:500",
-    "CCXREF=../carddemo/app/data/ASCII/cardxref.txt:16:36",
-    "TRANSACT=../carddemo/app/data/ASCII/dailytran.txt:16:350",
-    "USRSEC=../carddemo/app/data/ASCII/usrsec.txt:8:80",
+    "ACCTDAT=${CARDDEMO_DIR}/app/data/ASCII/acctdata.txt:11:300",
+    "CARDDAT=${CARDDEMO_DIR}/app/data/ASCII/carddata.txt:16:150",
+    "CUSTDAT=${CARDDEMO_DIR}/app/data/ASCII/custdata.txt:9:500",
+    "CCXREF=${CARDDEMO_DIR}/app/data/ASCII/cardxref.txt:16:36",
+    "TRANSACT=${CARDDEMO_DIR}/app/data/ASCII/dailytran.txt:16:350",
+    "USRSEC=${CARDDEMO_DIR}/app/data/EBCDIC/AWS.M2.CARDDEMO.USRSEC.PS:8:80",
 ]
 
 [cics.apps.CARDDEMO.transids]
@@ -51,69 +51,69 @@ location = "OPENMF"
 # ── Dataset mounts ────────────────────────────────────────
 [[mounts]]
 type = "dataset-pds"
-host_path = "../carddemo/app/cbl"
+host_path = "${CARDDEMO_DIR}/app/cbl"
 virtual_path = "IBMUSER.CARDDEMO.COBOL"
 file_filter = "*.cbl"
 
 [[mounts]]
 type = "dataset-pds"
-host_path = "../carddemo/app/cpy"
+host_path = "${CARDDEMO_DIR}/app/cpy"
 virtual_path = "IBMUSER.CARDDEMO.COPY"
 
 [[mounts]]
 type = "dataset-pds"
-host_path = "../carddemo/app/cpy-bms"
+host_path = "${CARDDEMO_DIR}/app/cpy-bms"
 virtual_path = "IBMUSER.CARDDEMO.CPYBMS"
 
 [[mounts]]
 type = "dataset-pds"
-host_path = "../carddemo/app/bms"
+host_path = "${CARDDEMO_DIR}/app/bms"
 virtual_path = "IBMUSER.CARDDEMO.BMS"
 file_filter = "*.bms"
 
 [[mounts]]
 type = "dataset-pds"
-host_path = "../carddemo/app/data/ASCII"
+host_path = "${CARDDEMO_DIR}/app/data/ASCII"
 virtual_path = "IBMUSER.CARDDEMO.DATA"
 
 [[mounts]]
 type = "dataset-seq"
-host_path = "../carddemo/app/data/ASCII/acctdata.txt"
+host_path = "${CARDDEMO_DIR}/app/data/ASCII/acctdata.txt"
 virtual_path = "IBMUSER.CARDDEMO.ACCTDAT"
 read_only = true
 
 [[mounts]]
 type = "dataset-seq"
-host_path = "../carddemo/app/data/ASCII/carddata.txt"
+host_path = "${CARDDEMO_DIR}/app/data/ASCII/carddata.txt"
 virtual_path = "IBMUSER.CARDDEMO.CARDDAT"
 read_only = true
 
 [[mounts]]
 type = "dataset-seq"
-host_path = "../carddemo/app/data/ASCII/custdata.txt"
+host_path = "${CARDDEMO_DIR}/app/data/ASCII/custdata.txt"
 virtual_path = "IBMUSER.CARDDEMO.CUSTDAT"
 read_only = true
 
 [[mounts]]
 type = "dataset-seq"
-host_path = "../carddemo/app/data/ASCII/cardxref.txt"
+host_path = "${CARDDEMO_DIR}/app/data/ASCII/cardxref.txt"
 virtual_path = "IBMUSER.CARDDEMO.CCXREF"
 read_only = true
 
 [[mounts]]
 type = "dataset-seq"
-host_path = "../carddemo/app/data/ASCII/dailytran.txt"
+host_path = "${CARDDEMO_DIR}/app/data/ASCII/dailytran.txt"
 virtual_path = "IBMUSER.CARDDEMO.TRANSACT"
 read_only = true
 
 [[mounts]]
 type = "dataset-seq"
-host_path = "../carddemo/app/data/ASCII/usrsec.txt"
+host_path = "${CARDDEMO_DIR}/app/data/EBCDIC/AWS.M2.CARDDEMO.USRSEC.PS"
 virtual_path = "IBMUSER.CARDDEMO.USRSEC"
 read_only = true
 
 # ── USS mount ─────────────────────────────────────────────
 [[mounts]]
 type = "uss"
-host_path = "../carddemo"
+host_path = "${CARDDEMO_DIR}"
 virtual_path = "/u/ibmuser/carddemo"

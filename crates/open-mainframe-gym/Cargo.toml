@@ -1,0 +1,20 @@
+[package]
+name = "open-mainframe-gym"
+description = "Task-based Gym harness for evaluating mainframe development agents against OpenMainframe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum = "0.8"
+base64 = "0.22"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["rt", "macros"] }
+tower = "0.5"
+
+open-mainframe-dataset = { workspace = true }
+open-mainframe-zosmf = { workspace = true }
+

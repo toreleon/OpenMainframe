@@ -452,10 +452,10 @@ The crate includes approximately 200 unit tests organized by module:
 - **VSAM**: KSDS key operations, ESDS append/RBA, RRDS slot management, LDS page I/O, B+ tree (10,000-record stress test), alternate indexes, free space CI/CA splits, spanned records
 - **Catalog/ICF**: Name resolution, wildcard matching, ICF search order, EXAMINE/DIAGNOSE, 20-dataset integration scenario
 - **GDG**: Creation, rolloff, relative resolution, ICF integration
-- **IDCAMS**: All 19 command types, IF/THEN/SET, continuation lines, 27 tests
+- **IDCAMS**: All 19 command types, IF/THEN/ELSE/DO/END, SET, continuation lines
 - **DSS**: DUMP/RESTORE/COPY with filtering, serialization roundtrips
 - **HSM**: Migration/recall cycles, auto-migration, RLE compression, ABARS, 30 tests
-- **RMM**: Volume lifecycle, VRS policies, 1000-volume VRSEL
+- **RMM**: Volume lifecycle, VRS policies, cycle retention, 1000-volume VRSEL
 - **SMS/ACS**: Construct validation, ACS routine execution, FILTLIST pattern matching
 - **Space/Locking**: 3390 geometry, extent allocation, VTOC defrag, lock compatibility
 
@@ -469,7 +469,5 @@ All tests use temporary directories and are self-contained.
 - **No VSAM LSR/GSR buffering**: Local Shared Resources and Global Shared Resources buffer pools are not implemented.
 - **No SMS auto-class assignment integration**: ACS routines execute standalone but are not automatically invoked during dataset allocation.
 - **GDG EMPTY/NOEMPTY partially modeled**: The NOEMPTY flag is parsed but rolloff behavior does not differentiate between EMPTY and NOEMPTY modes.
-- **RMM Cycles retention is a stub**: `RetentionType::Cycles` always returns true; actual cycle-based expiration is not tracked.
 - **No EXCP-level I/O**: Execute Channel Program access method is not emulated.
 - **LDS does not integrate with DB2**: The Linear Data Set is functional but not wired into the DB2 crate's tablespace layer.
-- **IDCAMS MODAL commands**: Only IF/THEN is supported; DO/END loops and ELSE are not implemented.

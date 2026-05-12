@@ -171,8 +171,8 @@ Channels replace COMMAREA for new applications, supporting unlimited data size. 
 | RETRIEVE | Interval Control | Implemented |
 | CANCEL | Interval Control | Implemented |
 | DELAY | Interval Control | Implemented |
-| ASKTIME | Time | Implemented (type defined) |
-| FORMATTIME | Time | Implemented (type defined) |
+| ASKTIME | Time | Implemented |
+| FORMATTIME | Time | Implemented |
 | ASSIGN | System | Implemented (SYSID, APPLID, USERID, OPID, FACILITY, NETNAME, STARTCODE, SCRNHT, SCRNWD, CWALENG, EIBCALEN) |
 | ADDRESS | System | Implemented (type defined) |
 | ENQ | Synchronization | Implemented |
@@ -322,10 +322,8 @@ The crate has extensive inline `#[cfg(test)]` test blocks totaling 200+ tests ac
 
 - **File Control**: File I/O (READ/WRITE/REWRITE/DELETE FILE) is dispatched through the runtime but uses in-memory storage rather than the `open-mainframe-dataset` VSAM engine. Integration with actual VSAM datasets would provide realistic file behavior.
 - **HANDLE AID**: The preprocessor recognizes HANDLE AID but the runtime does not yet dispatch attention key (PF key) handling to labeled paragraphs.
-- **ASKTIME / FORMATTIME**: Command types are defined but runtime execution stubs return default values.
 - **SYNCPOINT**: Type defined but not wired to actual transaction commit/rollback logic.
 - **Interval Control TIME mode**: `start_at_time()` treats the time value as a relative offset rather than an absolute wall-clock time.
-- **BMS SEND MAP DATAONLY**: Recognized in `SendMapOptions` but the renderer does not suppress attribute bytes for data-only updates.
 - **Security**: No RACF integration for transaction/resource authorization checks.
 - **Multi-threading**: The runtime is single-threaded; real CICS supports concurrent tasks with quasi-reentrant programs.
 - **Web Services**: `WebClient` manages sessions but does not perform actual HTTP requests — responses must be simulated. Integration with an HTTP library would enable real outbound calls.

@@ -147,7 +147,7 @@ impl Dclgen {
         Ok(output)
     }
 
-    /// Generate PL/I include (stub).
+    /// Generate PL/I include.
     fn generate_pli(&self, table: &TableInfo) -> Db2Result<String> {
         let mut output = String::new();
 
@@ -166,11 +166,27 @@ impl Dclgen {
         output.push_str(&format!("DCL 1 {},\n", struct_name));
 
         for (i, col) in table.columns.iter().enumerate() {
-            let pli_name = col.name.to_uppercase();
+            let pli_name = self.to_pli_name(&col.name);
             let pli_type = self.to_pli_type(col);
             let comma = if i < table.columns.len() - 1 { "," } else { ";" };
 
             output.push_str(&format!("      5 {} {}{}\n", pli_name, pli_type, comma));
+        }
+
+        if self.options.null_indicators && table.columns.iter().any(|col| col.nullable) {
+            output.push_str("\n/* NULL INDICATORS */\n");
+            output.push_str(&format!("DCL 1 {}_IND,\n", struct_name));
+
+            let nullable_columns: Vec<&ColumnInfo> =
+                table.columns.iter().filter(|col| col.nullable).collect();
+            for (i, col) in nullable_columns.iter().enumerate() {
+                let pli_name = self.to_pli_name(&col.name);
+                let terminator = if i < nullable_columns.len() - 1 { "," } else { ";" };
+                output.push_str(&format!(
+                    "      5 {}_IND FIXED BIN(15){}\n",
+                    pli_name, terminator
+                ));
+            }
         }
 
         Ok(output)
@@ -193,6 +209,21 @@ impl Dclgen {
         // Truncate to 30 characters (COBOL limit)
         if result.len() > 30 {
             result.truncate(30);
+        }
+
+        result
+    }
+
+    /// Convert column name to PL/I-compatible name.
+    fn to_pli_name(&self, name: &str) -> String {
+        let mut result = name.to_uppercase().replace('-', "_");
+
+        if let Some(ref prefix) = self.options.prefix {
+            result = format!("{}_{}", prefix.to_uppercase().replace('-', "_"), result);
+        }
+
+        if result.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            result = format!("F_{}", result);
         }
 
         result
@@ -440,6 +471,28 @@ mod tests {
         assert!(result.contains("DCL 1 DCLCUSTOMER"));
         assert!(result.contains("FIXED BIN(31)")); // INTEGER
         assert!(result.contains("CHAR(50) VARYING")); // VARCHAR(50)
+        assert!(result.contains("NULL INDICATORS"));
+        assert!(result.contains("CUST_NAME_IND FIXED BIN(15)"));
+        assert!(result.contains("BALANCE_IND FIXED BIN(15)"));
+        assert!(!result.contains("CUST_ID_IND"));
+    }
+
+    #[test]
+    fn test_pli_generation_respects_prefix_and_no_null_indicators() {
+        let options = DclgenOptions {
+            language: DclgenLanguage::Pli,
+            prefix: Some("HV".to_string()),
+            null_indicators: false,
+            ..Default::default()
+        };
+        let dclgen = Dclgen::with_options(options);
+        let table = create_test_table();
+
+        let result = dclgen.generate(&table).unwrap();
+
+        assert!(result.contains("HV_CUST_ID FIXED BIN(31)"));
+        assert!(result.contains("HV_CUST_NAME CHAR(50) VARYING"));
+        assert!(!result.contains("NULL INDICATORS"));
     }
 
     #[test]

@@ -10,6 +10,7 @@ use std::collections::BinaryHeap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 use crate::error::SortError;
 use crate::fields::SortSpec;
@@ -18,6 +19,7 @@ use crate::reformat::OutrecSpec;
 
 /// Default maximum records to hold in memory for sorting.
 const DEFAULT_MAX_MEMORY_RECORDS: usize = 100_000;
+static TEMP_RUN_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Record format for input/output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -777,31 +779,41 @@ struct ExternalSortResult {
 /// Manages temporary sorted run files with automatic cleanup.
 struct TempRunFiles {
     paths: Vec<PathBuf>,
-    counter: usize,
 }
 
 impl TempRunFiles {
     fn new() -> Self {
-        Self {
-            paths: Vec::new(),
-            counter: 0,
-        }
+        Self { paths: Vec::new() }
     }
 
     /// Create a new temporary run file and return its path.
     fn create_run(&mut self) -> Result<PathBuf, SortError> {
-        let path = std::env::temp_dir().join(format!(
-            "omsort_run_{}_{}_{}.tmp",
-            std::process::id(),
-            self.counter,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        self.counter += 1;
-        self.paths.push(path.clone());
-        Ok(path)
+        for _ in 0..100 {
+            let id = TEMP_RUN_COUNTER.fetch_add(1, AtomicOrdering::SeqCst);
+            let path = std::env::temp_dir().join(format!(
+                "omsort_run_{}_{}_{}.tmp",
+                std::process::id(),
+                id,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ));
+
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(_) => {
+                    self.paths.push(path.clone());
+                    return Ok(path);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Err(SortError::IoError(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "unable to allocate unique external sort run file",
+        )))
     }
 }
 

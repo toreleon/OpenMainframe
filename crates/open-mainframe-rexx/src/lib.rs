@@ -18,7 +18,7 @@ pub mod token;
 pub mod value;
 
 pub use ast::{BinOp, Clause, ClauseBody, DoControl, Expr, Program, UnaryOp};
-pub use interpreter::{interpret, ExecResult, InterpError};
+pub use interpreter::{interpret, interpret_with_args, ExecResult, InterpError};
 pub use lexer::{is_rexx, lex, LexError};
 pub use parser::{parse, ParseError};
 pub use token::{Span, Token, TokenKind};

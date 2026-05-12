@@ -179,6 +179,12 @@ pub enum IdcamsCommand {
         value: u32,
     },
 
+    /// A grouped command sequence, such as a DO/END block.
+    Sequence {
+        /// Commands to execute in order.
+        commands: Vec<IdcamsCommand>,
+    },
+
     /// IF/THEN conditional - if condition met, execute the action.
     IfThen {
         /// Which variable to test (LASTCC or MAXCC).
@@ -189,6 +195,8 @@ pub enum IdcamsCommand {
         value: u32,
         /// Action to execute if condition is true.
         action: Box<IdcamsCommand>,
+        /// Optional action to execute if condition is false.
+        else_action: Option<Box<IdcamsCommand>>,
     },
 }
 

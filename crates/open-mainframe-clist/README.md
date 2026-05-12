@@ -274,7 +274,7 @@ variable pool, and command history recording.
 | `GLOBAL &vars` | Implemented | Shared variable declaration |
 | `NGLOBAL &vars` | Implemented | Return variable to local scope |
 | `SYSREF &vars` | Implemented | Pass-by-reference declaration |
-| `EXEC 'name' args` | Implemented | Nested CLIST invocation (stub) |
+| `EXEC 'name' args` | Implemented | Nested CLIST invocation through `TsoEnvironment` |
 | `LISTDSI 'dsname'` | Implemented | Via TsoEnvironment trait |
 | `ISPEXEC service` | Implemented | Via TsoEnvironment trait |
 | `ISREDIT command` | Implemented | Via TsoEnvironment trait |
@@ -395,8 +395,6 @@ cargo test -p open-mainframe-clist
 
 ## Limitations and Future Work
 
-- **Nested EXEC** is stubbed — logs the invocation but does not load external CLIST source
-- **SYSCALL** subprocedure dispatch logs the call but does not execute the label body
 - **&SYSDSN** always returns `"OK"` for non-empty names (no real dataset catalog)
 - **&STR / &NRSTR / &SYSNSUB** substitution suppression is approximate since substitution occurs before the function sees its arguments
 - **Arithmetic** uses `i64` only; no floating-point or packed-decimal support

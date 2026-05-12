@@ -5,6 +5,7 @@
 use crate::preprocess::Dbrm;
 use crate::Db2Result;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Bind options.
 #[derive(Debug, Clone)]
@@ -155,7 +156,7 @@ impl Binder {
             name: package_name,
             collection: self.options.collection.clone(),
             statement_count: dbrm.statements.len(),
-            bound_at: chrono_stub(),
+            bound_at: current_utc_timestamp(),
             prepared_statements,
         };
 
@@ -213,9 +214,34 @@ impl Default for Binder {
     }
 }
 
-/// Stub for timestamp (avoids chrono dependency).
-fn chrono_stub() -> String {
-    "2026-02-13 12:00:00".to_string()
+fn current_utc_timestamp() -> String {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let seconds = duration.as_secs();
+    let days = (seconds / 86_400) as i64;
+    let seconds_of_day = seconds % 86_400;
+    let (year, month, day) = days_to_ymd(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
+}
+
+fn days_to_ymd(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+
+    (year as i32, m, d)
 }
 
 #[cfg(test)]
@@ -254,6 +280,10 @@ mod tests {
 
         assert_eq!(package.name, "TESTPROG");
         assert_eq!(package.statement_count, 2);
+        assert_ne!(package.bound_at, "2026-02-13 12:00:00");
+        assert_eq!(package.bound_at.len(), 19);
+        assert_eq!(package.bound_at.as_bytes()[4], b'-');
+        assert_eq!(package.bound_at.as_bytes()[13], b':');
         assert_eq!(package.prepared_statements.len(), 2);
         assert_eq!(package.prepared_statements[0], "TESTPROG_0001");
         assert_eq!(package.prepared_statements[1], "TESTPROG_0002");

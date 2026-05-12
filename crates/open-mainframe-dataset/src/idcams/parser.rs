@@ -8,7 +8,13 @@ use crate::vsam::VsamType;
 
 /// Parse IDCAMS commands from input text.
 pub fn parse_commands(input: &str) -> Result<Vec<IdcamsCommand>, DatasetError> {
-    let mut commands = Vec::new();
+    let statements = collect_statements(input);
+    let mut index = 0;
+    parse_command_block(&statements, &mut index, false)
+}
+
+fn collect_statements(input: &str) -> Vec<String> {
+    let mut statements = Vec::new();
     let mut current_line = String::new();
 
     for line in input.lines() {
@@ -30,18 +36,48 @@ pub fn parse_commands(input: &str) -> Result<Vec<IdcamsCommand>, DatasetError> {
 
         // Parse the complete command
         if !current_line.is_empty() {
-            if let Some(cmd) = parse_single_command(&current_line)? {
-                commands.push(cmd);
-            }
+            statements.push(current_line.clone());
             current_line.clear();
         }
     }
 
     // Handle any remaining content
     if !current_line.is_empty() {
-        if let Some(cmd) = parse_single_command(&current_line)? {
+        statements.push(current_line);
+    }
+
+    statements
+}
+
+fn parse_command_block(
+    statements: &[String],
+    index: &mut usize,
+    stop_at_modal_boundary: bool,
+) -> Result<Vec<IdcamsCommand>, DatasetError> {
+    let mut commands = Vec::new();
+
+    while *index < statements.len() {
+        let input = statements[*index].trim().to_uppercase();
+        if stop_at_modal_boundary && (input == "END" || input.starts_with("ELSE")) {
+            break;
+        }
+
+        if input == "END" || input == "DO" || input.starts_with("ELSE") {
+            *index += 1;
+            continue;
+        }
+
+        if input.starts_with("IF") {
+            if let Some(cmd) = parse_if_command(statements, index)? {
+                commands.push(cmd);
+            }
+            continue;
+        }
+
+        if let Some(cmd) = parse_single_command(&input)? {
             commands.push(cmd);
         }
+        *index += 1;
     }
 
     Ok(commands)
@@ -98,6 +134,167 @@ fn parse_single_command(input: &str) -> Result<Option<IdcamsCommand>, DatasetErr
     Ok(None)
 }
 
+fn parse_if_command(
+    statements: &[String],
+    index: &mut usize,
+) -> Result<Option<IdcamsCommand>, DatasetError> {
+    let input = statements[*index].trim().to_uppercase();
+    let Some((variable, operator, value, then_clause)) = parse_if_condition(&input) else {
+        *index += 1;
+        return Ok(None);
+    };
+
+    let (then_clause, inline_else) = split_inline_else(then_clause);
+    let action = parse_modal_action(statements, index, then_clause)?;
+    let else_action = if let Some(else_clause) = inline_else {
+        Some(Box::new(parse_inline_modal_action(&else_clause)?))
+    } else {
+        parse_following_else(statements, index)?
+    };
+
+    Ok(Some(IdcamsCommand::IfThen {
+        variable,
+        operator,
+        value,
+        action: Box::new(action),
+        else_action,
+    }))
+}
+
+fn parse_if_condition(
+    input: &str,
+) -> Option<(ConditionVariable, ConditionOp, u32, &str)> {
+    let rest = input.strip_prefix("IF")?.trim();
+
+    let (variable, rest) = if let Some(rest) = rest.strip_prefix("LASTCC") {
+        (ConditionVariable::LastCc, rest.trim())
+    } else if let Some(rest) = rest.strip_prefix("MAXCC") {
+        (ConditionVariable::MaxCc, rest.trim())
+    } else {
+        return None;
+    };
+
+    let (operator, rest) = parse_condition_operator(rest)?;
+    let rest = rest.trim();
+    let value_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    if value_end == 0 {
+        return None;
+    }
+
+    let value = rest[..value_end].parse().ok()?;
+    let rest = rest[value_end..].trim();
+    let then_clause = rest.strip_prefix("THEN")?.trim();
+
+    Some((variable, operator, value, then_clause))
+}
+
+fn parse_condition_operator(input: &str) -> Option<(ConditionOp, &str)> {
+    if let Some(rest) = input.strip_prefix(">=") {
+        Some((ConditionOp::Ge, rest))
+    } else if let Some(rest) = input.strip_prefix("<=") {
+        Some((ConditionOp::Le, rest))
+    } else if let Some(rest) = input.strip_prefix('>') {
+        Some((ConditionOp::Gt, rest))
+    } else if let Some(rest) = input.strip_prefix('<') {
+        Some((ConditionOp::Lt, rest))
+    } else if let Some(rest) = input.strip_prefix("NE") {
+        Some((ConditionOp::Ne, rest.trim()))
+    } else if let Some(rest) = input.strip_prefix("LE") {
+        Some((ConditionOp::Le, rest.trim()))
+    } else if let Some(rest) = input.strip_prefix("GE") {
+        Some((ConditionOp::Ge, rest.trim()))
+    } else if let Some(rest) = input.strip_prefix("GT") {
+        Some((ConditionOp::Gt, rest.trim()))
+    } else if let Some(rest) = input.strip_prefix("LT") {
+        Some((ConditionOp::Lt, rest.trim()))
+    } else if let Some(rest) = input.strip_prefix("EQ") {
+        Some((ConditionOp::Eq, rest.trim()))
+    } else if let Some(rest) = input.strip_prefix('=') {
+        Some((ConditionOp::Eq, rest))
+    } else {
+        None
+    }
+}
+
+fn split_inline_else(then_clause: &str) -> (&str, Option<String>) {
+    if let Some(pos) = then_clause.find(" ELSE ") {
+        (&then_clause[..pos], Some(then_clause[pos + 6..].trim().to_string()))
+    } else {
+        (then_clause, None)
+    }
+}
+
+fn parse_modal_action(
+    statements: &[String],
+    index: &mut usize,
+    clause: &str,
+) -> Result<IdcamsCommand, DatasetError> {
+    let clause = clause.trim();
+    if clause == "DO" {
+        *index += 1;
+        let commands = parse_command_block(statements, index, true)?;
+        if *index < statements.len() && statements[*index].trim().eq_ignore_ascii_case("END") {
+            *index += 1;
+        }
+        return Ok(IdcamsCommand::Sequence { commands });
+    }
+
+    if clause.is_empty() {
+        *index += 1;
+        return Ok(IdcamsCommand::Sequence {
+            commands: Vec::new(),
+        });
+    }
+
+    *index += 1;
+    parse_inline_modal_action(clause)
+}
+
+fn parse_inline_modal_action(clause: &str) -> Result<IdcamsCommand, DatasetError> {
+    if clause == "DO" || clause.is_empty() {
+        return Ok(IdcamsCommand::Sequence {
+            commands: Vec::new(),
+        });
+    }
+
+    parse_single_command(clause)?.ok_or_else(|| {
+        DatasetError::InvalidParameter(format!("Invalid IDCAMS modal action: {}", clause))
+    })
+}
+
+fn parse_following_else(
+    statements: &[String],
+    index: &mut usize,
+) -> Result<Option<Box<IdcamsCommand>>, DatasetError> {
+    if *index >= statements.len() {
+        return Ok(None);
+    }
+
+    let input = statements[*index].trim().to_uppercase();
+    let Some(clause) = input.strip_prefix("ELSE") else {
+        return Ok(None);
+    };
+    let clause = clause.trim();
+
+    if clause == "DO" {
+        *index += 1;
+        let commands = parse_command_block(statements, index, true)?;
+        if *index < statements.len() && statements[*index].trim().eq_ignore_ascii_case("END") {
+            *index += 1;
+        }
+        return Ok(Some(Box::new(IdcamsCommand::Sequence { commands })));
+    }
+
+    *index += 1;
+    if clause.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(Box::new(parse_inline_modal_action(clause)?)))
+    }
+}
+
 /// Parse DEFINE command.
 fn parse_define(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
     // Check specific types first to avoid substring false matches.
@@ -132,8 +329,9 @@ fn parse_define(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
 
 /// Parse DEFINE CLUSTER command.
 fn parse_define_cluster(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
-    let name = extract_param(input, "NAME")
-        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE CLUSTER requires NAME".to_string()))?;
+    let name = extract_param(input, "NAME").ok_or_else(|| {
+        DatasetError::InvalidParameter("DEFINE CLUSTER requires NAME".to_string())
+    })?;
 
     let cluster_type = if input.contains("NUMBERED") {
         VsamType::Rrds
@@ -178,15 +376,19 @@ fn parse_define_gdg(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> 
 
 /// Parse DEFINE ALTERNATEINDEX command.
 fn parse_define_aix(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
-    let name = extract_param(input, "NAME")
-        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE ALTERNATEINDEX requires NAME".to_string()))?;
+    let name = extract_param(input, "NAME").ok_or_else(|| {
+        DatasetError::InvalidParameter("DEFINE ALTERNATEINDEX requires NAME".to_string())
+    })?;
 
-    let relate = extract_param(input, "RELATE")
-        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE ALTERNATEINDEX requires RELATE".to_string()))?;
+    let relate = extract_param(input, "RELATE").ok_or_else(|| {
+        DatasetError::InvalidParameter("DEFINE ALTERNATEINDEX requires RELATE".to_string())
+    })?;
 
     let keys = extract_param(input, "KEYS")
         .and_then(|s| parse_keys(&s))
-        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE ALTERNATEINDEX requires KEYS".to_string()))?;
+        .ok_or_else(|| {
+            DatasetError::InvalidParameter("DEFINE ALTERNATEINDEX requires KEYS".to_string())
+        })?;
 
     let unique_key = input.contains("UNIQUEKEY") || input.contains("UNIQUE");
 
@@ -203,8 +405,9 @@ fn parse_define_path(input: &str) -> Result<Option<IdcamsCommand>, DatasetError>
     let name = extract_param(input, "NAME")
         .ok_or_else(|| DatasetError::InvalidParameter("DEFINE PATH requires NAME".to_string()))?;
 
-    let pathentry = extract_param(input, "PATHENTRY")
-        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE PATH requires PATHENTRY".to_string()))?;
+    let pathentry = extract_param(input, "PATHENTRY").ok_or_else(|| {
+        DatasetError::InvalidParameter("DEFINE PATH requires PATHENTRY".to_string())
+    })?;
 
     Ok(Some(IdcamsCommand::DefinePath { name, pathentry }))
 }
@@ -245,9 +448,8 @@ fn parse_alter(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
     };
 
     let newname = extract_param(input, "NEWNAME");
-    let addvolumes = extract_param(input, "ADDVOLUMES").map(|s| {
-        s.split_whitespace().map(|v| v.to_string()).collect()
-    });
+    let addvolumes = extract_param(input, "ADDVOLUMES")
+        .map(|s| s.split_whitespace().map(|v| v.to_string()).collect());
     let freespace = extract_param(input, "FREESPACE").and_then(|s| {
         let parts: Vec<&str> = s.split_whitespace().collect();
         if parts.len() >= 2 {
@@ -277,8 +479,7 @@ fn parse_listcat(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
         .or_else(|| extract_param(input, "ENTRIES"))
         .or_else(|| extract_param(input, "ENTRY"));
 
-    let level = extract_param(input, "LVL")
-        .or_else(|| extract_param(input, "LEVEL"));
+    let level = extract_param(input, "LVL").or_else(|| extract_param(input, "LEVEL"));
 
     let all = input.contains(" ALL");
 
@@ -362,15 +563,15 @@ fn parse_verify(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
 
 /// Parse DEFINE NONVSAM command.
 fn parse_define_nonvsam(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
-    let name = extract_param(input, "NAME")
-        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE NONVSAM requires NAME".to_string()))?;
+    let name = extract_param(input, "NAME").ok_or_else(|| {
+        DatasetError::InvalidParameter("DEFINE NONVSAM requires NAME".to_string())
+    })?;
 
     let volumes = extract_param(input, "VOLUMES")
         .map(|s| s.split_whitespace().map(|v| v.to_string()).collect())
         .unwrap_or_default();
 
-    let devt = extract_param(input, "DEVT")
-        .or_else(|| extract_param(input, "DEVICETYPES"));
+    let devt = extract_param(input, "DEVT").or_else(|| extract_param(input, "DEVICETYPES"));
 
     Ok(Some(IdcamsCommand::DefineNonVsam {
         name,
@@ -384,8 +585,9 @@ fn parse_define_alias(input: &str) -> Result<Option<IdcamsCommand>, DatasetError
     let name = extract_param(input, "NAME")
         .ok_or_else(|| DatasetError::InvalidParameter("DEFINE ALIAS requires NAME".to_string()))?;
 
-    let relate = extract_param(input, "RELATE")
-        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE ALIAS requires RELATE".to_string()))?;
+    let relate = extract_param(input, "RELATE").ok_or_else(|| {
+        DatasetError::InvalidParameter("DEFINE ALIAS requires RELATE".to_string())
+    })?;
 
     Ok(Some(IdcamsCommand::DefineAlias { name, relate }))
 }
@@ -398,7 +600,9 @@ fn parse_bldindex(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
 
     let outdataset = extract_param(input, "OUTDATASET")
         .or_else(|| extract_param(input, "ODS"))
-        .ok_or_else(|| DatasetError::InvalidParameter("BLDINDEX requires OUTDATASET".to_string()))?;
+        .ok_or_else(|| {
+            DatasetError::InvalidParameter("BLDINDEX requires OUTDATASET".to_string())
+        })?;
 
     Ok(Some(IdcamsCommand::BldIndex {
         indataset,
@@ -435,10 +639,7 @@ fn parse_import(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
         .or_else(|| extract_param(input, "ODS"))
         .ok_or_else(|| DatasetError::InvalidParameter("IMPORT requires OUTDATASET".to_string()))?;
 
-    Ok(Some(IdcamsCommand::Import {
-        infile,
-        outdataset,
-    }))
+    Ok(Some(IdcamsCommand::Import { infile, outdataset }))
 }
 
 /// Parse EXAMINE command.
@@ -493,69 +694,9 @@ fn parse_set(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
 
 /// Parse IF/THEN conditional (e.g., IF LASTCC=12 THEN SET MAXCC=0).
 fn parse_if_then(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
-    // Pattern: IF LASTCC|MAXCC op value THEN action
-    let rest = input.strip_prefix("IF").unwrap_or(input).trim();
-
-    // Parse variable name
-    let (variable, rest) = if rest.starts_with("LASTCC") {
-        (ConditionVariable::LastCc, rest[6..].trim())
-    } else if rest.starts_with("MAXCC") {
-        (ConditionVariable::MaxCc, rest[5..].trim())
-    } else {
-        return Ok(None);
-    };
-
-    // Parse operator and value: =12, >=4, <=8, LE 08, GT 4, etc.
-    let (operator, rest) = if let Some(r) = rest.strip_prefix(">=") {
-        (ConditionOp::Ge, r)
-    } else if let Some(r) = rest.strip_prefix("<=") {
-        (ConditionOp::Le, r)
-    } else if let Some(r) = rest.strip_prefix('>') {
-        (ConditionOp::Gt, r)
-    } else if let Some(r) = rest.strip_prefix('<') {
-        (ConditionOp::Lt, r)
-    } else if let Some(r) = rest.strip_prefix("NE") {
-        (ConditionOp::Ne, r.trim())
-    } else if let Some(r) = rest.strip_prefix("LE") {
-        (ConditionOp::Le, r.trim())
-    } else if let Some(r) = rest.strip_prefix("GE") {
-        (ConditionOp::Ge, r.trim())
-    } else if let Some(r) = rest.strip_prefix("GT") {
-        (ConditionOp::Gt, r.trim())
-    } else if let Some(r) = rest.strip_prefix("LT") {
-        (ConditionOp::Lt, r.trim())
-    } else if let Some(r) = rest.strip_prefix("EQ") {
-        (ConditionOp::Eq, r.trim())
-    } else if let Some(r) = rest.strip_prefix('=') {
-        (ConditionOp::Eq, r)
-    } else {
-        return Ok(None);
-    };
-
-    let rest = rest.trim();
-
-    // Parse the numeric value — it ends at whitespace or THEN
-    let value_end = rest
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    let value: u32 = rest[..value_end].parse().unwrap_or(0);
-
-    let rest = rest[value_end..].trim();
-
-    // Expect THEN
-    let rest = rest.strip_prefix("THEN").unwrap_or(rest).trim();
-
-    // Parse the action (typically SET MAXCC=0)
-    if let Some(action) = parse_single_command(rest)? {
-        Ok(Some(IdcamsCommand::IfThen {
-            variable,
-            operator,
-            value,
-            action: Box::new(action),
-        }))
-    } else {
-        Ok(None)
-    }
+    let statements = vec![input.to_string()];
+    let mut index = 0;
+    parse_if_command(&statements, &mut index)
 }
 
 /// Extract a parameter value from IDCAMS syntax.
@@ -594,7 +735,8 @@ fn extract_param(input: &str, param: &str) -> Option<String> {
 /// Handles both space-separated (`KEYS(10 0)`) and comma-separated (`KEYS(11,25)`) forms.
 fn parse_keys(s: &str) -> Option<(u16, u16)> {
     // Split on whitespace or commas
-    let parts: Vec<&str> = s.split(|c: char| c.is_whitespace() || c == ',')
+    let parts: Vec<&str> = s
+        .split(|c: char| c.is_whitespace() || c == ',')
         .filter(|p| !p.is_empty())
         .collect();
     if parts.len() >= 2 {
@@ -612,7 +754,8 @@ fn parse_keys(s: &str) -> Option<(u16, u16)> {
 /// Parse RECORDSIZE(avg max) parameter.
 /// Handles both space-separated (`RECORDSIZE(100 200)`) and comma-separated (`RECORDSIZE(50,50)`) forms.
 fn parse_recordsize(s: &str) -> Option<(u32, u32)> {
-    let parts: Vec<&str> = s.split(|c: char| c.is_whitespace() || c == ',')
+    let parts: Vec<&str> = s
+        .split(|c: char| c.is_whitespace() || c == ',')
         .filter(|p| !p.is_empty())
         .collect();
     if parts.len() >= 2 {
@@ -1073,10 +1216,12 @@ mod tests {
                 operator,
                 value,
                 action,
+                else_action,
             } => {
                 assert_eq!(*variable, ConditionVariable::LastCc);
                 assert_eq!(*operator, ConditionOp::Eq);
                 assert_eq!(*value, 12);
+                assert!(else_action.is_none());
                 match action.as_ref() {
                     IdcamsCommand::SetMaxcc { value } => assert_eq!(*value, 0),
                     _ => panic!("Expected SetMaxcc action"),
@@ -1098,13 +1243,79 @@ mod tests {
                 operator,
                 value,
                 action,
+                else_action,
             } => {
                 assert_eq!(*variable, ConditionVariable::MaxCc);
                 assert_eq!(*operator, ConditionOp::Le);
                 assert_eq!(*value, 8);
+                assert!(else_action.is_none());
                 match action.as_ref() {
                     IdcamsCommand::SetMaxcc { value } => assert_eq!(*value, 0),
                     _ => panic!("Expected SetMaxcc action"),
+                }
+            }
+            _ => panic!("Expected IfThen"),
+        }
+    }
+
+    #[test]
+    fn test_parse_if_then_else_do_end() {
+        let input = "IF LASTCC = 8 THEN DO\n\
+                     SET MAXCC = 0\n\
+                     END\n\
+                     ELSE DO\n\
+                     SET MAXCC = 4\n\
+                     END";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::IfThen {
+                variable,
+                operator,
+                value,
+                action,
+                else_action,
+            } => {
+                assert_eq!(*variable, ConditionVariable::LastCc);
+                assert_eq!(*operator, ConditionOp::Eq);
+                assert_eq!(*value, 8);
+                match action.as_ref() {
+                    IdcamsCommand::Sequence { commands } => {
+                        assert_eq!(commands.len(), 1);
+                    }
+                    _ => panic!("Expected THEN sequence"),
+                }
+                match else_action.as_deref() {
+                    Some(IdcamsCommand::Sequence { commands }) => {
+                        assert_eq!(commands.len(), 1);
+                    }
+                    _ => panic!("Expected ELSE sequence"),
+                }
+            }
+            _ => panic!("Expected IfThen"),
+        }
+    }
+
+    #[test]
+    fn test_parse_if_then_else_single_commands() {
+        let input = "IF MAXCC GT 4 THEN SET MAXCC = 0 ELSE SET MAXCC = 12";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::IfThen {
+                action,
+                else_action,
+                ..
+            } => {
+                match action.as_ref() {
+                    IdcamsCommand::SetMaxcc { value } => assert_eq!(*value, 0),
+                    _ => panic!("Expected THEN SetMaxcc"),
+                }
+                match else_action.as_deref() {
+                    Some(IdcamsCommand::SetMaxcc { value }) => assert_eq!(*value, 12),
+                    _ => panic!("Expected ELSE SetMaxcc"),
                 }
             }
             _ => panic!("Expected IfThen"),
@@ -1129,7 +1340,10 @@ mod tests {
             extract_param("NAME(MY.TEST)", "NAME"),
             Some("MY.TEST".to_string())
         );
-        assert_eq!(extract_param("KEYS(10 0)", "KEYS"), Some("10 0".to_string()));
+        assert_eq!(
+            extract_param("KEYS(10 0)", "KEYS"),
+            Some("10 0".to_string())
+        );
         assert_eq!(extract_param("NONAME", "NAME"), None);
     }
 }

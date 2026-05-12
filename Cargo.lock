@@ -1495,6 +1495,7 @@ dependencies = [
  "clap",
  "open-mainframe-cics",
  "open-mainframe-cobol",
+ "open-mainframe-encoding",
  "open-mainframe-precompilers",
  "open-mainframe-runtime",
  "open-mainframe-tui",
@@ -1648,6 +1649,20 @@ version = "0.1.0"
 dependencies = [
  "miette",
  "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-gym"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "open-mainframe-dataset",
+ "open-mainframe-zosmf",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower 0.5.3",
 ]
 
 [[package]]
