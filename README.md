@@ -47,6 +47,27 @@ From workspace root:
 make up
 ```
 
+## Agent Gym Harness
+
+`open-mainframe-gym` provides an in-process, task-based environment for
+SWE-Gym/SWE-bench-style mainframe development agents. It wraps the same z/OSMF
+router used by normal clients, provisions isolated USS and dataset storage, and
+returns structured observations plus declarative task reports.
+
+```rust
+use open_mainframe_gym::{dataset_create_task, GymConfig, MainframeGymEnv};
+
+# async fn example() -> Result<(), String> {
+let env = MainframeGymEnv::new(GymConfig::isolated())?;
+let report = env
+    .run_task(dataset_create_task("IBMUSER.GYM.SEQ"))
+    .await?;
+
+assert!(report.passed());
+# Ok(())
+# }
+```
+
 ## Compatibility Highlights
 
 - z/OSMF-style endpoints for files, jobs, TSO, console, USS
