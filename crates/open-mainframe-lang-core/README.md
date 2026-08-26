@@ -1,99 +1,154 @@
 # open-mainframe-lang-core
 
-Shared infrastructure for OpenMainframe language compilers and interpreters. This crate provides the foundational types and traits for source location tracking, diagnostics, and common compiler pipeline stages.
+Shared foundational types, traits, and preprocessing infrastructure for OpenMainframe language compilers and interpreters.
 
-## Overview
+## Purpose
 
-The `open-mainframe-lang-core` crate is the bedrock for all language-related projects in the OpenMainframe workspace (COBOL, JCL, PL/I, REXX, FOCUS, etc.). By centralizing core types like `Span` and `Diagnostic`, it ensures consistent error reporting and interoperability between different language tools (e.g., source-to-source precompilers).
+`open-mainframe-lang-core` provides zero-dependency, common compiler primitives across all mainframe language implementations in the OpenMainframe workspace (such as COBOL, JCL, and symbolic analyzers). It standardizes source tracking (`Span`, `FileId`, `Location`), line ending normalization (`PreprocessedSource`, `LineIndex`), unified diagnostic reporting (`Diagnostic`, `Severity`), and core compiler pipeline contracts (`AstNode`, `Lexer`, `Parse`).
+
+## Capabilities
+
+- **Source Location Tracking**: Byte-offset ranges (`Span`) referencing specific files via lightweight IDs (`FileId`), with support for span extension, length checks, and 1-based `(line, column)` coordinate conversion (`Location`).
+- **Source Preprocessing and Indexing**: Universal line-ending normalization (`normalize_line_endings`) converting CRLF and bare CR to LF, paired with `LineIndex` and `PreprocessedSource` for binary-searched offset-to-coordinate queries (both 0-indexed and 1-indexed).
+- **Diagnostics Reporting**: Structured compiler errors, warnings, and informational messages (`Diagnostic`) with error codes, human-readable explanations, source spans, and actionable fix suggestions (`suggestion`).
+- **Compiler Stage Traits**: Shared, minimally prescriptive traits (`AstNode`, `Lexer`, `Parse`) for building modular, decoupled language parsers and AST consumers.
 
 ## Architecture
 
 ```
-    Compiler / Interpreter                Shared Core Infrastructure
-    ┌──────────────────┐                  ┌────────────────────────┐
-    │  Specific Lexer  │ ────── Traits ──>│  Lexer & Parse Traits  │
-    └──────────────────┘                  └────────────────────────┘
-                                                       │
-    ┌──────────────────┐                  ┌────────────────────────┐
-    │  Specific AST    │ ────── Traits ──>│  AstNode Trait         │
-    └──────────────────┘                  └────────────────────────┘
-                                                       │
-    ┌──────────────────┐                  ┌────────────────────────┐
-    │  Error Handling  │ ───── Types ────>│  Span, FileId, Location│
-    │  Diagnostic      │                  │  Severity, Diagnostic  │
-    └──────────────────┘                  └────────────────────────┘
+     Language Compilers (COBOL, JCL, etc.)
+     ┌─────────────────────────────────────────────────────────┐
+     │  Lexer / Tokenizer           Parser & AST               │
+     │  (Implements Lexer)          (Implements Parse/AstNode) │
+     └─────────────┬───────────────────────────┬───────────────┘
+                   │                           │
+                   ▼                           ▼
+     ┌─────────────────────────────────────────────────────────┐
+     │                open-mainframe-lang-core                 │
+     │  ┌────────────────────────┐  ┌───────────────────────┐  │
+     │  │ PreprocessedSource     │  │ Diagnostic / Severity │  │
+     │  │ LineIndex / normalize  │  │ Span / FileId / Coord │  │
+     │  └────────────────────────┘  └───────────────────────┘  │
+     └─────────────────────────────────────────────────────────┘
 ```
 
 ### Module Structure
 
-| Module | Description |
-|--------|-------------|
-| `span` | Source location tracking: `Span`, `FileId`, `Location`, and offset conversion |
-| `diagnostic`| Unified error and warning representation: `Diagnostic`, `Severity` |
-| `traits` | Foundational traits for compiler stages: `AstNode`, `Lexer`, `Parse` |
-| `preprocess`| Universal source preprocessor: Normalization and line indexing |
+| Module | Responsibility |
+|---|---|
+| `span.rs` | Source byte tracking: `Span`, `FileId`, `Location`, and `offset_to_line_col` conversion |
+| `diagnostic.rs` | Error and warning representations: `Diagnostic`, `Severity` |
+| `preprocess.rs` | Universal line-ending normalization (`\r\n` / `\r` → `\n`), `LineIndex`, and `PreprocessedSource` |
+| `traits.rs` | Stage contracts: `AstNode`, `Lexer`, and `Parse` traits |
+| `lib.rs` | Crate root and top-level re-exports |
 
-## Key Types and Traits
+## Public API
 
-### Source Tracking
-- `Span`: Represents a range of bytes within a source file. Supports merging and offsetting.
-- `FileId`: Unique identifier for a source file within a diagnostic context.
-- `Location`: Human-readable `line:column` representation of a source position.
+### Core Types
 
-### Diagnostics
-- `Diagnostic`: A rich error message containing a `Severity`, message text, and optional `Span`.
-- `Severity`: Level of the diagnostic: `Error`, `Warning`, `Info`, `Hint`.
+- `Span`: Contiguous byte range (`file: FileId`, `start: u32`, `end: u32`) with constructors (`new`, `main`, `point`, `dummy`) and operations (`len`, `is_empty`, `extend`, `to_range`).
+- `FileId`: Lightweight 32-bit source file identifier (`FileId(pub u32)`), with `FileId::MAIN` constant for the root source file.
+- `Location`: Human-readable 1-indexed source position (`line: u32`, `column: u32`).
+- `PreprocessedSource`: Container holding normalized source `text: String` and precomputed `line_index: LineIndex`. Provides `new`, `from_unix`, `offset_to_line_col_0`, `offset_to_line_col_1`, and line span helpers.
+- `LineIndex`: Precomputed newline offsets enabling `O(log N)` binary-searched line and column resolution from raw byte offsets.
+- `Diagnostic`: Structured compiler issue with `severity: Severity`, `code: String`, `message: String`, `span: Span`, and optional `suggestion: Option<String>`.
+- `Severity`: 3-level severity enumeration: `Error`, `Warning`, `Info`.
 
-### Compiler Traits
-- `AstNode`: Trait for types representing nodes in an Abstract Syntax Tree.
-- `Lexer`: Standard interface for tokenization.
-- `Parse`: Standard interface for parsing tokens into an AST.
+### Shared Traits
 
-## Usage Examples
+- `AstNode`: Contract requiring `fn span(&self) -> Span`.
+- `Lexer`: Interface defining `type Token`, `type Error`, and `fn tokenize(&mut self, source: &str) -> (Vec<Self::Token>, Vec<Self::Error>)`.
+- `Parse`: Interface defining `type Ast: AstNode`, `type Error`, and `fn parse(&mut self) -> (Option<Self::Ast>, Vec<Self::Error>)`.
 
-### Using Spans and Locations
+## Integration
+
+### Internal Workspace Dependencies
+
+*None* — `open-mainframe-lang-core` has zero external or workspace dependencies to keep the foundational dependency graph clean.
+
+### Workspace Consumers
+
+- `open-mainframe-cobol` — Uses `Span`, `FileId`, `Location`, and AST traits for COBOL lexical analysis, preprocessors, and parser AST nodes.
+- `open-mainframe-jcl` — Uses `Span` and `AstNode` for JCL parsing and error attribution.
+- `open-mainframe-symbolic` — Uses shared AST and span primitives for symbolic analysis.
+
+## Examples
+
+### Preprocessing and Coordinate Conversion
 
 ```rust
-use open_mainframe_lang_core::{Span, offset_to_line_col};
+use open_mainframe_lang_core::{PreprocessedSource, Span};
 
-let source = "LINE 1\nLINE 2\nLINE 3";
-let span = Span::new(7, 13); // "LINE 2"
+let raw_source = "IDENTIFICATION DIVISION.\r\nPROGRAM-ID. HELLO.\r\n";
+let preprocessed = PreprocessedSource::new(raw_source);
 
-let (line, col) = offset_to_line_col(source, span.start);
-assert_eq!(line, 1); // 0-indexed
-assert_eq!(col, 0);
+// Line endings normalized to Unix \n
+assert_eq!(preprocessed.text, "IDENTIFICATION DIVISION.\nPROGRAM-ID. HELLO.\n");
+
+// Binary-searched coordinate lookup (1-indexed: line 2, col 1)
+let prog_id_offset = 25; // start of PROGRAM-ID
+let (line, col) = preprocessed.line_index.offset_to_line_col_1(prog_id_offset);
+assert_eq!(line, 2);
+assert_eq!(col, 1);
 ```
 
-### Implementing a Shared Lexer Trait
+### Emitting Diagnostics with Spans
 
 ```rust
-use open_mainframe_lang_core::Lexer;
+use open_mainframe_lang_core::{Diagnostic, Severity, Span};
 
-struct MyLexer<'a> {
-    source: &'a str,
+let span = Span::main(25, 35);
+let diag = Diagnostic::error("COB001", "Missing period after PROGRAM-ID", span)
+    .with_suggestion("Add '.' after program name");
+
+assert_eq!(diag.severity, Severity::Error);
+assert_eq!(diag.code, "COB001");
+assert!(diag.is_error());
+assert_eq!(
+    format!("{}", diag),
+    "error[COB001]: Missing period after PROGRAM-ID (Add '.' after program name)"
+);
+```
+
+### Implementing `AstNode`
+
+```rust
+use open_mainframe_lang_core::{AstNode, Span};
+
+struct ProgramHeader {
+    name: String,
+    span: Span,
 }
 
-// Example implementation
-impl<'a> MyLexer<'a> {
-    fn next_token(&mut self) -> Option<String> {
-        None
+impl AstNode for ProgramHeader {
+    fn span(&self) -> Span {
+        self.span
     }
 }
 ```
 
-## Design Principles
-
-1. **Zero External Dependencies**: This crate is a "pure" Rust crate with no external dependencies (no `miette`, no `thiserror` at this level). This keeps the dependency graph clean for all downstream consumers.
-2. **Standardized Interop**: By using the same `Span` and `FileId` types, a COBOL precompiler can report errors that are perfectly integrated with the main COBOL compiler's diagnostic output.
-3. **Performance**: All types are designed for low overhead, utilizing small IDs and avoiding heavy allocations in the hot path of lexing and parsing.
-
 ## Testing
 
-The core crate is exhaustively tested to ensure mathematical correctness of span operations and coordinate conversions:
-- **Span**: Merging, intersection, and containment logic.
-- **Coordinates**: Round-trip tests for offset-to-location and location-to-offset.
-- **Preprocess**: Validation of line-ending normalization across different platforms (CRLF, LF).
+The crate includes 38 unit and documentation tests verifying mathematical correctness of span manipulation, line-ending normalization, coordinate conversion, and diagnostic formatting:
 
-```sh
+```bash
 cargo test -p open-mainframe-lang-core
 ```
+
+Key test locations:
+- `src/span.rs` — Span merging, containment, empty spans, and 1-based coordinate conversions.
+- `src/preprocess.rs` — CRLF, bare CR, mixed line endings, offset tracking roundtrips, and line indexing.
+- `src/diagnostic.rs` — Diagnostic creation, severity formatting, and suggestion chaining.
+- `src/traits.rs` — Trait compilation and mock implementations.
+
+## Limitations
+
+- **Byte Offset Basis**: All offsets in `Span` and `LineIndex` represent UTF-8 byte offsets. Languages with fixed card-column conventions (e.g. COBOL Area A/B, HLASM column rules) must layer column-aware slicing on top.
+- **Synchronous Tokenization**: The `Lexer` and `Parse` traits are synchronous in-memory contracts and do not accommodate streaming or incremental parsing pipelines directly.
+- **Single-File Diagnostics**: `Diagnostic` references a single primary `Span`. Multi-span diagnostics (such as related definitions or secondary labels) must be managed at higher layers or via downstream error reporters like `miette`.
+
+## Related Documentation
+
+- [Crate Map](../../docs/architecture/crate-map.md) — Architectural overview of all workspace crates.
+- [open-mainframe-cobol](../open-mainframe-cobol/README.md) — Primary language compiler consumer.
+- [open-mainframe-jcl](../open-mainframe-jcl/README.md) — JCL interpreter consumer.

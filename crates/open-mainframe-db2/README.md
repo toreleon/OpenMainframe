@@ -2,13 +2,43 @@
 
 DB2 SQL preprocessing, runtime execution, and utility services for the OpenMainframe z/OS clone. This crate provides a complete DB2-for-z/OS compatibility layer including EXEC SQL preprocessing for COBOL programs, DB2-to-PostgreSQL SQL dialect translation, cursor management with scrollable cursors, transaction management with savepoints, SQLCA status tracking with 52 SQLCODE constants, BIND/REBIND/FREE lifecycle, DCLGEN copybook generation, and DSNTEP2 dynamic SQL execution.
 
-## Overview
+## Purpose
 
-On z/OS, DB2 is the primary relational database system. COBOL and PL/I programs access DB2 through embedded SQL — `EXEC SQL ... END-EXEC` statements are processed by the DB2 precompiler, which extracts the SQL into a DBRM (Database Request Module), replaces it with COBOL CALL statements, and generates a SQLCA communication area. The DBRM is then bound into a package or plan that the runtime uses to execute the SQL.
+On z/OS, DB2 is the primary relational database management system. COBOL and PL/I applications interact with DB2 through embedded SQL (`EXEC SQL ... END-EXEC`), which is extracted into Database Request Modules (DBRMs), bound into runtime packages, and executed via the SQL Communication Area (SQLCA). The `open-mainframe-db2` crate emulates this full DB2 lifecycle: source code preprocessing, DB2-to-PostgreSQL SQL translation, runtime cursor and transaction management, SQLCA status mapping, package bind management, DCLGEN copybook generation, and batch utility execution.
 
-This crate emulates the full DB2 development and execution pipeline. The preprocessor scans COBOL fixed-format source for EXEC SQL blocks, classifies 28 SQL statement types, extracts host variables with indicator support, tracks WHENEVER directive state, and generates replacement COBOL CALL code. The runtime translates DB2 SQL dialect to PostgreSQL through 13 translation passes, manages cursors (including scrollable cursors with positioned UPDATE/DELETE), handles transactions with savepoints, and provides complete SQLCA status reporting with bidirectional SQLCODE-to-SQLSTATE mapping. An optional `postgres` feature enables live execution against a PostgreSQL database via connection pooling.
+## Capabilities
 
-The crate also implements key DB2 utilities: BIND for creating prepared statement packages from DBRMs, DCLGEN for generating COBOL copybooks and PL/I includes from table schemas, DSNTEP2 for interactive SQL execution, and LOAD/UNLOAD for data movement.
+- **EXEC SQL Preprocessing (`preprocess`)**:
+  - Scans COBOL source files for `EXEC SQL` blocks, comment lines, and continuation cards.
+  - Classifies 28 SQL statement types (DDL, DML, cursor declarations, transaction control, dynamic SQL).
+  - Extracts host variables and null indicator variables (`:VAR :IND`), validating naming rules.
+  - Maintains `WHENEVER` directive state (`SQLERROR`, `NOT FOUND`, `SQLWARNING`) across paragraphs.
+  - Emits COBOL `CALL` replacements and preprocessor `SQLCA` copybooks.
+  - Generates DBRMs with embedded SQL text, host variable types, and statement listings.
+- **SQL Translation (`runtime::translate`)**:
+  - Translates DB2 SQL dialect to standard PostgreSQL through 13 specialized passes:
+    - Special registers (`CURRENT DATE`, `CURRENT TIMESTAMP`, `CURRENT SQLID`, `CURRENT DEGREE`, `CURRENT SERVER`).
+    - Scalar functions (`SUBSTR` → `SUBSTRING`, `VALUE` → `COALESCE`, string concatenation `||`).
+    - Date arithmetic and microsecond formatting.
+    - Data type mappings (`SMALLINT`, `INTEGER`, `DECIMAL(p,s)`, `VARCHAR`, `TIMESTAMP`).
+    - DB2 clauses (`FETCH FIRST n ROWS ONLY` → `LIMIT n`, `FOR UPDATE OF` translation).
+    - Basic `MERGE INTO` transformations to `INSERT ... ON CONFLICT DO UPDATE`.
+    - Clause striping (`WITH UR`, `WITH CS`, `OPTIMIZE FOR n ROWS`).
+- **Runtime Execution (`runtime::executor`, `runtime::cursor`, `runtime::transaction`)**:
+  - Manages database connections with optional PostgreSQL connection pooling (`r2d2`, `r2d2_postgres`).
+  - Supports mock execution mode for database-free testing and live PostgreSQL execution mode.
+  - Cursors: sequential, scrollable (`NEXT`, `PRIOR`, `FIRST`, `LAST`, `ABSOLUTE`, `RELATIVE`), `WITH HOLD`, positioned `UPDATE/DELETE WHERE CURRENT OF`.
+  - Transaction control: `COMMIT`, `ROLLBACK`, named savepoints, and auto-commit behavior.
+  - Parameter binding, null indicator injection/extraction, and COBOL PIC string/decimal formatting.
+- **SQLCA Status System (`runtime::sqlca`)**:
+  - Complete SQL Communication Area with 52 standard DB2 SQLCODE constants (`0`, `100`, `-803`, `-811`, `-911`, etc.).
+  - Bidirectional mapping between DB2 SQLCODE and 5-character ANSI/ISO SQLSTATE codes.
+  - Automatic conversion from PostgreSQL errors and SQLSTATE classes to DB2 SQLCODEs.
+- **DB2 Utilities (`utilities`, `bind`, `ops`)**:
+  - **BIND / REBIND / FREE (`bind`)**: Package and plan lifecycle, DBRM aggregation, BIND options (`ISOLATION`, `VALIDATE`, `ACTION`, `EXPLAIN`).
+  - **DCLGEN (`utilities::dclgen`, `ops::DclgenUtil`)**: Schema-to-copybook generator producing COBOL 01/05 structures and PL/I structures with null indicator arrays.
+  - **DSNTEP2 (`ops::Dsntep2`)**: Dynamic SQL script execution utility with in-memory table store.
+  - **LOAD / UNLOAD (`ops::LoadUtility`, `ops::UnloadUtility`)**: Delimited and fixed-format data loading and extraction.
 
 ## Architecture
 
@@ -383,16 +413,21 @@ let copybook = dclgen.generate(&table)?;
 println!("{}", copybook);
 ```
 
-## Dependencies
+## Integration
 
-| Dependency | Purpose |
-|------------|---------|
-| `thiserror` | Error type derive macros |
-| `serde` | DBRM serialization/deserialization |
-| `serde_json` | JSON format for DBRM files |
-| `postgres` | PostgreSQL client (optional, feature-gated) |
-| `r2d2` | Connection pooling (optional, feature-gated) |
-| `r2d2_postgres` | PostgreSQL r2d2 adapter (optional, feature-gated) |
+### Internal Workspace Dependencies
+
+- `thiserror`: Error type derive macros.
+- `serde` / `serde_json`: DBRM serialization and JSON listing output.
+- `postgres` / `r2d2` / `r2d2_postgres` (optional, feature `postgres`): Live PostgreSQL execution and connection pooling.
+
+### Workspace Consumers
+
+- `open-mainframe-precompilers`: Uses `open-mainframe-db2::preprocess` for COBOL `EXEC SQL` scanning and block extraction.
+- `open-mainframe-drda`: Uses `open-mainframe-db2` runtime structures for DRDA application server request execution.
+- `open-mainframe-zosmf`: REST API handlers (`/zosmf/restdb2/*`) expose SQL execution and BIND packages.
+- `open-mainframe-assess`: Detects DB2 SQL patterns and assesses migration complexity.
+- Root workspace member in `Cargo.toml`.
 
 ### Feature Flags
 
@@ -408,7 +443,7 @@ Run the full test suite:
 cargo test -p open-mainframe-db2
 ```
 
-The crate includes approximately 200 unit tests organized by module:
+The crate contains 312 total tests (295 unit tests and 17 integration tests) organized by module:
 
 - **Scanner** (8 tests): Single/multi-line EXEC SQL, comment handling, continuation lines, unclosed block detection
 - **Preprocessor** (30 tests): All 28 statement types, host variable extraction, WHENEVER state management, CALL code generation
@@ -423,10 +458,11 @@ The crate includes approximately 200 unit tests organized by module:
 - **BIND** (24 tests): BIND/REBIND/FREE lifecycle, ACTION semantics, catalog queries
 - **Ops** (22 tests): DSNTEP2 SQL execution, DCLGEN, LOAD/UNLOAD, round-trip tests
 - **Utilities** (13 tests): Binder, DCLGEN with COBOL/PL/I output, null indicators
+- **Integration Tests** (17 tests in `tests/integration.rs`): Full preprocess-to-DBRM-to-runtime pipelines, host variable recognition, DCLGEN round-trips, and mock statement execution
 
 All runtime tests operate in mock mode by default, requiring no live database.
 
-## Limitations and Future Work
+## Limitations
 
 - **No stored procedure support**: CALL statements are classified but not executed. Stored procedure creation and invocation are not implemented.
 - **Limited SQL parsing in DSNTEP2**: The in-memory SQL engine supports only simple single-table queries with basic WHERE equality filters. Joins, subqueries, aggregations, and GROUP BY are not supported.
@@ -438,3 +474,10 @@ All runtime tests operate in mock mode by default, requiring no live database.
 - **PostgreSQL-only backend**: The translation layer targets PostgreSQL exclusively. Other SQL backends (SQLite, MySQL) are not supported.
 - **No utility execution on live data**: DSNTEP2, LOAD, and UNLOAD operate against in-memory tables only; they do not connect to the PostgreSQL backend.
 - **DCLGEN does not query live schemas**: Table metadata must be provided programmatically; automatic schema introspection from a connected database is not implemented.
+
+## Related Documentation
+
+- [OpenMainframe Crate Map](../../docs/architecture/crate-map.md)
+- [open-mainframe-precompilers](../open-mainframe-precompilers/README.md)
+- [open-mainframe-drda](../open-mainframe-drda/README.md)
+- [open-mainframe-zosmf](../open-mainframe-zosmf/README.md)

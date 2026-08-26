@@ -1,148 +1,197 @@
 # open-mainframe-focus
 
-Information Builders FOCUS — a comprehensive Rust implementation of the multi-dialect 4GL (Fourth Generation Language) for the OpenMainframe project. This crate provides the full suite of FOCUS engines: TABLE for reporting, GRAPH for visualization, MODIFY/MAINTAIN for data management, Dialogue Manager for control flow, and a robust data adapter layer for cross-platform data access.
+Information Builders FOCUS — multi-dialect 4GL with TABLE/GRAPH/MODIFY engines, Dialogue Manager, data adapters, and report formatting for the OpenMainframe project.
 
-## Overview
+## Purpose
 
-FOCUS is a powerful 4GL and database management system widely used on IBM mainframes for reporting and application development. This crate reimplements the core FOCUS components, enabling the execution of complex FOCEXECs (FOCUS procedures) against various data sources including native FOCUS files, VSAM, sequential files, and relational databases.
+Information Builders FOCUS is a Fourth-Generation Language (4GL) and database management system widely deployed on IBM mainframes for reporting, analytics, interactive data entry, and application scripting. The `open-mainframe-focus` crate provides a complete Rust implementation of FOCUS, including multi-dialect parsing, Master File Descriptor (MFD) metadata management, table report generation with cross-tabulation, ASCII graph rendering, data maintenance (MODIFY/MAINTAIN), Dialogue Manager execution with amper variables, data source adapters, and multi-file join processing.
 
-The architecture is centered around a multi-dialect parser (FOC-100) that can switch between different sub-languages depending on the command (e.g., `TABLE FILE`, `GRAPH FILE`, `MODIFY FILE`). The Master File Descriptor (MFD) system (FOC-101) provides the metadata layer that abstracts physical data storage into logical segments and fields.
+## Capabilities
+
+- **Multi-Dialect Parsing**: Recursive descent parser (`parser.rs` / FOC-100) handling distinct sub-languages: `TABLE FILE` reporting, `GRAPH FILE` visualization, `MODIFY FILE` and `MAINTAIN FILE` data maintenance, Dialogue Manager control statements (`-SET`, `-IF`, `-GOTO`, `-TYPE`, `-READ`, `-RUN`, `-INCLUDE`), and SQL passthrough queries.
+- **Master File Descriptors (MFD)**: Metadata engine (`mfd.rs` / FOC-101: `MfdParser`, `MasterFileDescriptor`, `Segment`, `FieldDef`, `FocusDataType`, `AccessFile`) parsing hierarchical segments, field aliases, usage/actual formats (`A`, `I`, `F`, `D`, `P`, `YYMD`, smart dates), and access file physical mapping.
+- **Table Reporting Engine**: Report execution engine (`table_engine.rs` / FOC-102: `TableEngine`, `TableRequest`, `ReportOutput`, `ReportRow`, `CellValue`) supporting `PRINT`, `SUM`, `COUNT`, multi-level sorting (`BY`), cross-tabulation pivoting (`ACROSS`), `WHERE` filter expressions, `COMPUTE` derived fields, grand totals, and custom headings/footings/subfoots.
+- **Graph Visualization**: Text-mode charting engine (`graph_engine.rs` / FOC-103: `GraphEngine`, `GraphOutput`, `ChartType` [Bar, Line, Pie, Area], `ChartFormat`) generating ASCII visualizations with value scaling and legends.
+- **Data Maintenance**: Transactional data management engine (`modify_engine.rs` / FOC-104: `ModifyEngine`, `ModifyRequest`, `MaintainRequest`, `FixformField`, `ValidationRule`, `MatchAction`, `TransactionLog`) for batch and interactive updates with field validation and rollback logging.
+- **Dialogue Manager**: FOCEXEC procedure interpreter (`dialogue.rs` / FOC-105: `DialogueInterpreter`, `AmperVariable`) supporting local (`&VAR`), global (`&&VAR`), and system (`&DATE`, `&USER`) variable substitution, conditional branching, loops (`-REPEAT UNTIL`), input queuing (`-READ`), and nested procedure calls (`-RUN`, `-INCLUDE`).
+- **Function Library**: Built-in function registry (`functions.rs` / FOC-106: `FunctionRegistry`) implementing 20+ standard character, numeric, date, and trigonometric functions (`SUBSTR`, `TRIM`, `UPCASE`, `POSIT`, `ROUND`, `SQRT`, `TODAY`, etc.).
+- **Data Adapters**: Pluggable storage abstraction layer (`adapters.rs` / FOC-107: `AdapterRegistry`, `DataAdapter`, `FocusNativeAdapter`, `SequentialAdapter`, `VsamAdapter`, `Db2Adapter`, `ImsAdapter`).
+- **Output Formatting**: Multi-target report output formatters (`output.rs` / FOC-108: `TextFormatter`, `HtmlFormatter`, `HoldFormatter`) with alignment, table styling, and delimited HOLD file generation.
+- **Multi-Source Joins & Merging**: Cross-dataset join processor (`joins.rs` / FOC-109: `JoinEngine`, `JoinDefinition`, `JoinType` [Inner, LeftOuter, FullOuter], `MatchFileOp`, `CombineOp`).
+- **Host Integration**: Mainframe file definition and environment services (`filedef.rs` / FOC-110: `FileDefRegistry`, `FileDefEntry`, `DynamAllocation`, `TsoInterface`, `CicsInterface`).
 
 ## Architecture
 
 ```
-    FOCEXEC Source                        Execution Environment
-    ┌──────────────┐                      ┌────────────────────┐
-    │ TABLE FILE   │    Parsing           │    Table Engine    │
-    │ SUM SALES    │ ──────────────────>  │    (FOC-102)       │
-    │ BY REGION    │    FocusParser       │  Aggregators, Joins│
-    │ END          │                      └────────────────────┘
-    └──────────────┘                                │
-           │                                        ▼
-           ▼                              ┌────────────────────┐
-    ┌──────────────┐    Metadata          │   Data Adapters    │
-    │ Master File  │ ──────────────────>  │    (FOC-107)       │
-    │ (MFD / ACX)  │    MfdParser         │ Sequential, VSAM,  │
-    └──────────────┘                      │ DB2, IMS, Native   │
-                                          └────────────────────┘
-           │                                        │
-           ▼                                        ▼
-    ┌──────────────┐    Formatting        ┌────────────────────┐
-    │ Report Output│ <──────────────────  │   Output Engine    │
-    │ (PDF, HTML,  │    TextFormatter     │    (FOC-108)       │
-    │  HOLD, TEXT) │    HtmlFormatter     │ Stylesheets, Fonts │
-    └──────────────┘                      └────────────────────┘
+       FOCEXEC / Dialogue Source
+                   │
+                   ▼
+       ┌───────────────────────┐
+       │     FocusParser       │  (FOC-100: Multi-Dialect Parser)
+       │  (TABLE / GRAPH / DM) │
+       └───────────┬───────────┘
+                   │
+         ┌─────────┼─────────────────────┐
+         │ (TABLE) │ (GRAPH)             │ (DM)
+         ▼         ▼                     ▼
+   ┌───────────┐ ┌───────────┐     ┌─────────────────────┐
+   │TableEngine│ │GraphEngine│     │ DialogueInterpreter │
+   │ (FOC-102) │ │ (FOC-103) │     │ (FOC-105: AmperVars)│
+   └─────┬─────┘ └─────┬─────┘     └─────────────────────┘
+         │             │
+         └──────┬──────┘
+                ▼
+   ┌─────────────────────────┐     ┌─────────────────────┐
+   │    Metadata & MFD       │ <── │   Data Adapters     │
+   │(MasterFileDescriptor)   │     │(Native/VSAM/DB2/Seq)│
+   │        FOC-101          │     │       FOC-107       │
+   └────────────┬────────────┘     └─────────────────────┘
+                │
+                ▼
+   ┌─────────────────────────┐
+   │    Output Formatters    │  (FOC-108: Text / HTML / HOLD)
+   │ (Text / Html / Hold)    │
+   └─────────────────────────┘
 ```
 
 ### Module Structure
 
-| Module | Description |
-|--------|-------------|
-| `parser` | FOC-100: Multi-dialect parser (TABLE, GRAPH, MODIFY, Dialogue Manager, SQL) |
-| `mfd` | FOC-101: Master File Descriptor & Access File parser and metadata model |
-| `table_engine` | FOC-102: Reporting engine for data aggregation and cross-tabulation |
-| `graph_engine`| FOC-103: Visualization engine producing text and graphical charts |
-| `modify_engine`| FOC-104: Data maintenance engine (MODIFY/MAINTAIN) for batch/interactive updates |
-| `dialogue` | FOC-105: Dialogue Manager interpreter with amper variables and control flow |
-| `functions` | FOC-106: Library of built-in character, date, and numeric functions |
-| `adapters` | FOC-107: Data source abstraction layer for MVS, DB2, and sequential data |
-| `output` | FOC-108: Report formatting engine (Text, HTML, HOLD files) with styling |
-| `joins` | FOC-109: Multi-source processing (JOIN, COMBINE, MATCH FILE) |
-| `filedef` | FOC-110: Mainframe environment integration (FILEDEF, DYNAM, TSO/CICS interfaces) |
+| Module | Purpose |
+|--------|---------|
+| `parser` | FOC-100: Lexer and multi-dialect parser (`FocusLexer`, `FocusToken`, `TableRequest`, `GraphRequest`, `MaintainRequest`, `DialogueCmd`, `SqlPassthrough`) |
+| `mfd` | FOC-101: Master File Descriptor parser (`MfdParser`), metadata structures (`MasterFileDescriptor`, `Segment`, `FieldDef`, `FocusDataType`, `AccessFile`) |
+| `table_engine` | FOC-102: Table reporting engine (`TableEngine`, `ReportOutput`, `ReportRow`, `CellValue`, `RowType`, `TableVerb`) |
+| `graph_engine` | FOC-103: Text-mode charting engine (`GraphEngine`, `GraphOutput`, `ChartType`, `ChartFormat`) |
+| `modify_engine` | FOC-104: Data maintenance engine (`ModifyEngine`, `ModifyRequest`, `MaintainRequest`, `FixformField`, `ValidationRule`, `MatchAction`, `TransactionLog`) |
+| `dialogue` | FOC-105: Dialogue Manager interpreter (`DialogueInterpreter`, `AmperVariable`, `DmValue`) |
+| `functions` | FOC-106: Built-in function library registry (`FunctionRegistry`) |
+| `adapters` | FOC-107: Data source adapters (`AdapterRegistry`, `DataAdapter`, `FocusNativeAdapter`, `SequentialAdapter`, `VsamAdapter`, `Db2Adapter`, `ImsAdapter`) |
+| `output` | FOC-108: Report formatters (`TextFormatter`, `HtmlFormatter`, `HoldFormatter`, `OutputFormatter`) |
+| `joins` | FOC-109: Multi-source join processing (`JoinEngine`, `JoinDefinition`, `JoinType`, `MatchFileOp`, `CombineOp`) |
+| `filedef` | FOC-110: Mainframe environment integration (`FileDefRegistry`, `FileDefEntry`, `DynamAllocation`, `TsoInterface`, `CicsInterface`) |
 
-## Key Types and Components
+## Public API
 
-### Parser (FOC-100)
-- `FocusParser`: Orchestrates parsing across different dialects.
-- `TableRequest`: AST representation of a `TABLE FILE` request.
-- `DialogueCmd`: Control flow commands for Dialogue Manager (`-SET`, `-IF`, `-GOTO`).
-- `Expr`: Universal expression evaluator for `DEFINE`, `COMPUTE`, and `WHERE` clauses.
+### Primary Types and Functions
 
-### Metadata (MFD)
-- `MasterFileDescriptor`: Logical view of a database including segments, fields, and aliases.
-- `Segment`: Defines hierarchical relationships (S0, S1, etc.) and keys.
-- `FieldDef`: Field attributes: USAGE (format), ACTUAL (storage), and TITLE.
-- `AccessFile`: Physical storage mappings for specific adapters.
+- `TableEngine`: Executes `TableRequest` queries against in-memory records, performing sorting, grouping, aggregations (`PRINT`, `SUM`, `COUNT`), pivoting (`ACROSS`), and compute evaluation.
+  - `execute(request: &TableRequest, data: &[HashMap<String, CellValue>]) -> Result<ReportOutput, TableError>`
+- `MfdParser`: Parses MFD text definitions into structured `MasterFileDescriptor` representations.
+  - `parse_mfd(source: &str) -> Result<MasterFileDescriptor, MfdError>`
+- `DialogueInterpreter`: Manages execution of Dialogue Manager scripts, variable substitution, procedure registration, and control flow.
+  - `execute(&mut self, source: &str) -> Result<DialogueResult, DialogueError>`
+  - `set_local(&mut self, name: &str, value: DmValue)` / `set_global(&mut self, name: &str, value: DmValue)`
+- `GraphEngine`: Renders ASCII charts from table data:
+  - `render(request: &GraphRequest, data: &[HashMap<String, CellValue>]) -> Result<GraphOutput, GraphError>`
+- `ModifyEngine`: Applies batch transaction streams with `MATCH`/`NOMATCH` actions and validation rules.
+- `TextFormatter` / `HtmlFormatter` / `HoldFormatter`: Formats `ReportOutput` structures into plain text tables, HTML pages, or delimited data files.
 
-### Table Engine (FOC-102)
-- `TableEngine`: Executes a `TableRequest` by performing retrieval, sorting, and aggregation.
-- `CellValue`: Variant type for numeric, character, and date data during processing.
-- `ReportOutput`: Structured result containing headers, data rows, and footers.
+## Integration
 
-### Dialogue Manager (FOC-105)
-- `DialogueInterpreter`: Manages the execution of FOCEXECs, including variable substitution.
-- `AmperVariable`: Local (`&VAR`) and global (`&&VAR`) variable management.
-- `DmValue`: Internal value type for Dialogue Manager operations.
+### Internal Workspace Dependencies
 
-### Data Adapters (FOC-107)
-- `AdapterRegistry`: Global registry for data source providers.
-- `DataAdapter` trait: Common interface for `Db2Adapter`, `VsamAdapter`, and `SequentialAdapter`.
+- `thiserror`: Error derive macros.
+- `miette`: Diagnostic reporting.
 
-## Feature Coverage
+### Workspace Consumers
 
-| Feature | Dialect | Status |
-|---------|---------|--------|
-| PRINT / LIST | TABLE | Implemented |
-| SUM / COUNT | TABLE | Implemented |
-| BY / ACROSS | TABLE | Implemented |
-| DEFINE / COMPUTE | TABLE | Implemented |
-| WHERE / IF | TABLE | Implemented |
-| JOIN | JOINS | Implemented |
-| MATCH FILE | JOINS | Implemented |
-| -SET / -IF / -GOTO | DIALOGUE| Implemented |
-| -INCLUDE / -RUN | DIALOGUE| Implemented |
-| FIXFORM / CRTFORM | MODIFY  | Implemented |
-| MATCH / NOMATCH | MODIFY  | Implemented |
+- `open-mainframe-wiki`: Documented in the language catalog.
+- Root workspace member in `Cargo.toml`.
 
-## Usage Examples
+## Examples
 
-### Executing a TABLE Request
+### Executing a TABLE Report Request
 
 ```rust
-use open_mainframe_focus::{TableEngine, MfdParser, TableRequest};
-use open_mainframe_focus::output::TextFormatter;
+use std::collections::HashMap;
+use open_mainframe_focus::parser::{TableRequest, TableVerb};
+use open_mainframe_focus::table_engine::{CellValue, TableEngine};
+use open_mainframe_focus::output::{OutputFormatter, TextFormatter};
 
-// 1. Parse metadata
-let mfd = MfdParser::parse_file("SALES.MAS").unwrap();
+fn main() {
+    let request = TableRequest {
+        file: "SALES".to_string(),
+        verb: TableVerb::Sum,
+        fields: vec!["SALES".to_string()],
+        by_dims: vec!["DEPT".to_string()],
+        across_dims: vec![],
+        where_clauses: vec![],
+        computes: vec![],
+        heading: Some("DEPARTMENT SALES REPORT".to_string()),
+        footing: None,
+        subfoot: None,
+    };
 
-// 2. Execute report
-let mut engine = TableEngine::new();
-let request = TableRequest::parse("TABLE FILE SALES SUM AMOUNT BY REGION END").unwrap();
-let result = engine.execute(request, &mfd).unwrap();
+    let data = vec![
+        HashMap::from([
+            ("DEPT".to_string(), CellValue::Str("ENG".to_string())),
+            ("SALES".to_string(), CellValue::Num(100_000.0)),
+        ]),
+        HashMap::from([
+            ("DEPT".to_string(), CellValue::Str("SALES".to_string())),
+            ("SALES".to_string(), CellValue::Num(150_000.0)),
+        ]),
+    ];
 
-// 3. Format output
-let mut formatter = TextFormatter::new();
-println!("{}", formatter.format(result));
+    let report = TableEngine::execute(&request, &data).expect("table execution failed");
+    let formatter = TextFormatter::new();
+    let text = formatter.format(&report);
+    println!("{}", text);
+}
 ```
 
-### Using Dialogue Manager
+### Running Dialogue Manager Scripts
 
 ```rust
-use open_mainframe_focus::dialogue::{DialogueInterpreter, AmperVariable};
+use open_mainframe_focus::dialogue::{DialogueInterpreter, DmValue};
 
-let mut interpreter = DialogueInterpreter::new();
-interpreter.set_variable("REGION", "NORTH");
+fn main() {
+    let mut interpreter = DialogueInterpreter::new();
+    interpreter.set_local("REGION", DmValue::Str("NORTH".to_string()));
 
-let focexec = r#"
--TYPE STARTING REPORT FOR REGION &REGION
-TABLE FILE SALES
-SUM AMOUNT
-WHERE REGION EQ '&REGION'
-END
+    let script = r#"
+-TYPE Starting report for region &REGION
+-SET &COUNT = 10
+-IF &COUNT GT 5 -GOTO OK
+-TYPE Count too low
+OK:
+-TYPE Processing &COUNT items
 "#;
 
-interpreter.run(focexec).unwrap();
+    let result = interpreter.execute(script).expect("dialogue execution failed");
+    assert_eq!(result.output_messages, vec![
+        "Starting report for region NORTH",
+        "Processing 10 items",
+    ]);
+}
 ```
 
 ## Testing
 
-The crate includes an extensive test suite covering all FOC-nnn stories:
-- **Parser**: Dialect switching, complex expressions, and keyword validation.
-- **MFD**: Segment hierarchies, multiple field formats (A, I, F, D, P), and ACX mapping.
-- **Engine**: Aggregation logic, cross-tabulation (ACROSS), and multi-level sorting (BY).
-- **Adapters**: Simulated VSAM and DB2 retrieval.
-- **Output**: Text alignment, HTML table generation, and HOLD file creation.
+Run the test suite for this crate:
 
 ```sh
 cargo test -p open-mainframe-focus
 ```
+
+The crate contains 257 unit tests verifying:
+- `parser`: Dialect switching, expression parsing, Dialogue Manager commands, `TABLE` across/compute/where syntax.
+- `mfd`: Segment hierarchy resolution, field type parsing, alias lookups, and access file mapping.
+- `table_engine`: `PRINT`/`SUM` aggregations, multi-level `BY` sorting, `ACROSS` pivoting, grand totals, and `COMPUTE` division-by-zero handling.
+- `graph_engine`: Bar, Line, Pie, and Area chart generation and value aggregation.
+- `modify_engine`: Batch `MATCH`/`NOMATCH` actions, field validation rules, and transaction commit/rollback.
+- `dialogue`: Amper variable resolution, `-IF`/`-GOTO` branching, `-REPEAT UNTIL` loops, and `-RUN`/`-INCLUDE` procedure chaining.
+- `functions`: Built-in function evaluation for string, date, and mathematical functions.
+- `joins`: Inner, Left Outer, Full Outer joins, and `MATCH FILE` set comparisons.
+- `output`: Text alignment, HTML table rendering, CSS classes, and HOLD file formatting.
+
+## Limitations
+
+- **Simulated Storage Adapters**: Data adapters (`VsamAdapter`, `Db2Adapter`, `ImsAdapter`) provide in-memory data access abstractions rather than direct socket or memory bridges to the respective mainframe subsystem engines.
+- **ASCII-Only Visualization**: The `GraphEngine` generates text-mode ASCII charts and does not produce vector graphics or raster image formats.
+- **PDF Generation**: Output formatters currently support Plain Text, HTML, and HOLD files; direct PDF report generation is not implemented.
+
+## Related Documentation
+
+- [OpenMainframe Crate Map](../../docs/architecture/crate-map.md)
+- [open-mainframe-natural](../open-mainframe-natural/README.md)

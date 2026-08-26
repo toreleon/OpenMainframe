@@ -1,138 +1,186 @@
 # open-mainframe-racf
 
-A high-performance Rust implementation of the **IBM RACF (Resource Access Control Facility)** security subsystem for the OpenMainframe project. This crate provides comprehensive user/group management, resource authorization, and digital certificate handling, following the z/OS SAF (System Authorization Facility) model.
+A high-performance Rust implementation of the **IBM RACF (Resource Access Control Facility)** security subsystem for the OpenMainframe project. This crate provides user and group management, multi-level resource authorization, digital certificate handling, and PassTicket generation, adhering to the z/OS SAF (System Authorization Facility) model.
 
-## Overview
+## Purpose
 
-RACF is the "gold standard" for mainframe security. `open-mainframe-racf` reimplements the core security logic required to protect system resources. It handles everything from user authentication (passwords, PassTickets) to complex access checks against thousands of discrete and generic profiles.
+RACF is the premier security server on IBM z/OS mainframes, providing centralized identification, authentication, and authorization services across datasets, subsystems, and general resources. `open-mainframe-racf` models this subsystem within OpenMainframe:
+1. **SAF Router**: Implements the `RACROUTE` dispatcher interface (`AUTH`, `VERIFY`, `EXTRACT`, `LIST`), decoupling callers from internal security logic.
+2. **Security Database**: Manages user profiles, group hierarchies, dataset profiles (discrete and generic), and general resource classes (`FACILITY`, `SURROGAT`, `PTKTDATA`, `DIGTCERT`, etc.).
+3. **Authorization Engine**: Evaluates user attributes (`SPECIAL`, `OPERATIONS`), group connections, access control lists (ACLs), Universal Access (`UACC`), and generic pattern specificity.
+4. **Authentication & PassTickets**: Verifies credentials and generates time-bounded, application-specific IBM DES PassTickets for secure single sign-on.
+
+## Capabilities
+
+- **System Authorization Facility (SAF) Router (`SafRouter`)**:
+  - Centralized decision router for `AUTH` checks against dataset and general resource classes.
+  - Returns standard SAF return codes and RACF reason codes (`Authorized`, `NotAuthorized`, `ResourceNotProtected`, `UserNotIdentified`).
+- **Resource Authorization & Generic Matching**:
+  - Full support for RACF generic pattern rules (`*` for single qualifier match, `**` for multi-qualifier spanning, `%` for single character).
+  - Specificity scoring algorithm ensures the most specific matching profile takes precedence over generic definitions.
+  - Hierarchical permission ladder: `None` < `Execute` < `Read` < `Update` < `Control` < `Alter`.
+- **User and Group Management**:
+  - `UserProfile` attributes: `SPECIAL`, `OPERATIONS`, `AUDITOR`, default group, password hashes, and revocation dates.
+  - `GroupProfile` with superior group hierarchies and user connect attributes.
+- **PassTicket Engine (`AuthService`)**:
+  - IBM-compliant DES PassTicket generation and validation algorithms based on secret application keys and time-window evaluation (10-minute validity).
+- **System Options (`Setropts`)**:
+  - Class activation/deactivation, RACLIST in-memory profile caching, global generic profile options, and password syntax rules.
+- **Multi-Level Security (MLS)**:
+  - Security label (`SECLABEL`) verification and Bell-LaPadula dominance checking.
+- **Digital Certificates & Keyrings**:
+  - Certificate repository, keyring associations, and trust chain validation.
+- **Unload Utilities**:
+  - Implementation of `IRRDBU00` database unload formats for security auditing and reporting.
 
 ## Architecture
 
-```
+```text
     Application / Subsystem               RACF Security Subsystem
     ┌────────────────────┐                ┌────────────────────────┐
     │  Security Request  │    SAF Route   │    SAF Router          │
-    │  (RACROUTE AUTH)   │ ─────────────> │    (Dispatcher)        │
+    │  (RACROUTE AUTH)   │ ─────────────> │    (SafRouter)         │
     └────────────────────┘    Interface   └────────────────────────┘
                                                        │
     ┌────────────────────┐                ┌────────────────────────┐
-    │  Administrative    │    Management  │    Profile Manager     │
+    │  Administrative    │    Management  │    Profile Matcher     │
     │  Commands          │ ─────────────> │    Discrete/Generic    │
-    └────────────────────┘    Commands    │  Search & Match        │
+    └────────────────────┘    Commands    │  Specificity Scoring   │
                                           └────────────────────────┘
                                                        │
                                                        ▼
     ┌────────────────────┐                ┌────────────────────────┐
-    │  Credential Store  │ <── Auth ─────     Authentication Mgr   │
-    │  Passwords, Keys   │                │    PassTickets, JWT    │
-    └────────────────────────┘            └────────────────────────┘
+    │  Credential Store  │ <── Auth ───── │    Authentication Mgr  │
+    │  Passwords, Keys   │                │    PassTickets (DES)   │
+    └────────────────────┘                └────────────────────────┘
                                                        │
                                                        ▼
     ┌────────────────────┐                ┌────────────────────────┐
-    │  Persistent DB     │ <── Storage ──     Security Database    │
-    │  JSON / Backup     │                │    Profiles, ACLs      │
+    │  Database / JSON   │ <── Storage ── │    RacfDatabase        │
+    │  IRRDBU00 Unload   │                │    Profiles, ACLs      │
     └────────────────────┘                └────────────────────────┘
 ```
 
-### Module Structure & Lines of Code
+### Module Structure
 
-| Module | Lines | Description |
-|--------|------:|-------------|
-| `resource` | 2,364 | Authorization: Generic pattern matching and ACL check logic |
-| `certificate`| 1,478 | Digital certificates: Keyrings, certificate management, and PKI |
-| `database` | 1,408 | Persistence: Profile lifecycle, search, and JSON/Binary storage |
-| `auth` | 1,015 | Authentication: Passwords, passphrases, and PassTicket algorithms |
-| `setropts` | 896 | Global policy: System-wide security options and class activation |
-| `saf` | 878 | SAF Dispatcher: Implementation of the `RACROUTE` interface |
-| `seclabel` | 545 | Multi-level security: Bell-LaPadula dominance checks and MLS modes |
-| `exits` | 504 | Hooks: Support for custom logic at pre/post authorization points |
-| `utilities`| 460 | Tools: Implementation of IRRDBU00 (database unload) and IRREVX01 |
-| `dataset` | 264 | Dataset specific: HLQ and generic protection logic |
-| `profile` | 162 | Model: Data structures for User, Group, and Resource profiles |
-| **Total** | **~10,318** | |
+| Module | Description |
+|--------|-------------|
+| `saf` | SAF Router: `SafRouter`, `RACROUTE` request dispatching, and return code generation. |
+| `database` | Security database: `RacfDatabase`, profile repositories, CRUD operations, and JSON serialization. |
+| `resource` | Access evaluation: ACL lookup, generic pattern matching, specificity scoring, and UACC checks. |
+| `auth` | Authentication: `AuthService`, password verification, hashing, and PassTicket algorithms. |
+| `profile` | Data models: `UserProfile`, `GroupProfile`, `DatasetProfile`, `GeneralProfile`, and ACL entries. |
+| `types` | Core security types: `AccessLevel`, `SafResponse`, `AuthResult`, `UserAttributes`, `PassTicketKey`. |
+| `setropts` | Global security settings: `Setropts`, active classes, RACLIST caching, and global audit flags. |
+| `certificate`| PKI services: `CertificateManager`, digital certificates, keyrings, and certificate associations. |
+| `seclabel` | Mandatory Access Control: Security labels, dominance checking, and MLS policies. |
+| `dataset` | Dataset protection: High-Level Qualifier (HLQ) security and volume authorization. |
+| `exits` | Security exits: Pre- and post-processing hooks for authentication and authorization events. |
+| `utilities`| Subsystem tools: `IRRDBU00` database unload formatting and profile extraction. |
 
-## Implementation Details
+## Public API
 
-### Generic Profile Matching Algorithm
-RACF uses a proprietary matching algorithm for generic profiles (e.g., `SYS1.*.DATA**`).
-- **Specificity Scoring**: The engine calculates a specificity score for every matching profile. `*` (single qualifier) matches differently than `**` (multiple qualifiers).
-- **Match Order**: The most specific profile always wins over a less specific one, regardless of creation order.
-- **Backtracking**: The implementation uses a non-recursive backtracking matcher to handle deep `**` patterns without stack overflow.
+### Core Types and Services
 
-### PassTicket Algorithm (Secured Sign-On)
-Implements the IBM DES-based PassTicket algorithm.
-- **Time-based**: PassTickets are valid only for a short window (typically 10 minutes).
-- **Service-specific**: A PassTicket generated for `CICS` cannot be used for `TSO`.
-- **Secret Key**: Uses a shared secret stored in the `PTKTDATA` class.
+```rust
+use open_mainframe_racf::{
+    RacfDatabase, AccessLevel, SafResponse,
+    saf::SafRouter,
+    auth::AuthService,
+    profile::{UserProfile, GroupProfile, DatasetProfile, GeneralProfile},
+    types::{UserAttributes, PassTicketKey},
+};
+```
 
-### Access Control Lists (ACLs)
-Every profile contains an ACL mapping UserIDs/Groups to access levels.
-- **Universal Access (UACC)**: Provides a default access level for users not on the ACL.
-- **Group Connection**: Users gain access if any group they are connected to is on the ACL.
+- `RacfDatabase`: Central security database containing all profiles, group trees, and access lists.
+- `SafRouter`: The entry point for checking access permissions against datasets and general resource entities.
+- `AuthService`: Manages user authentication, password hashing, and IBM PassTicket generation and verification.
+- `AccessLevel`: Strict access hierarchy enum (`None`, `Execute`, `Read`, `Update`, `Control`, `Alter`).
 
-## Implementation vs Mainframe Gaps
+## Integration
 
-| Feature | Real z/OS Mainframe | OpenMainframe implementation |
-|---------|---------------------|------------------------------|
-| **Storage Model**| VSAM B-tree (ICB/BAM blocks). | In-memory `HashMap` with JSON/Binary persistence. |
-| **Encryption** | ICSF Hardware Security Module (HSM). | Rust-native crypto libraries (ring/aes). |
-| **SAF Interface** | `RACROUTE` macro generates SVC 131. | Rust trait calls within the `SafRouter`. |
-| **Exits** | Assembler modules in LPA/LNKLST. | Rust closures/traits registered at runtime. |
-| **Auditing** | Type 80 SMF records. | Structured logging and optional `open-mainframe-smf` output. |
-| **Large DBs** | 10M+ profiles via database splitting. | Optimized for 100k profiles; design for 1M+ underway. |
+### Workspace Dependencies
 
-## Feature Coverage
+- None (pure Rust library relying on standard crates: `miette`, `thiserror`, `serde`, `serde_json`, `tracing`, `chrono`, `des`, `sha2`, `rand`, `hex`).
 
-### RACF Resource Classes
+### Known Consumers
 
-| Class | Status | Description |
-|-------|--------|-------------|
-| `USER` | Full | Authentication, attributes (SPECIAL), connections. |
-| `GROUP` | Full | Hierarchical structure, ownership. |
-| `DATASET` | Full | Multi-level generic protection. |
-| `FACILITY` | Full | General system protection. |
-| `SURROGAT` | Full | Job submission on behalf of other users. |
-| `PTKTDATA` | Full | PassTicket keys and profiles. |
-| `DIGTCERT` | Full | Digital certificates and trust chains. |
-| `SECLABEL` | Full | Mandatory Access Control labels. |
+- [`open-mainframe-drda`](../open-mainframe-drda/README.md) — Uses `AuthService` for DRDA client authentication and PassTicket verification.
+- [`open-mainframe-mvs`](../open-mainframe-mvs/README.md) — Uses RACF database profiles to enforce dataset access during dynamic allocation.
+- [`open-mainframe-zosmf`](../open-mainframe-zosmf/README.md) — Powers `/zosmf/restsecurity` endpoints for user authentication and authorization checks.
 
-## Usage Examples
+## Examples
 
-### Performing an Authorization Check
+### Defining Profiles and Performing Authorization Checks
 
 ```rust
 use open_mainframe_racf::{RacfDatabase, AccessLevel};
 use open_mainframe_racf::saf::SafRouter;
 
-let db = RacfDatabase::load("security.db")?;
-let router = SafRouter::new(db);
+let mut db = RacfDatabase::new();
 
-// Check if user 'JSMITH' can UPDATE 'SYS1.PARMLIB'
-let result = router.check_auth("JSMITH", "DATASET", "SYS1.PARMLIB", AccessLevel::Update)?;
+// Define user and default group
+db.add_group("SYS1", "NONE", "System Group").unwrap();
+db.add_user("IBMUSER", "SYS1", "System Administrator").unwrap();
 
-if result.is_allowed() {
-    println!("Access granted");
-}
+// Protect datasets under SYS1.**
+db.add_dataset("SYS1.**", "IBMUSER", AccessLevel::None).unwrap();
+
+// Authorize user for READ access
+let saf = SafRouter::new();
+let result = saf.auth(&db, "DATASET", "SYS1.PARMLIB", "IBMUSER", AccessLevel::Read);
+assert!(result.is_authorized());
+
+// Check access for unpermitted user
+db.add_user("ANON", "SYS1", "Anonymous User").unwrap();
+let anon_result = saf.auth(&db, "DATASET", "SYS1.PARMLIB", "ANON", AccessLevel::Read);
+assert!(!anon_result.is_authorized());
 ```
 
-### Generating a PassTicket
+### Generating and Verifying IBM PassTickets
 
 ```rust
-use open_mainframe_racf::auth::PassTicketGenerator;
+use open_mainframe_racf::auth::AuthService;
 
-let generator = PassTicketGenerator::new("CICSAPPL", "SECRET_KEY");
-let ptkt = generator.generate("IBMUSER")?;
-println!("Generated PassTicket: {}", ptkt);
+let mut auth = AuthService::new();
+
+// Register application secret key in PTKTDATA class
+let app_key = [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF];
+auth.add_passticket_profile("CICSAPPL", app_key).unwrap();
+
+// Generate PassTicket for user
+let ptkt = auth.generate_passticket("IBMUSER", "CICSAPPL").unwrap();
+assert_eq!(ptkt.len(), 8);
+
+// Verify PassTicket (valid within 10-minute window)
+let valid = auth.verify_passticket("IBMUSER", "CICSAPPL", &ptkt);
+assert!(valid);
 ```
 
 ## Testing
 
-The RACF crate is verified for security correctness via 400+ tests:
-- **Matrix Tests**: Validates generic matching against 500+ complex patterns.
-- **ACL Tests**: Ensures group connection inheritance and UACC logic.
-- **Crypto Tests**: Verified against IBM reference implementations for PassTicket results.
-- **Persistence**: Tests data integrity during multi-threaded save/load cycles.
+Run tests for the crate:
 
-```sh
+```bash
 cargo test -p open-mainframe-racf
 ```
+
+The test suite covers:
+- **`resource::*`**: Generic pattern matching (`*`, `**`, `%`), specificity scoring resolution, discrete vs generic override, and ACL evaluation.
+- **`auth::*`**: Password hashing, verification, PassTicket generation against test vectors, replay rejection, and timestamp tolerance.
+- **`saf::*`**: `RACROUTE` request mapping, return code formatting, and fallback handling when resources are unprotected.
+- **`database::*`**: Profile CRUD operations, group hierarchy traversal, and JSON save/restore persistence.
+- **`certificate::*`**: Keyring creation, digital certificate ingestion, and subject name matching.
+
+## Limitations
+
+- **Database Model**: Stores profiles in memory with JSON/binary file persistence rather than mainframe ICB/BAM block-structured VSAM files.
+- **Hardware Cryptography**: Cryptographic operations (DES, SHA256) execute via software Rust crates rather than z/OS ICSF coprocessors.
+- **Dynamic Exit DLLs**: Exit routines are compiled in-crate rather than dynamically loaded as LPA/LNKLST assembler modules.
+
+## Related Documentation
+
+- [Crate Map](../../docs/architecture/crate-map.md)
+- [DRDA Protocol Subsystem (`open-mainframe-drda`)](../open-mainframe-drda/README.md)
+- [MVS System Services (`open-mainframe-mvs`)](../open-mainframe-mvs/README.md)
+- [z/OSMF REST Subsystem (`open-mainframe-zosmf`)](../open-mainframe-zosmf/README.md)

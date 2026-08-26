@@ -1,14 +1,40 @@
 # open-mainframe-mvs
 
-The foundational **MVS (Multiple Virtual Storage)** System Services for the OpenMainframe project. This crate provides the core z/OS supervisor services (SVCs), including task management, dynamic allocation (SVC 99), subpool-based storage, and system recovery.
+The foundational **MVS (Multiple Virtual Storage)** System Services for the OpenMainframe project — providing core z/OS supervisor services (SVCs): dynamic allocation (SVC 99 / DYNALLOC), operator console services (WTO/WTOR/DOM), resource serialization (ENQ/DEQ/ECB), subpool storage management (GETMAIN/FREEMAIN), task management (TCB/ABEND), timer services, and recovery management (ESTAE/SDWA).
 
-## Overview
+## Purpose
 
-`open-mainframe-mvs` emulates the z/OS kernel environment. It provides the low-level infrastructure required for all other mainframe subsystems. Unlike a real mainframe kernel, this implementation runs as a user-space process on Linux/macOS, utilizing Rust's type safety and memory management to simulate mainframe concepts like Task Control Blocks (TCBs), address spaces, and service calls.
+MVS System Services constitute the foundational kernel services of IBM z/OS, handling task dispatching, system recovery, dataset allocation, memory subpools, operator messaging, and resource serialization. `open-mainframe-mvs` models this core operating environment within OpenMainframe:
+1. **Dynamic Allocation (SVC 99)**: Implements text-unit based dataset and DD allocation, deallocation, concatenation, and information retrieval.
+2. **Operator Console (SVC 34/35)**: Manages WTO (Write to Operator) and WTOR (Write to Operator with Reply) message dispatching and DOM (Delete Operator Message) action clearing.
+3. **Task & Process Management**: Manages Task Control Block (`Tcb`) hierarchy (mother, daughter, sister pointers), ATTACH subtask spawning, and ABEND condition percolation.
+4. **Synchronization & Storage**: Provides ECB (Event Control Block) WAIT/POST event coordination, ENQ/DEQ major/minor resource locking, and subpool-isolated GETMAIN/FREEMAIN heap management.
+
+## Capabilities
+
+- **Dynamic Allocation (`DynallocEngine`, `DdTable`)**:
+  - Processes SVC 99 verbs: `Allocate`, `Unallocate`, `Concatenate`, `Deconcatenate`, `InfoRetrieval`.
+  - Full support for Text Unit keys: `DalDsnam`, `DalDdnam`, `DalStats` (`Shr`, `Old`, `New`, `Mod`), `DalNdisp`, `DalRtddn`, `DalRtdsn`.
+  - Multi-dataset DD concatenation supporting ordered search paths.
+- **Console Services (`Console`, `wto`, `wtor`, `dom`)**:
+  - Asynchronous message distribution with `RoutingCode` (Master, Operator Info, etc.) and `DescriptorCode` (Immediate Action, Job Status, Informational).
+  - Multi-line WTO messages and WTOR reply tokens synchronized with ECBs.
+- **Synchronization & Serialization (`sync`)**:
+  - **ECB (`Ecb`)**: Event completion signaling supporting single-event and multi-event WAIT/POST operations.
+  - **ENQ/DEQ (`EnqManager`)**: Multi-task resource serialization by Major (QNAME) and Minor (RNAME) names with `STEP` and `SYSTEM` scopes, shared (SHR) or exclusive (EXCL) access.
+- **Storage Subpool Management (`storage`)**:
+  - Emulates MVS subpools (0–255) with ownership tracking and automatic subpool 0 reclamation on task termination.
+- **Task Hierarchy & Recovery (`task`, `recovery`)**:
+  - `Tcb` tree management supporting ATTACH subtask dispatching and priority scheduling.
+  - `EstaeManager` recovery exit stack with SDWA (System Diagnostic Work Area) recording, retry routines, and ABEND percolation.
+- **Timer Services (`timer`)**:
+  - SVC 11 TIME formatting supporting `DEC`, `BIN`, `MIC`, and `STCK` timestamp structures.
+- **Program Management (`program`)**:
+  - Module search, loading, parameter passing, and stack frame lifecycle: `LINK`, `XCTL`, `LOAD`, `DELETE`, `ATTACH`, `DETACH`.
 
 ## Architecture
 
-```
+```text
     ┌─────────────────────────────────────────────────────────────┐
     │                    MVS System Services (SVCs)               │
     │                                                             │
@@ -24,114 +50,145 @@ The foundational **MVS (Multiple Virtual Storage)** System Services for the Open
     └─────────┬──────────────────┬───────────────────┬───────────┘
               │                  │                   │
     ┌─────────▼──────┐  ┌────────▼───────┐  ┌────────▼─────────┐
-    │ Program Manager│  │ Sync & Serialization │ Recovery (ESTAE)│
-    │ (LINK/XCTL/LOAD)│  │ (ENQ/DEQ/ECB)  │  │ (SDWA/ABEND)    │
+    │ Program Manager│  │ Sync & Locking │  │ Recovery (ESTAE) │
+    │ (LINK/LOAD)    │  │ (ENQ/DEQ/ECB)  │  │ (SDWA/ABEND)     │
     └────────────────┘  └────────────────┘  └──────────────────┘
 ```
 
-### Module Structure & Lines of Code
+### Module Structure
 
-| Module | Lines | Description |
-|--------|------:|-------------|
-| `dynalloc/` | 1,090 | SVC 99 engine: Text units, DD table, concatenation logic |
-| `sync/` | 638 | Serialization: ENQ/DEQ major/minor logic, ECB WAIT/POST |
-| `recovery/` | 557 | Error recovery: ESTAE stack, SDWA population, ABEND propagation |
-| `console/` | 510 | Console I/O: WTO (Write to Operator), WTOR, reply matching |
-| `timer/` | 479 | Time services: SVC 11 (TIME), STIMER, STIMERM |
-| `task/` | 403 | Task management: TCB hierarchy, ATTACH logic, priority dispatching |
-| `program/` | 385 | Program management: Module loading, LINK/XCTL search orders |
-| `storage/` | 248 | Storage management: GETMAIN/FREEMAIN with subpool isolation |
-| `lib.rs` | 28 | Crate entry point and result types |
-| **Total** | **~4,256** | |
+| Module | Description |
+|--------|-------------|
+| `dynalloc` | SVC 99 engine: `DynallocEngine`, `DdTable`, `DynallocRequest`, `DynallocResponse`, `TextUnit`. |
+| `console` | Console I/O: `Console`, `ConsoleMessage`, `wto`, `wtor`, `dom`, `ReplyManager`. |
+| `sync` | Synchronization: `Ecb`, `EnqManager`, `EnqResource`, `Scope`, `LockType`. |
+| `storage` | Storage management: `SubpoolManager`, `GetmainMode`, `SubpoolEntry`. |
+| `task` | Task management: `Tcb`, `ProcessManager`, `AbendCode`, ATTACH dispatcher. |
+| `recovery` | Error recovery: `EstaeManager`, `Sdwa`, ESTAE exit registration, retry logic. |
+| `timer` | Time services: `TimeService`, SVC 11 TIME formats (DEC, BIN, MIC, STCK). |
+| `program` | Program control: `ProgramManager`, module resolution, LINK, XCTL, LOAD, DELETE. |
+| `error` | Subsystem error types: `MvsError`, `Result`. |
 
-## Implementation Details
+## Public API
 
-### Dynamic Allocation (SVC 99)
-The `DynallocEngine` processes complex request blocks containing "Text Units" (key-length-value pairs).
-- **Internal DD Table**: Mappings are stored in an `Arc<RwLock<DdTable>>`, allowing concurrent access across multiple simulated tasks.
-- **Dataset Mapping**: Dataset names (DSNs) are translated into host filesystem paths using a configurable base directory.
-- **Concatenation**: Supports logical grouping of multiple physical datasets under a single DDNAME, correctly handling search order during subsequent I/O.
+### Core Types and Services
 
-### Task Management (TCB)
-Tasks are emulated as asynchronous execution units (via `tokio` tasks).
-- **Hierarchy**: The `Tcb` structure maintains `mother`, `daughter`, and `sister` pointers to perfectly replicate the z/OS task tree.
-- **ABEND Propagation**: If a task fails without an `ESTAE` retry, the error is automatically percolated up the task tree, triggering cleanups at each level.
+```rust
+use open_mainframe_mvs::{
+    dynalloc::{DynallocEngine, DdTable, DynallocRequest, DynallocVerb, TextUnit, TextUnitKey, DatasetStatus, Disposition},
+    console::{Console, ConsoleMessage, RoutingCode, DescriptorCode, wto, wtor, dom},
+    sync::{Ecb, EnqManager, Scope},
+    task::{Tcb, ProcessManager},
+    recovery::{EstaeManager, Sdwa},
+    storage::SubpoolManager,
+    timer::TimeService,
+    program::ProgramManager,
+    MvsError, Result,
+};
+```
 
-### Subpool-based Storage
-Simulates MVS subpools (0-255) within the Rust process's heap.
-- **Isolation**: Each TCB has its own subpool registry.
-- **Cleanup**: `FREEMAIN` calls check ownership, and `TCB` termination automatically releases all storage associated with subpool 0.
+- `DynallocEngine`: Executes SVC 99 allocation and concatenation requests against an active `DdTable`.
+- `Console`: Asynchronous operator message dispatcher for WTO and WTOR requests.
+- `Ecb` / `EnqManager`: Primitives for task synchronization and named resource locking.
+- `Tcb`: Represents an individual Task Control Block within the process hierarchy.
 
-## Implementation vs Mainframe Gaps
+## Integration
 
-| Feature | Real z/OS Mainframe | OpenMainframe implementation |
-|---------|---------------------|------------------------------|
-| **Memory Protection**| Hardware-enforced storage keys (0-15). | Logical isolation only; no actual CPU-level protection keys. |
-| **SVC Invocation** | `SVC` instruction triggers CPU interrupt. | Normal Rust function/trait calls. |
-| **Address Spaces** | Complete isolation via Page Tables. | All emulated tasks share the same host process memory. |
-| **Volumes (DASD)** | Real disk hardware with VTOC/Catalog. | Mapped directly to host filesystem paths. |
-| **Priority** | Hardware-managed dispatching. | Software-emulated priority within the `ProcessManager`. |
-| **Locking** | Global Resource Serialization (GRS). | Internal `RwLock`-based ENQ/DEQ within the crate. |
+### Workspace Dependencies
 
-## Feature Coverage
+- [`open-mainframe-dataset`](../open-mainframe-dataset/README.md) — Dataset catalog and storage structures.
+- [`open-mainframe-racf`](../open-mainframe-racf/README.md) — Security authorization checks during dataset allocation.
 
-### Emulated SVCs (Supervisor Calls)
+### Known Consumers
 
-| SVC | Name | Status | Supported Keys / Parameters |
-|-----|------|--------|-----------------------------|
-| 1 | WAIT | Full | ECB list, multiple events |
-| 2 | POST | Full | Error code, priority boost (simulated) |
-| 4 | GETMAIN | Full | Subpools 0, 78, 230, 251; VU/EU modes |
-| 5 | FREEMAIN | Full | Length-based and Area-based |
-| 6 | LINK | Full | Module search, parameter passing (ARGR) |
-| 7 | XCTL | Full | Transfer control, stack cleanup |
-| 11 | TIME | Full | DEC, BIN, MIC, STCK formats |
-| 13 | ABEND | Full | DUMP, STEP parameters; System/User codes |
-| 34 | WTO | Partial | MCS routing, Descriptor codes (logging only) |
-| 35 | WTOR | Full | Reply matching via `ReplyManager` |
-| 42 | ATTACH | Full | TCB hierarchy, subtask creation |
-| 48/56 | ENQ/DEQ | Full | Major/Minor names, STEP/SYSTEM scope |
-| 60 | ESTAE | Full | RETRY, PERCOLATE, SDWA population |
-| 99 | DYNALLOC | Full | ALLOC, FREE, CONCAT, INFO |
+- Used as the foundational supervisor layer for batch jobs, TSO command processors, and CICS runtime storage across OpenMainframe.
 
-## Usage Examples
+## Examples
 
 ### Performing a Dynamic Allocation (SVC 99)
 
 ```rust
-use open_mainframe_mvs::dynalloc::{DynallocEngine, DynallocRequest, TextUnitKey};
+use open_mainframe_mvs::dynalloc::{
+    DynallocEngine, DdTable, DynallocRequest, DynallocVerb,
+    TextUnit, TextUnitKey, DatasetStatus,
+};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-// 1. Create a request to allocate DD SYSUT1 to a dataset
-let mut request = DynallocRequest::new_allocate();
-request.add_string(TextUnitKey::DalDdnam, "SYSUT1");
-request.add_string(TextUnitKey::DalDsnam, "USER.PROD.DATA");
+#[tokio::main]
+async fn main() {
+    let dd_table = Arc::new(RwLock::new(DdTable::new()));
+    let engine = DynallocEngine::new(dd_table.clone());
 
-// 2. Execute via the engine
-let engine = DynallocEngine::new(dd_table);
-let response = engine.execute(&request).await?;
+    // Allocate DD SYSUT1 to dataset USER.PROD.DATA
+    let request = DynallocRequest {
+        verb: DynallocVerb::Allocate,
+        flags: 0,
+        text_units: vec![
+            TextUnit::string(TextUnitKey::DalDsnam, "USER.PROD.DATA"),
+            TextUnit::string(TextUnitKey::DalDdnam, "SYSUT1"),
+            TextUnit::byte(TextUnitKey::DalStats, DatasetStatus::Shr.to_byte()),
+        ],
+    };
 
-if response.is_success() {
-    println!("Allocation successful");
+    let response = engine.execute(&request).await.unwrap();
+    assert!(response.is_success());
+
+    // Verify DD table mapping
+    let table = dd_table.read().await;
+    let entry = table.lookup("SYSUT1").unwrap();
+    assert_eq!(entry.dsname, "USER.PROD.DATA");
 }
 ```
 
 ### Issuing a WTO (Write to Operator)
 
 ```rust
-use open_mainframe_mvs::console::ConsoleManager;
+use open_mainframe_mvs::console::{Console, wto, RoutingCode, DescriptorCode};
 
-let mut console = ConsoleManager::new();
-console.wto("IEF123I JOB STARTED").expect("WTO failed");
+#[tokio::main]
+async fn main() {
+    let mut console = Console::new(16);
+    let sender = console.sender();
+
+    let msg_id = wto(
+        &sender,
+        "IEF142I JOB01 - STEP WAS EXECUTED - COND CODE 0000",
+        RoutingCode::OPERATOR_INFO,
+        DescriptorCode::JOB_STATUS,
+    ).await;
+
+    console.process_pending().await;
+    assert_eq!(console.messages()[0].id, msg_id);
+    assert_eq!(console.messages()[0].text, "IEF142I JOB01 - STEP WAS EXECUTED - COND CODE 0000");
+}
 ```
 
 ## Testing
 
-The MVS crate features over 600 tests ensuring architectural fidelity:
-- **DYNALLOC Matrix**: Tests all 50+ supported text unit keys in various combinations.
-- **TCB Stress**: Spawns 1,000+ nested subtasks to verify ABEND propagation and cleanup.
-- **Storage Boundary**: Tests subpool overflow and invalid `FREEMAIN` detection.
-- **Serialization**: Concurrent ENQ/DEQ testing across 100+ threads.
+Run tests for the crate:
 
-```sh
+```bash
 cargo test -p open-mainframe-mvs
 ```
+
+The test suite covers:
+- **`dynalloc::*`**: Text unit serialization, dynamic allocation, unallocation, DD concatenation, deconcatenation, and info retrieval.
+- **`console::*`**: Single-line and multi-line WTO delivery, WTOR reply tokens, DOM action message clearing, and routing code masks.
+- **`sync::*`**: ECB single/multi-wait posting, ENQ exclusive/shared lock contention, and STEP/SYSTEM scoping.
+- **`task::*`**: TCB tree relationships (mother/daughter/sister), ATTACH subtask spawning, and ABEND propagation.
+- **`recovery::*`**: ESTAE exit stack unwinding, SDWA error recording, and retry intercept.
+- **`storage::*`**: Subpool GETMAIN/FREEMAIN isolation and termination cleanup.
+
+## Limitations
+
+- **Hardware Storage Keys**: Memory protection is enforced via Rust ownership and logical isolation rather than CPU hardware storage protection keys (0–15).
+- **SVC Interrupt Mechanism**: Supervisor calls execute as asynchronous Rust functions rather than real hardware CPU SVC interrupt vectors.
+- **Process Memory Space**: Emulated tasks execute within the host process memory space rather than hardware-isolated page tables.
+
+## Related Documentation
+
+- [Crate Map](../../docs/architecture/crate-map.md)
+- [Dataset Subsystem (`open-mainframe-dataset`)](../open-mainframe-dataset/README.md)
+- [RACF Security Subsystem (`open-mainframe-racf`)](../open-mainframe-racf/README.md)
+- [UNIX System Services Subsystem (`open-mainframe-uss`)](../open-mainframe-uss/README.md)

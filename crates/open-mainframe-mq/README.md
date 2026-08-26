@@ -1,32 +1,61 @@
 # open-mainframe-mq
 
-IBM MQ (Message Queuing) — a comprehensive Rust implementation of the mainframe's premier messaging middleware for the OpenMainframe project.
+A comprehensive Rust implementation of **IBM MQ (Message Queuing)** for the OpenMainframe project — providing the complete enterprise messaging subsystem: Queue Manager lifecycle, Message Queue Interface (MQI) operations, MQSC command parsing and execution, Publish/Subscribe topic trees, triggering, and channel management.
 
-## Overview
+## Purpose
 
-IBM MQ is the industry standard for reliable, asynchronous messaging. This crate reimplements the core MQ components, including the Queue Manager, MQI (Message Queue Interface) operations, MQSC command engine, and advanced features like Publish/Subscribe and Channel authentication.
+IBM MQ is the premier message-oriented middleware for mainframe enterprise integration, enabling reliable, asynchronous, and decoupled communication between disparate applications. `open-mainframe-mq` models this subsystem within OpenMainframe:
+1. **Queue Manager**: Manages the lifecycle and state of local, alias, remote, model, and transmission queues.
+2. **Message Queue Interface (MQI)**: Implements standard MQI calls (`MQCONN`, `MQDISC`, `MQOPEN`, `MQCLOSE`, `MQPUT`, `MQPUT1`, `MQGET`, `MQINQ`, `MQSET`) with full option flags.
+3. **MQ Structures**: Provides binary and struct representations for `MQMD` (Message Descriptor), `MQOD` (Object Descriptor), `MQPMO` (Put Message Options), `MQGMO` (Get Message Options), `MQRFH2` (JMS Header), and `MQDLH` (Dead Letter Header).
+4. **MQSC Engine**: Parses and executes administrative MQSC commands (`DEFINE`, `ALTER`, `DELETE`, `DISPLAY`, `CLEAR`) across all MQ object types.
+5. **Advanced Messaging**: Implements Publish/Subscribe topic trees with wildcard subscriptions, trigger monitor events, and channel authentication (CHLAUTH).
+
+## Capabilities
+
+- **MQI Interface Implementation (`MqiHandle`, `Connection`)**:
+  - `MQCONN` and `MQDISC` connection management with application tracking.
+  - `MQOPEN` and `MQCLOSE` with fine-grained access modes (`input`, `output`, `inquire`, `set`, `browse`).
+  - `MQPUT` and `MQPUT1` supporting priority ordering, persistence flags, expiry intervals, and correlation IDs.
+  - `MQGET` supporting browse cursor traversal (`BrowseFirst`, `BrowseNext`), destructive reads, match options (`MatchMsgId`, `MatchCorrelId`), and wait intervals.
+  - `MQINQ` and `MQSET` for querying and modifying queue attributes dynamically.
+- **Queue Manager Core (`QueueManager`, `Queue`)**:
+  - Manages queues by type: `Local`, `Alias`, `Remote`, `Model`, `Transmission`.
+  - Enforces `MAXDEPTH`, `MAXMSGL`, and queue inhibition flags (`GetInhibited`, `PutInhibited`).
+  - Automatic Dead-Letter Queue (`DEADQ`) routing with `MQDLH` headers upon delivery failure.
+- **MQSC Command Engine (`MqscEngine`)**:
+  - Full syntax support for `DEFINE`, `ALTER`, `DELETE`, `DISPLAY`, `CLEAR`.
+  - Object targets: `QLOCAL`, `QALIAS`, `QREMOTE`, `QMODEL`, `CHANNEL`, `TOPIC`, `PROCESS`, `AUTHINFO`.
+- **Publish/Subscribe Engine (`pubsub`, `TopicTree`)**:
+  - Hierarchical topic tree structure supporting wildcards (`/`, multilevel `#`, single-level `+`).
+  - Subscription management (`MQSUB`, `MQSUBRQ`) supporting durable and non-durable subscribers.
+- **Triggering Mechanism (`triggering`)**:
+  - Generates trigger messages to initiation queues based on trigger conditions (`First`, `Every`, `Depth`).
+- **Channel Management & Security (`channels`)**:
+  - Channel definitions for `Sender`, `Receiver`, `ServerConnection` (SVRCONN), and `Cluster`.
+  - Channel Authentication (CHLAUTH) rules supporting `BLOCKUSER`, `MAPUSER`, and SSL/TLS cipher specifications.
 
 ## Architecture
 
-```
+```text
     Application Source                    MQ Runtime Environment
     ┌──────────────┐                      ┌────────────────────┐
     │ CALL 'MQPUT' │    MQI Interface     │   Queue Manager    │
-    │ Descriptor,  │ ──────────────────>  │    (Local)         │
-    │ Payload      │    MqiHandle         │  Queues, MsgStore  │
+    │ Descriptor,  │ ──────────────────>  │   (QueueManager)   │
+    │ Payload      │    Connection        │  Queues, MsgStore  │
     └──────────────┘                      └────────────────────┘
            │                                        │
            ▼                                        ▼
     ┌──────────────┐    Management        ┌────────────────────┐
     │  MQSC Cmds   │ ──────────────────>  │    Channel Mgr     │
-    │  DEFINE Q    │    MqscEngine        │    SDR / RCVR      │
+    │  DEFINE Q... │    MqscEngine        │    SDR / RCVR      │
     └──────────────┘                      │    TLS, CHLAUTH    │
                                           └────────────────────┘
            │                                        │
            ▼                                        ▼
     ┌──────────────┐    Pub/Sub           ┌────────────────────┐
     │  Topics      │ <──────────────────  │   Trigger Monitor  │
-    │  Subscribers │    PubSubEngine      │   Process Defs     │
+    │  Subscribers │    TopicTree         │   Process Defs     │
     └──────────────┘                      └────────────────────┘
 ```
 
@@ -34,77 +63,128 @@ IBM MQ is the industry standard for reliable, asynchronous messaging. This crate
 
 | Module | Description |
 |--------|-------------|
-| `mqi` | MQI implementation: MQCONN, MQDISC, MQOPEN, MQCLOSE, MQPUT, MQGET, etc. |
-| `core` | Queue Manager core: Local queue lifecycle and message storage |
-| `structures`| Binary-compatible structures: MQMD, MQOD, MQGMO, MQPMO, MQRFH2 |
-| `mqsc` | MQSC Command Engine: DEFINE, ALTER, DELETE, DISPLAY, CLEAR for all MQ objects |
-| `pubsub` | Publish/Subscribe engine: Topic tree, subscriptions, and selection strings |
-| `channels` | Channel management: Sender/Receiver/SVRCONN, CHLAUTH rules, and SSL/TLS |
-| `triggering`| Triggering mechanism: Trigger types (FIRST/EVERY/DEPTH) and process definitions |
+| `core` | Queue Manager core: `QueueManager`, `Queue`, `QueueType`, queue storage, depth limits. |
+| `mqi` | MQI API: `Connection`, `MqiHandle`, `OpenOptions`, `GetOptions`, `PutOptions`, handle mapping. |
+| `structures`| Standard MQ structures: `Mqmd`, `Mqod`, `MqPmo`, `Mqgmo`, `Mqrfh2`, `Mqdlh`. |
+| `mqsc` | Administrative command engine: `MqscEngine`, `MqscResult`, AST parsing and execution. |
+| `pubsub` | Publish/Subscribe: `TopicTree`, `TopicNode`, `Subscription`, publication routing. |
+| `channels` | Channel management: `ChannelManager`, `ChannelDefinition`, `ChlAuthRule`, connection security. |
+| `triggering`| Triggering: `TriggerMonitor`, `TriggerType`, `ProcessDefinition`, initiation messages. |
 
-## Key Types and Components
+## Public API
 
-### MQI Handle
-- `Connection`: Represents an active connection to a queue manager (MQCONN).
-- `MqiHandle`: Trait providing all core MQI operations.
-- `MqError`: Comprehensive error codes corresponding to MQ reason codes (e.g., 2033 NO_MSG_AVAILABLE).
-
-### MQ Structures
-- `Mqmd`: Message Descriptor — contains message ID, correlation ID, priority, and expiry.
-- `Mqrfh2`: Rules and Formatting Header — for JMS-compatible message properties.
-- `Mqod`: Object Descriptor — used for opening queues or topics.
-
-### Queue Manager
-- `QueueManager`: The central coordinator for all MQ resources.
-- `Queue`: Represents an individual queue with its attributes and message buffer.
-
-## Feature Coverage
-
-| Feature | Category | Status |
-|---------|----------|--------|
-| MQI API | Messaging| Implemented (CONN, DISC, OPEN, CLOSE, PUT, GET) |
-| MQSC Engine | Mgmt     | Implemented (All queue types, channels, topics) |
-| Pub/Sub | Messaging| Implemented (Topic tree, durable subs) |
-| Triggering | System   | Implemented (Trigger monitors, process defs) |
-| Dead-Letter| System   | Implemented (DLH header, DLQ handler) |
-| CHLAUTH | Security | Implemented (Block user, map client, SSL/TLS) |
-
-## Usage Examples
-
-### Putting a Message to a Queue
+### Core Types and Services
 
 ```rust
-use open_mainframe_mq::{QueueManager, Mqmd, MqPmo};
-
-let mut qm = QueueManager::new("QM1");
-qm.define_local_queue("MY.QUEUE").unwrap();
-
-let mut mqmd = Mqmd::new();
-let mut pmo = MqPmo::new();
-let payload = b"Hello MQ!";
-
-qm.put("MY.QUEUE", &mut mqmd, &mut pmo, payload).unwrap();
-println!("Message put successfully with MsgId: {:?}", mqmd.msg_id);
+use open_mainframe_mq::{
+    QueueManager, QueueType, Queue,
+    Connection, MqiHandle,
+    Mqmd, Mqod, MqPmo, Mqgmo, Mqrfh2, Mqdlh,
+    OpenOptions, GetOptions, PutOptions,
+    mqsc::{MqscEngine, MqscResult},
+    MqError, MqResult,
+};
 ```
 
-### Executing MQSC Commands
+- `QueueManager`: Subsystem controller managing queues, topics, channels, and triggers.
+- `Connection`: Interactive MQI connection handle implementing `MqiHandle`.
+- `Mqmd` / `Mqod`: Message and Object descriptor structures.
+- `MqscEngine`: Command interpreter executing MQSC administration scripts.
+
+## Integration
+
+### Workspace Dependencies
+
+- None (pure Rust library using standard workspace crates: `miette`, `thiserror`, `serde`, `serde_json`, `tracing`, `chrono`, `uuid`).
+
+### Known Consumers
+
+- Standalone message broker within the OpenMainframe workspace, available for CICS transaction queuing and batch messaging.
+
+## Examples
+
+### Putting and Getting Messages via MQI
 
 ```rust
+use open_mainframe_mq::{
+    QueueManager, QueueType, Connection, MqiHandle,
+    Mqmd, Mqod, MqPmo, Mqgmo, OpenOptions, GetOptions,
+};
+
+let mut qm = QueueManager::new("QM1");
+qm.define_queue("PAYLOAD.QUEUE", QueueType::Local).unwrap();
+
+// Connect to queue manager
+let mut conn = Connection::connect(&mut qm).unwrap();
+
+// Open queue for output
+let mut od = Mqod::new("PAYLOAD.QUEUE");
+let handle = conn.open(&qm, &mut od, OpenOptions {
+    output: true,
+    ..Default::default()
+}).unwrap();
+
+// Put a message
+let mut md = Mqmd::new();
+let mut pmo = MqPmo::new();
+conn.put(&mut qm, &handle, &mut md, &mut pmo, b"HELLO MAINFRAME MQ").unwrap();
+conn.close(&qm, handle).unwrap();
+
+// Open queue for input and retrieve message
+let in_handle = conn.open(&qm, &mut od, OpenOptions {
+    input_shared: true,
+    ..Default::default()
+}).unwrap();
+
+let mut gmo = Mqgmo::new();
+let (retrieved_md, payload) = conn.get(&mut qm, &in_handle, &mut gmo, 1024).unwrap();
+assert_eq!(payload, b"HELLO MAINFRAME MQ");
+
+conn.close(&qm, in_handle).unwrap();
+conn.disconnect(&mut qm).unwrap();
+```
+
+### Executing MQSC Administration Commands
+
+```rust
+use open_mainframe_mq::QueueManager;
 use open_mainframe_mq::mqsc::MqscEngine;
 
+let mut qm = QueueManager::new("QM1");
 let mut engine = MqscEngine::new(&mut qm);
-let result = engine.execute("DEFINE QLOCAL(APP.DATA) REPLACE").unwrap();
-println!("MQSC Result: {}", result.output);
+
+let result = engine.execute(
+    "DEFINE QLOCAL(ORDERS.IN) MAXDEPTH(10000) DEFSPSR(YES) REPLACE"
+).unwrap();
+
+assert!(result.success);
+println!("MQSC Response: {}", result.output);
 ```
 
 ## Testing
 
-The MQ crate features 350+ tests:
-- **MQI**: Unit tests for every MQI call with complex option flags.
-- **MQSC**: Parser tests for all MQSC statement variants and attribute types.
-- **Pub/Sub**: Topic matching and wildcard subscription tests.
-- **Channels**: CHLAUTH mapping and security rule validation.
+Run tests for the crate:
 
-```sh
+```bash
 cargo test -p open-mainframe-mq
 ```
+
+The test suite covers:
+- **`mqi::*`**: Connection lifecycle, `MQOPEN` option bitmasks, `MQPUT`/`MQGET` correlation matching, browse mode sequencing, and buffer sizing.
+- **`core::*`**: Queue depth limit enforcement, priority queue ordering, get/put inhibit flags, and dead-letter queue routing.
+- **`structures::*`**: `MQMD`, `MQRFH2`, `MQDLH` serialization and default field initialization.
+- **`mqsc::*`**: Syntax parsing for all command verbs (`DEFINE`, `ALTER`, `DELETE`, `DISPLAY`, `CLEAR`) and object attributes.
+- **`pubsub::*`**: Topic tree branching, wildcard matching (`+`, `#`), and multi-subscriber delivery.
+- **`channels::*`**: Channel state transitions, CHLAUTH address mapping, and user blocking rules.
+
+## Limitations
+
+- **Storage & XA Transactions**: Storage is managed in memory with file snapshotting rather than mainframe coupling facility structures or full XA two-phase commit coordinators.
+- **Network Channels**: Distributed queue manager channel communication uses local socket emulation rather than real SNA/LU6.2 transport.
+- **Clustering**: Multi-queue manager cluster repositories and automatic workload balancing across clusters are not implemented.
+
+## Related Documentation
+
+- [Crate Map](../../docs/architecture/crate-map.md)
+- [CICS Subsystem (`open-mainframe-cics`)](../open-mainframe-cics/README.md)
+- [SMF Subsystem (`open-mainframe-smf`)](../open-mainframe-smf/README.md)

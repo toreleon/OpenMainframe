@@ -2,13 +2,31 @@
 
 Mainframe-compatible dataset and file I/O for the OpenMainframe z/OS clone. This crate provides the full spectrum of z/OS data management services: sequential access methods (QSAM, BSAM), partitioned datasets (PDS/PDSE), VSAM clusters (KSDS, ESDS, RRDS, LDS) with B+ tree indexing and alternate indexes, generation data groups (GDG), integrated catalog facility (ICF), IDCAMS utility services, DFSMSdss dump/restore, DFSMShsm hierarchical storage management, DFSMSrmm tape management, and SMS storage class constructs.
 
-## Overview
+## Purpose
 
-The `open-mainframe-dataset` crate is the storage foundation of the OpenMainframe project. It emulates the z/OS data management layer — the subsystem responsible for how datasets are organized, accessed, cataloged, and managed across their lifecycle.
+The `open-mainframe-dataset` crate is the storage foundation of the OpenMainframe project. It emulates the z/OS data management layer — the subsystem responsible for how datasets are organized, accessed, cataloged, and managed across their lifecycle. On z/OS, dataset I/O is mediated through access methods (QSAM for record-level sequential, BSAM for block-level, VSAM for keyed/indexed/relative), with metadata tracked in the Integrated Catalog Facility (ICF) and storage policy enforced by the Storage Management Subsystem (SMS). This crate implements all of these layers, mapping mainframe dataset semantics to POSIX filesystem files while preserving the programming model expected by COBOL, PL/I, and assembler runtimes.
 
-On real z/OS, dataset I/O is mediated through access methods (QSAM for record-level sequential, BSAM for block-level, VSAM for keyed/indexed/relative), with metadata tracked in the Integrated Catalog Facility (ICF) and storage policy enforced by the Storage Management Subsystem (SMS). This crate implements all of these layers, mapping mainframe concepts to a POSIX filesystem while preserving the programming model that COBOL, PL/I, and assembler programs expect.
+## Capabilities
 
-The crate also implements the major z/OS data management utilities: IDCAMS for VSAM and catalog administration, ADRDSSU (DFSMSdss) for dataset dump/copy/restore, DFHSM for tiered storage migration and backup, and DFSMSrmm for tape volume lifecycle management. Together, these provide a complete data management stack that other crates (COBOL runtime, JCL, JES2, CICS) depend on for dataset allocation, I/O, and catalog services.
+- **Sequential Access Methods**: Record-level sequential I/O via QSAM (`QsamReader`, `QsamWriter`) supporting Fixed, Fixed Blocked, Variable (with 4-byte RDW), Variable Blocked, and Line-based formats; block-level I/O via BSAM (`BsamReader`, `BsamWriter`).
+- **Partitioned Datasets (PDS/PDSE)**: Directory-backed PDS member management (`Pds`, `PdsMember`, `IspfStats`) with alias support and member statistics; PDSE extensions (`Pdse`, `ProgramObject`, `MemberGeneration`, `Eattr`) for member generation history and program objects with AMODE/RMODE.
+- **VSAM Subsystem**: Four standard VSAM cluster types:
+  - **KSDS**: Key-Sequenced Data Sets with B+ tree indexing (`BPlusTree`), exact and generic (prefix) key search, record rewrite, record deletion, and sequential traversal (`start`/`read_next`).
+  - **ESDS**: Entry-Sequenced Data Sets with Relative Byte Address (RBA) access and sequential append.
+  - **RRDS**: Relative Record Data Sets with slot-based numbered record access.
+  - **LDS**: Linear Data Sets with 4 KB fixed-page I/O for DB2 tablespaces.
+  - **Alternate Indexes (AIX)**: Secondary B+ tree access paths (`AlternateIndex`, `AixDefinition`, `VsamPath`) with unique and non-unique keys.
+  - **Free Space & Spanning**: Free space management with CI/CA split tracking (`FreeSpaceManager`) and spanned record assembly across Control Intervals (`SpannedRecordManager`).
+- **Catalog Management**: In-memory name resolution catalog (`Catalog`, `CatalogEntry`) and Integrated Catalog Facility (`IcfCatalog`, `IcfCatalogSystem`, `BcsEntry`, `Vvds`, `VvdsRecord`) supporting master/user catalogs, alias resolution, and EXAMINE/DIAGNOSE integrity checking.
+- **Generation Data Groups (GDG)**: GDG base management (`GdgBase`, `GdgOptions`) and ICF catalog integration (`GdgIcfManager`), supporting generation number parsing (`GxxxxVyy`), relative resolution (`(+1)`, `(0)`, `(-1)`), LIMIT enforcement, and rolloff policies.
+- **IDCAMS Utility Engine**: Parser and execution engine (`Idcams`, `IdcamsCommand`, `IdcamsResult`) for 19 IDCAMS commands (`DEFINE CLUSTER`, `DEFINE AIX`, `DEFINE PATH`, `DEFINE GDG`, `DEFINE NONVSAM`, `DEFINE ALIAS`, `DELETE`, `REPRO`, `PRINT`, `ALTER`, `LISTCAT`, `VERIFY`, `EXAMINE`, `DIAGNOSE`, `SET`, `IF/THEN/ELSE/DO/END`) with `LASTCC` and `MAXCC` return code tracking.
+- **Storage Subsystems & Utilities**:
+  - **DFSMSdss (`Dss`)**: DUMP, RESTORE, COPY, and PRINT with dataset filtering.
+  - **DFSMShsm (`Hsm`)**: Hierarchical tiered storage management with migration (ML0 to ML1/ML2), recall, backup, and ABARS aggregate backup/recovery.
+  - **DFSMSrmm (`Rmm`)**: Tape volume lifecycle tracking, volume states, and Volume Retention Schedules (VRS).
+  - **SMS & ACS (`SmsConfiguration`, `DataClass`, `StorageClass`, `ManagementClass`, `StorageGroup`)**: SMS construct definitions and Automatic Class Selection (ACS) routine interpreter (`AcsEngine`).
+  - **Space & Volume Management**: 3390 track/cylinder geometry calculations, VTOC simulation, DSCB Format 1 records, extents, and multi-volume allocations.
+  - **Dataset Locking (`DatasetLockManager`)**: Record-level and dataset-level locking enforcing JCL DISP compatibility (SHR, OLD, MOD, EXCL).
 
 ## Architecture
 
@@ -429,13 +447,23 @@ let result = engine.execute(&ctx);
 println!("DATACLAS={:?} STORCLAS={:?}", result.dataclas, result.storclas);
 ```
 
-## Dependencies
+## Integration
 
-| Dependency | Purpose |
-|------------|---------|
-| `open-mainframe-encoding` | EBCDIC ↔ ASCII conversion for mainframe-compatible I/O |
-| `miette` | Diagnostic error reporting |
-| `thiserror` | Error type derive macros |
+### Internal Workspace Dependencies
+
+- `open-mainframe-encoding`: EBCDIC ↔ ASCII conversion (code page translation) for mainframe-compatible dataset records.
+- `miette`: Diagnostic error reporting.
+- `thiserror`: Error type derive macros.
+
+### Workspace Consumers
+
+- `open-mainframe-cics`: File control and VSAM emulation.
+- `open-mainframe-jcl`: Step execution, DD dataset allocation, and IDCAMS utility steps.
+- `open-mainframe-mvs`: DYNALLOC system services and SVC dataset operations.
+- `open-mainframe-zosmf`: Dataset REST API handlers (`/zosmf/restfiles/ds/*`).
+- `open-mainframe-gym`: Environment data files and catalog state.
+- `open-mainframe-wiki`: Architectural documentation and concepts catalog.
+- `open-mainframe-assess`: Compatibility analysis and migration recommendations.
 
 ## Testing
 
@@ -445,7 +473,7 @@ Run the full test suite:
 cargo test -p open-mainframe-dataset
 ```
 
-The crate includes approximately 200 unit tests organized by module:
+The crate contains 422 unit tests and 4 doc-tests organized by module:
 
 - **QSAM/BSAM**: Fixed, variable, and line record read/write; short blocks; convenience functions
 - **PDS/PDSE**: Member CRUD, aliases, ISPF stats, program objects, member generations
@@ -461,7 +489,7 @@ The crate includes approximately 200 unit tests organized by module:
 
 All tests use temporary directories and are self-contained.
 
-## Limitations and Future Work
+## Limitations
 
 - **No persistent VSAM index**: The KSDS B+ tree is rebuilt in memory on each `open()` by scanning the entire file. A persistent on-disk index would improve startup for large clusters.
 - **No VSAM record-level sharing (RLS)**: Cross-address-space VSAM sharing is not yet implemented.
@@ -471,3 +499,11 @@ All tests use temporary directories and are self-contained.
 - **GDG EMPTY/NOEMPTY partially modeled**: The NOEMPTY flag is parsed but rolloff behavior does not differentiate between EMPTY and NOEMPTY modes.
 - **No EXCP-level I/O**: Execute Channel Program access method is not emulated.
 - **LDS does not integrate with DB2**: The Linear Data Set is functional but not wired into the DB2 crate's tablespace layer.
+
+## Related Documentation
+
+- [OpenMainframe Crate Map](../../docs/architecture/crate-map.md)
+- [open-mainframe-cics](../open-mainframe-cics/README.md)
+- [open-mainframe-jcl](../open-mainframe-jcl/README.md)
+- [open-mainframe-sort](../open-mainframe-sort/README.md)
+- [open-mainframe-db2](../open-mainframe-db2/README.md)

@@ -1,187 +1,194 @@
 # open-mainframe-ispf
 
-A high-fidelity Rust implementation of the **ISPF (Interactive System Productivity Facility)** for the OpenMainframe project — providing the full mainframe development environment including panel-driven applications, dialog services, variable pools, table services, file tailoring, and the iconic Line Editor.
+A high-fidelity Rust implementation of **ISPF (Interactive System Productivity Facility)** for the OpenMainframe project — providing the complete mainframe development environment: panel-driven applications, dialog services, four-pool variable hierarchy, relational table services, file tailoring (skeletons), library management, and the full-featured ISPF line editor.
 
-## Overview
+## Purpose
 
-ISPF is the primary interface for mainframe developers, often referred to as the "mainframe's IDE." This crate reimplements the core ISPF components, enabling the execution of ISPF-based applications via a text-based user interface or REST API. It handles the parsing of complex panel definitions, management of hierarchical variable pools, and provides the essential services used by dialog-driven programs.
+ISPF is the foundational full-screen application and development framework on IBM z/OS mainframes. `open-mainframe-ispf` models this environment within OpenMainframe:
+1. **Panel Processing Engine**: Parses and renders ISPF panel definitions comprising `)ATTR`, `)BODY`, `)INIT`, `)REINIT`, `)PROC`, and `)MODEL` sections, evaluating field validation rules (`VER` statements) and dynamic formatting.
+2. **Dialog Manager**: Dispatches core dialog services (`DISPLAY`, `SELECT`, `SETMSG`, `CONTROL`, `VGET`, `VPUT`) and routes user input events (`DisplayEvent`).
+3. **Variable Hierarchy**: Manages the four ISPF variable pools (Function, Shared, Profile, System) with variable substitution (`&VAR`) across panels and commands.
+4. **Data & Development Services**: Provides in-memory relational tables with cursor navigation, file tailoring of skeletons with control statements, library services (LM functions), and the interactive line editor.
 
-The implementation comprises:
-1. **Panel Engine** — A parser and interpreter for ISPF panel definitions, supporting sections like `)ATTR`, `)BODY`, `)INIT`, `)REINIT`, and `)PROC`.
-2. **Dialog Manager** — Implementation of core dialog services including `DISPLAY`, `SELECT`, `SETMSG`, and `CONTROL`.
-3. **Variable Pools** — A comprehensive four-pool variable model (Function, Shared, Profile, and System) with inheritance and persistence.
-4. **Table Services** — In-memory relational tables with row pointers, search arguments, and persistent storage.
-5. **File Tailoring** — Skeleton processing engine with variable substitution and control statements (`)SEL`, `)DOT`, `)IM`).
-6. **Library Management** — Services for dataset and member access, including member lists and statistics.
-7. **Line Editor** — A robust implementation of the ISPF editor supporting primary and line commands, profiles, and undo/redo.
+## Capabilities
+
+- **Panel Definition Parser (`parse_panel`, `Panel`)**:
+  - Parses standard sections: `)ATTR` (custom attribute characters, highlighting, colors, input/output types), `)BODY` (screen layouts with variables and constants), `)INIT` (pre-display variable assignments), `)REINIT` (re-display logic on validation error), `)PROC` (post-display input validation and translation), and `)MODEL` (table display scrolling rows).
+  - Validation rules: `VER` checks for `NONBLANK`, `ALPHA`, `NUM`, `DSNAME`, `PICT`, `LIST`, `RANGE`, `BIT`, `HEX`.
+- **Dialog Manager (`DialogManager`)**:
+  - Coordinates panel display cycles, executes `ISPEXEC` service calls, manages error messages (`SETMSG`), and tracks screen navigation.
+- **Variable Pools (`VariablePoolManager`)**:
+  - Four distinct pools:
+    - **Function Pool**: Local to the executing dialog program.
+    - **Shared Pool**: Shared across dialogs within the same application logical screen.
+    - **Profile Pool**: User-specific variables persisted across sessions.
+    - **System Pool**: Read-only variables maintained by ISPF (`ZCMD`, `ZUSER`, `ZDATE`, `ZTIME`, `ZAPPLID`).
+- **Table Services (`TableManager`, `Table`)**:
+  - Relational in-memory tables with named key and name fields.
+  - Complete operations: `TBCREATE`, `TBOPEN`, `TBADD`, `TBPUT`, `TBMOD`, `TBDELETE`, `TBGET`, `TBSCAN`, `TBSORT`, `TBSARG`, `TBCLOSE`.
+- **File Tailoring (`FileTailoringEngine`)**:
+  - Skeleton processor substituting variables and interpreting control statements: `)SEL`/`)ENDSEL`, `)DOT`/`)ENDDOT`, `)IM`, `)SET`.
+- **Line Editor & Macros (`IspfEditor`, `isredit`)**:
+  - Command line and prefix area commands: `FIND`, `CHANGE`, `CAPS`, `HEX`, `RESET`, Insert (`I`), Delete (`D`), Copy (`C`), Move (`M`), Repeat (`R`), Text Split (`TS`), Text Flow (`TF`).
+  - ISREDIT macro command interface for script-driven editing.
+- **Library Management (`LibraryManager`)**:
+  - Emulates `LMINIT`, `LMOPEN`, `LMGET`, `LMPUT`, `LMCLOSE`, and `LMFREE` services for dataset access.
 
 ## Architecture
 
-```
-    User Terminal / TUI
+```text
+    User Terminal / TUI / REST
            │
     ┌──────▼─────────────────────────────────────────────────┐
     │                  Dialog Manager                        │
-    │  - Service dispatcher (DISPLAY, SELECT)                │
-    │  - Message processing                                  │
+    │  - Service dispatcher (`DISPLAY`, `SELECT`, `SETMSG`)  │
+    │  - Event loop (`DisplayEvent::Enter`, `End`, etc.)     │
     └──────┬─────────────────────────────────────────────────┘
            │
     ┌──────▼─────────────────────────────────────────────────┐
     │                  Panel Engine                          │
-    │  - Section-based parsing and rendering                 │
-    │  - Field validation (VER checks)                       │
-    │  - Attribute character mapping                         │
+    │  - Section parsing (`)ATTR`, `)BODY`, `)INIT`, `)PROC`) │
+    │  - Field validation (`VER` checks)                     │
     └──────┬─────────────────────────────────────────────────┘
            │
     ┌──────▼─────────────────────────────────────────────────┐
     │                  Variable Pools                        │
-    │  - Func / Shared / Profile / System pools              │
-    │  - Variable substitution engine                        │
+    │  - Function, Shared, Profile, and System pools         │
+    │  - Substitution engine (`&VAR` expansion)              │
     └──────┬─────────────────────────────────────────────────┘
            │
     ┌──────▼─────────────────────────────────────────────────┐
     │                 Data & Tailoring Services              │
-    │  - ISPF Tables (TBADD, TBSCAN)                         │
-    │  - File Tailoring (FTOPEN, FTINCL)                     │
-    │  - Library Management (LMINIT, LMOPEN)                 │
+    │  - ISPF Tables (`TableManager`: TBADD, TBSCAN, TBSORT) │
+    │  - File Tailoring (`FileTailoringEngine`: FTINCL)      │
+    │  - Line Editor (`IspfEditor` & ISREDIT macros)         │
+    │  - Library Services (`LibraryManager`: LMINIT, LMOPEN) │
     └────────────────────────────────────────────────────────┘
 ```
 
 ### Module Structure
 
-| Module | Description | Lines |
-|--------|-------------|------:|
-| `dialog` | Dialog services: DISPLAY, SELECT, SETMSG, and variable pool management | ~1,346 |
-| `editor` | Line editor engine: Support for primary and line commands, and profiles | ~1,241 |
-| `panel` | Panel definition parser and interpreter: Sections, attributes, and fields | ~1,143 |
-| `utilities`| Common utilities: DSLIST, Search-For, SuperC, and Member List | ~1,147 |
-| `isredit` | ISREDIT macro engine and editor service interface | ~1,010 |
-| `library` | Library management (LMINIT, LMOPEN) and member access services | ~986 |
-| `table` | Table services: In-memory tables with search, sort, and persistence | ~775 |
-| `skeleton`| File tailoring: Template processing with control statements | ~632 |
+| Module | Description |
+|--------|-------------|
+| `dialog` | Dialog services: `DialogManager`, `DisplayEvent`, `ServiceCall`, `MessageDef`, variable pools. |
+| `panel` | Panel definition engine: `parse_panel`, `Panel`, `PanelSection`, `FieldDef`, `AttrChar`, `VerCheck`. |
+| `table` | Table services: `TableManager`, `Table`, `TableRow`, `SearchArg`, `SortDirection`. |
+| `skeleton`| File tailoring: `FileTailoringEngine`, skeleton parsing, conditional substitution. |
+| `editor` | Line editor: `IspfEditor`, line commands, primary commands, edit profiles, undo stack. |
+| `isredit` | Editor macro interface: `IsreditMacroEngine`, macro commands, and buffer manipulation. |
+| `library` | Library management: `LibraryManager`, dataset/member handles, data transfer services. |
+| `utilities`| Utility applications: Member list display, dataset listing, search utilities. |
 
-**Total**: ~8,330 lines of Rust.
+## Public API
 
-## Key Types and Components
-
-### Dialog & Panels
-
-| Type | Description |
-|------|-------------|
-| `DialogManager`| Orchestrates the execution of dialog services and display events. |
-| `Panel` | Parsed representation of an ISPF panel with all its sections. |
-| `IspfVarPools` | Manages the four-tier hierarchy of variable storage. |
-| `MessageDef` | Representation of an ISPF message (e.g., ISR00001). |
-
-### Data Management
-
-| Type | Description |
-|------|-------------|
-| `IspfTable` | An in-memory relational table with searching and sorting capabilities. |
-| `LibraryManager`| Facilitates PDS and dataset access via LM services. |
-| `FileTailor` | Processes skeletons into final tailored files. |
-
-### Editor
-
-| Type | Description |
-|------|-------------|
-| `Editor` | The core engine for the ISPF line-based text editor. |
-| `EditProfile` | Maintains editor settings (CAPS, HEX, NUMBER, etc.). |
-| `LineCommand` | Represents line-area commands (I, D, C, M, R). |
-
-## Implementation Details
-
-### Panel Parsing and Section Logic
-
-Panel definitions are parsed into a structured model where sections are treated as procedural code:
-- **`)INIT`**: Executed before the panel is first displayed to set initial values.
-- **`)REINIT`**: Executed when a panel is redisplayed after a validation error.
-- **`)PROC`**: Executed after user input to perform validation (`VER` checks) and processing.
-
-### The Four-Pool Variable Model
-
-Variables are resolved in a specific order:
-1. **Function Pool**: Local to the current dialog.
-2. **Shared Pool**: Shared between nested dialogs.
-3. **Profile Pool**: Persists across user sessions (stored in JSON).
-4. **System Pool**: Read-only system-defined variables (ZCMD, ZUSER, etc.).
-
-### ISPF Table Services
-
-Tables in ISPF are unique in that they combine relational storage with cursor-based navigation. This crate implements:
-- **TBSCAN**: High-performance searching using condition blocks.
-- **TBSORT**: Sorting based on one or more column keys.
-- **TBTOP / TBBOTTOM**: Row pointer management.
-
-## Feature Coverage
-
-| Feature | Category | Status |
-|---------|----------|--------|
-| Panel Sections| Panels   | Implemented (BODY, ATTR, INIT, PROC, MODEL) |
-| VER checks    | Panels   | Implemented (ALPHA, NUM, DSNAME, PICT, etc.)|
-| Variable Pools| Dialog   | Implemented (VGET, VPUT, VERASE) |
-| Dialog Svcs   | Dialog   | Implemented (DISPLAY, SELECT, SETMSG, CONTROL)|
-| Table Svcs    | Tables   | Implemented (TBADD, TBPUT, TBMOD, TBSCAN, TBSORT)|
-| File Tailoring| Tailoring| Implemented (FTOPEN, FTINCL, FTCLOSE) |
-| Line Editor   | Editor   | Implemented (FIND, CHANGE, I, D, C, M, R) |
-| Editor Macros | Editor   | Implemented (ISREDIT interface) |
-| DSLIST / Util | Utilities| Implemented (DSLIST, Member List, SuperC) |
-
-## Usage Examples
-
-### Displaying an ISPF Panel
+### Core Types and Services
 
 ```rust
-use open_mainframe_ispf::{DialogManager, Panel, DialogEvent};
-
-let mut dm = DialogManager::new();
-let panel_src = ")BODY\n%Command ===>_ZCMD\n%\n% User: _USER+\n)END";
-let panel = Panel::parse(panel_src).unwrap();
-
-// Set a variable in the pool
-dm.set_var("USER", "IBMUSER");
-
-// Display the panel (in a TUI environment)
-if let DialogEvent::Enter = dm.display(&panel).unwrap() {
-    let cmd = dm.get_var("ZCMD").unwrap();
-    println!("User entered command: {}", cmd);
-}
+use open_mainframe_ispf::{
+    dialog::{DialogManager, DisplayEvent, VariablePoolManager},
+    panel::{parse_panel, Panel, PanelError},
+    table::{TableManager, Table},
+    skeleton::FileTailoringEngine,
+    editor::IspfEditor,
+    library::LibraryManager,
+};
 ```
 
-### Working with ISPF Tables
+- `DialogManager`: Main controller for executing ISPF dialogs, setting variables, and presenting panels.
+- `parse_panel`: Parses raw ISPF panel text source into executable `Panel` structures.
+- `TableManager`: Central manager for creating, querying, and updating ISPF tables.
+- `IspfEditor`: Text editing engine supporting mainframe line-mode and primary edit commands.
+
+## Integration
+
+### Workspace Dependencies
+
+- None (pure Rust library using standard workspace error and serialization crates: `miette`, `thiserror`, `serde`, `serde_json`, `tracing`, `chrono`, `regex`).
+
+### Known Consumers
+
+- [`open-mainframe-tso`](../open-mainframe-tso/README.md) — Invokes ISPF dialog manager commands.
+- Interactive terminal UI and web frontends providing mainframe developer experiences.
+
+## Examples
+
+### Parsing and Displaying an ISPF Panel
+
+```rust
+use open_mainframe_ispf::dialog::{DialogManager, DisplayEvent};
+use open_mainframe_ispf::panel::parse_panel;
+
+let panel_src = r#"
+)ATTR
+  % TYPE(TEXT) INTENS(HIGH)
+  + TYPE(TEXT) INTENS(LOW)
+  _ TYPE(INPUT) INTENS(HIGH)
+)BODY
+%---------------------- SAMPLE ISPF PANEL ----------------------
+%COMMAND ===>_ZCMD
+%
++User ID . . . : _ZUSER   +
+)INIT
+  &ZUSER = 'IBMUSER'
+)PROC
+  VER (&ZCMD, NONBLANK)
+)END
+"#;
+
+let panel = parse_panel(panel_src).expect("Failed to parse panel");
+let mut dm = DialogManager::new();
+dm.vars.set("ZUSER", "IBMUSER".into());
+
+// Render panel and handle return event
+let event = dm.display_panel(&panel);
+assert_eq!(event, DisplayEvent::Enter);
+```
+
+### Managing Relational ISPF Tables
 
 ```rust
 use open_mainframe_ispf::table::TableManager;
 
 let mut tm = TableManager::new();
-tm.tbcreate("MYTABLE", &["KEY"], &["VALUE"]).unwrap();
 
-tm.set_var("KEY", "001");
-tm.set_var("VALUE", "TEST DATA");
-tm.tbadd("MYTABLE").unwrap();
+// Create table with EMPID as key and NAME/DEPT as columns
+tm.tbcreate("EMP_TABLE", &["EMPID"], &["NAME", "DEPT"], true).unwrap();
 
-// Scan for a record
-tm.set_var("KEY", "001");
-if tm.tbscan("MYTABLE", "KEY").is_ok() {
-    println!("Found record!");
-}
+// Insert a row
+tm.tbadd("EMP_TABLE", &[
+    ("EMPID", "E001"),
+    ("NAME", "ALICE"),
+    ("DEPT", "DEV"),
+]).unwrap();
+
+// Retrieve row by key
+let row = tm.tbget("EMP_TABLE", &[("EMPID", "E001")]).unwrap();
+assert_eq!(row.get("NAME"), Some(&"ALICE".to_string()));
 ```
 
 ## Testing
 
-The ISPF crate features over 400 tests:
-- **Panel Tests**: Validates parsing of complex attribute definitions and validation rules.
-- **Variable Tests**: Verifies pool isolation and persistence logic.
-- **Table Tests**: Exhaustive testing of sort and scan edge cases.
-- **Editor Tests**: Command round-trips ensuring buffer consistency after multiple edits.
+Run tests for the crate:
 
-```sh
+```bash
 cargo test -p open-mainframe-ispf
 ```
 
-## Limitations and Future Work
+The test suite covers:
+- **`panel::*`**: Attribute definitions, attribute byte mapping, body layout line alignment, section parsing (INIT, REINIT, PROC, MODEL), and `VER` validation rules.
+- **`dialog::*`**: Variable pool scoping (Function, Shared, Profile, System), variable substitution (`&VAR`), and display event transitions.
+- **`table::*`**: Table creation, row addition, key indexing, scan conditions (`TBSCAN`), and multi-column sorting (`TBSORT`).
+- **`skeleton::*`**: File tailoring conditional logic (`)SEL`), table loops (`)DOT`), and file inclusions (`)IM`).
+- **`editor::*`**: Line command execution (I, D, C, M, R), primary commands (`FIND`, `CHANGE`), hex mode display, and caps enforcement.
 
-- **DBCS Panels**: Support for Double-Byte Character Set rendering in panels is partially implemented.
-- **Full Screen Macros**: Some complex ISREDIT macro interactions are still being refined.
-- **Persistence**: While Profile pools persist, the current implementation uses a flat JSON file; a dataset-backed model is in design.
-- **Graphics**: ISPF GDDM integration for graphical displays is not implemented.
+## Limitations
+
+- **DBCS Panel Rendering**: Double-Byte Character Set (DBCS) characters are handled as plain UTF-8 rather than EBCDIC shift-out/shift-in pairs.
+- **Graphical Displays**: GDDM (Graphical Data Display Manager) graphic primitive rendering is not supported.
+- **Profile Persistence**: User profile pools serialize to in-memory/JSON storage rather than partitioned ISPF profile datasets.
+
+## Related Documentation
+
+- [Crate Map](../../docs/architecture/crate-map.md)
+- [TSO/E Command Processor (`open-mainframe-tso`)](../open-mainframe-tso/README.md)
+- [REXX Interpreter (`open-mainframe-rexx`)](../open-mainframe-rexx/README.md)

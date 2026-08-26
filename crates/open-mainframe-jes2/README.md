@@ -1,20 +1,50 @@
 # open-mainframe-jes2
 
-A core implementation of the **JES2 (Job Entry Subsystem 2)** for the OpenMainframe project. This crate manages the entire batch lifecycle, providing a priority-based job queue, spool storage, initiator control, and comprehensive operator command processing.
+A high-fidelity Rust implementation of **JES2 (Job Entry Subsystem 2)** for the OpenMainframe project. This crate provides the complete mainframe batch job lifecycle: internal reader ingestion, priority job queues, initiator dispatching, spool management, JECL control statements, and operator command processing.
 
-## Overview
+## Purpose
 
-JES2 is the primary work manager for z/OS. `open-mainframe-jes2` reimplements this subsystem to provide a realistic mainframe batch environment. It handles everything from the "Internal Reader" where JCL is first received, to the initiators that dispatch jobs, and finally the output processor that manages SYSOUT spooling.
+JES2 is the primary work manager on IBM z/OS, receiving jobs, scheduling them for execution based on class and priority, managing spool storage for inputs and SYSOUT outputs, and coordinating job execution across initiators. `open-mainframe-jes2` models this subsystem within OpenMainframe:
+1. **Input & Ingestion**: The `InternalReader` receives JCL streams, parses job cards and JES2 Control Language (`/*`) statements, and writes input datasets to the spool.
+2. **Job Scheduling & Execution**: The job queue organizes submitted work across priority tiers (0–15) and execution classes, where class-aware `Initiator` processes dispatch and track active jobs.
+3. **Spool & SYSOUT Management**: Stores job logs, JCL listings, and output datasets on simulated spool volumes, enabling browsing and purge reclamation.
+4. **Operator Control**: Implements standard JES2 `$` operator commands (`$D`, `$S`, `$P`, `$C`, `$A`, `$H`, `$T`) for managing jobs, queues, spool volumes, and initiators.
+
+## Capabilities
+
+- **Job Lifecycle State Machine**:
+  - `Job` transitions through discrete states: `Input` -> `Conversion` -> `AwaitingExecution` -> `Executing` -> `AwaitingOutput` -> `Purged`.
+  - Supports hold/release toggles on input jobs (`$H J` / `$A J`) and output datasets.
+- **Internal Reader (`InternalReader`)**:
+  - Ingests card-image streams, parses job names, classes, priority, and assigns unique `JobId` identifiers.
+  - Recognizes JES2 Control Language (JECL) statements: `/*JOBPARM`, `/*OUTPUT`, `/*ROUTE`, `/*SETUP`, `/*MESSAGE`.
+- **Initiator Scheduling (`InitiatorManager`)**:
+  - Manages batch initiators configured with multi-class execution lists (e.g., `CLASS=ABC`).
+  - Implements priority-weighted FIFO job selection within class hierarchies with anti-starvation priority aging.
+- **Spool Storage (`SpoolManager`)**:
+  - Multi-track buffer allocation for storing JCL streams and SYSOUT output datasets by DD name.
+  - Random-access record retrieval by MTTR (Module-Track-Track-Record) addressing for fast spool browsing.
+- **Operator Command Processing**:
+  - `parse_command` and `execute_command` handle operator directives:
+    - `$D J[OB]` / `$D A` / `$D I` / `$D S` / `$D Q` — Display jobs, active work, initiators, spool status, and queues.
+    - `$S I` / `$P I` — Start and stop initiators.
+    - `$C J` — Cancel running or queued jobs.
+    - `$A J` / `$H J` — Release or hold jobs and output.
+    - `$T I` / `$T J` — Modify initiator class lists or job priority/class.
+- **Exit Framework**:
+  - Pluggable exit points at critical lifecycle stages (input validation, JCL conversion, job initiation, output routing).
+- **Checkpointing**:
+  - State preservation and recovery supporting Warm and Cold start scenarios.
 
 ## Architecture
 
-```
+```text
     Job Submission                         JES2 Job Lifecycle
     ┌──────────────┐                      ┌────────────────────┐
     │  Internal    │    Input             │    Job Queue       │
     │  Reader      │ ──────────────────>  │    (Priority)      │
-    └──────────────┘    Intrdr            │  Active, Output    │
-           │                               └────────────────────┘
+    └──────────────┘    InternalReader    │  Active, Output    │
+           │                              └────────────────────┘
            ▼                                        │
     ┌──────────────┐    Spooling          ┌────────────────────┐
     │  Spool       │ ──────────────────>  │   Initiator        │
@@ -25,109 +55,129 @@ JES2 is the primary work manager for z/OS. `open-mainframe-jes2` reimplements th
            ▼                                        ▼
     ┌──────────────┐    Output            ┌────────────────────┐
     │  SYSOUT      │ <──────────────────  │  Output Processor  │
-    │  Processing  │    OutputDescriptor  │  Print, Purge      │
+    │  Datasets    │    OutputDescriptor  │  Print, Purge      │
     └──────────────┘                      └────────────────────┘
 ```
 
-### Module Structure & Lines of Code
+### Module Structure
 
-| Module | Lines | Description |
-|--------|------:|-------------|
-| `exit` | 1,442 | Exit framework: Support for custom processing at 20+ job lifecycle hooks |
-| `output` | 796 | SYSOUT management: Class-based routing, destinations, and print grouping |
-| `commands` | 715 | Operator interface: Full implementation of $ commands ($D, $S, $P, $C, $A, $T) |
-| `job` | 661 | Job model: Complete state machine (INPUT -> CONVERSION -> READY -> ... -> PURGE) |
-| `intrdr` | 653 | Internal Reader: Programmatic and TSO-based job submission interface |
-| `initiator`| 649 | Initiator manager: Class-aware workload selectors and dispatchers |
-| `jecl` | 617 | JES2 Control Language: Parser for `/*JOBPARM`, `/*OUTPUT`, `/*ROUTE` |
-| `config` | 600 | Subsystem configuration: Spool volumes, class definitions, and MAS parameters |
-| `queue` | 541 | Scheduling: Priority-weighted job selection and class matching |
-| `checkpoint`| 379 | Persistence: State recovery for Warm/Cold starts |
-| `spool` | 258 | Spool management: Binary storage for JCL source and SYSOUT datasets |
-| **Total** | **~7,414** | |
+| Module | Description |
+|--------|-------------|
+| `intrdr` | Internal Reader: Card-image ingestion, job identification, and submission pipeline. |
+| `job` | Job model: `Job`, `JobId`, `JobStatus`, `JobType`, accounting fields, and lifecycle transitions. |
+| `queue` | Job scheduling: Priority queues (0–15), class matching, and queue scanning. |
+| `initiator`| Initiator manager: `Initiator`, `InitiatorManager`, class lists, and active job dispatch. |
+| `spool` | Spool management: `SpoolManager`, volume allocation, track addressing, and dataset storage. |
+| `output` | SYSOUT processing: `OutputGroup`, `OutputDescriptor`, class routing, and purge management. |
+| `commands` | Operator command interface: `$D`, `$S`, `$P`, `$C`, `$A`, `$H`, `$T` parser and execution engine. |
+| `jecl` | JES2 Control Language: Parser for `/*JOBPARM`, `/*OUTPUT`, `/*ROUTE`, `/*SETUP`, `/*MESSAGE`. |
+| `exit` | Subsystem exit framework: Dynamic hooks across 20+ job processing milestones. |
+| `config` | Subsystem configuration: `Jes2Config`, spool dataset paths, classes, and limits. |
+| `checkpoint`| Persistence engine: Checkpoint record serialization for warm/cold start recovery. |
 
-## Implementation Details
+## Public API
 
-### Job State Machine
-Every unit of work in JES2 follows a strict transition path:
-1. **INPUT**: Data read from `INTRDR` and written to `SPOOL`.
-2. **CONVERSION**: JCL is expanded and validated.
-3. **READY**: Job is assigned to a priority queue based on `CLASS`.
-4. **RUNNING**: An initiator with a matching class list selects and runs the job.
-5. **OUTPUT**: Job completes; SYSOUT is closed and made available for printing.
-6. **HARDCOPY**: SYSOUT is processed by a writer.
-7. **PURGE**: All spool resources are reclaimed.
+### Core Types and Services
 
-### Priority Scheduling (WLM-light)
-JES2 uses a priority-weighted selection algorithm (0-15).
-- **Class Matching**: Initiators (e.g., `I1`) are configured with a list of classes (e.g., `ABC`). They will only select jobs whose `CLASS` is in their list.
-- **Priority Aging**: Jobs that have been in the queue for a long time receive a small priority boost to prevent starvation.
+```rust
+use open_mainframe_jes2::{
+    Jes2, Job, JobId, JobStatus,
+    intrdr::InternalReader,
+    initiator::InitiatorManager,
+    commands::{parse_command, execute_command, Jes2Command, CommandResponse},
+    spool::SpoolManager,
+};
+```
 
-### Spool Management
-The `SpoolManager` implements a simulated multi-volume spool.
-- **Data Sets**: Each job's SYSOUT is stored as a collection of binary records on the host disk.
-- **Addressing**: Uses a simulated Track/Record (MTTR) addressing system, allowing for efficient random access during SDSF browsing.
+- `Jes2`: Central subsystem controller maintaining the job registry, queue, spool, and configuration.
+- `InternalReader`: Ingests JCL lines, extracts job metadata, and submits work into the JES2 queue.
+- `InitiatorManager`: Manages concurrent initiators, selecting queued jobs based on class priority.
+- `parse_command` / `execute_command`: Parses and executes JES2 `$` operator commands.
 
-## Implementation vs Mainframe Gaps
+## Integration
 
-| Feature | Real z/OS Mainframe | OpenMainframe implementation |
-|---------|---------------------|------------------------------|
-| **Job ID** | `JOBnnnnn`, `STCnnnnn`, `TSUnnnnn`. | Internal numeric ID only (string representation is simplified). |
-| **MAS Clustering** | Shared Spool across multiple z/OS images. | Single-member implementation only. |
-| **Checkpoints** | Shared 4K records on Coupling Facility/DASD. | Local binary file storage for system state. |
-| **Output Writers** | IP Printway, PSF, PSF/MVS for real printers. | Mapped to plain text files or internal message buffers. |
-| **NJE** | Network Job Entry between JES nodes. | Not implemented. |
-| **Security** | RACF `JESSPOOL` class protection. | Security checks are stubbed; full RACF integration is in progress. |
+### Workspace Dependencies
 
-## Feature Coverage
+- None (core library using standard Rust libraries and workspace logging/error crates: `miette`, `thiserror`, `serde`, `tracing`).
 
-### JES2 Command Support
+### Known Consumers
 
-| Command | Name | Status | Supported Parameters |
-|---------|------|--------|----------------------|
-| `$D` | Display | Full | `$D J`, `$D A`, `$D I`, `$D S` (Spool), `$D Q` |
-| `$S` | Start | Full | Start initiators, start jobs |
-| `$P` | Stop | Full | Stop initiators, purge jobs |
-| `$C` | Cancel | Full | Cancel active jobs |
-| `$A` | Release | Full | Release held jobs or output |
-| `$T` | Modify | Full | Change job class, priority, or initiator classes |
+- [`open-mainframe-tso`](../open-mainframe-tso/README.md) — Uses `InternalReader` and `Jes2` for the TSO `SUBMIT`, `STATUS`, and `CANCEL` commands.
+- [`open-mainframe-zosmf`](../open-mainframe-zosmf/README.md) — Powers `/zosmf/restjobs/jobs` REST endpoints for job submission, status queries, and SYSOUT retrieval.
 
-## Usage Examples
+## Examples
 
-### Submitting a Job Programmatically
+### Submitting a Job via Internal Reader
 
 ```rust
 use open_mainframe_jes2::Jes2;
 use open_mainframe_jes2::intrdr::InternalReader;
 
 let mut jes = Jes2::new();
-let mut reader = InternalReader::new(&mut jes);
 
-// Submit JCL stream
-reader.write("//MYJOB JOB CLASS=A\n//S1 EXEC PGM=IEFBR14\n").unwrap();
-let job_id = reader.close().unwrap();
+let mut reader = InternalReader::new();
+reader.write_lines(&[
+    "//PAYROLL  JOB (ACCT123),'MONTHLY PAY',CLASS=A,MSGCLASS=X",
+    "//STEP01   EXEC PGM=PAYCALC",
+    "//SYSPRINT DD SYSOUT=*",
+]);
 
-println!("Submitted job ID: {}", job_id);
+// Submit with parent address space ID 1
+let job_id = reader.submit(1, &mut jes).expect("Job submission failed");
+assert_eq!(job_id.as_u32(), 1);
+
+let job = jes.get_job(job_id).expect("Job not found");
+assert_eq!(job.name, "PAYROLL");
+assert_eq!(job.class, 'A');
 ```
 
-### Checking Job Status via Operator Command
+### Executing Operator Commands
 
 ```rust
-use open_mainframe_jes2::commands::execute_command;
+use open_mainframe_jes2::Jes2;
+use open_mainframe_jes2::initiator::InitiatorManager;
+use open_mainframe_jes2::commands::{parse_command, execute_command};
 
 let mut jes = Jes2::new();
-let response = execute_command(&mut jes, "$D J(MYJOB)").unwrap();
-println!("JES2 Status: {}", response);
+let mut initiators = InitiatorManager::new();
+
+// Display all jobs in the queue
+if let Some(cmd) = parse_command("$D J") {
+    let response = execute_command(&mut jes, &mut initiators, &cmd);
+    println!("JES2 Response: {}", response.message);
+}
+
+// Modify an initiator to handle classes A and B
+if let Some(cmd) = parse_command("$T I1,C=AB") {
+    let response = execute_command(&mut jes, &mut initiators, &cmd);
+    assert!(response.success);
+}
 ```
 
 ## Testing
 
-The JES2 crate includes 250+ tests for operational stability:
-- **Concurrency**: Verified multi-initiator job selection with 100+ concurrent threads.
-- **State Integrity**: Ensures jobs cannot skip conversion or output phases.
-- **Spool Stress**: Verifies data integrity during large (1GB+) SYSOUT writes.
-- **Checkpoint Recovery**: Tests Warm Start by crashing and reloading the checkpoint file.
+Run tests for the crate:
 
-```sh
+```bash
 cargo test -p open-mainframe-jes2
 ```
+
+The test suite covers:
+- **`intrdr::*`**: Card-image ingestion, job statement parsing, continuation handling, JECL parsing (`/*JOBPARM`), and invalid JCL error states.
+- **`queue::*`**: Priority ordering (0–15), multi-class matching, FIFO queue preservation, and hold/release queue filtering.
+- **`initiator::*`**: Multi-initiator workload selection, class-list matching, initiator draining (`$P I`), and execution state transitions.
+- **`spool::*`**: Spool allocation, SYSOUT dataset creation, record appending, and MTTR addressing.
+- **`commands::*`**: Command syntax parser for `$D`, `$S`, `$P`, `$C`, `$A`, `$H`, `$T`, wildcard job filters, and error formatting.
+- **`checkpoint::*`**: Subsystem state serialization and warm start restoration.
+
+## Limitations
+
+- **Single-Node Execution**: Multi-Access Spool (MAS) clustering and Network Job Entry (NJE) cross-system node routing are not implemented.
+- **Security Interception**: RACF `JESSPOOL` resource authorization hooks exist in the exit pipeline but default to permitted when RACF is unconfigured.
+- **JCL Converter / Interpreter**: The internal reader extracts job headers and JECL; step-level JCL parsing (EXEC, DD) is delegated to downstream step processors.
+
+## Related Documentation
+
+- [Crate Map](../../docs/architecture/crate-map.md)
+- [TSO/E Command Processor (`open-mainframe-tso`)](../open-mainframe-tso/README.md)
+- [z/OSMF REST Subsystem (`open-mainframe-zosmf`)](../open-mainframe-zosmf/README.md)

@@ -1,14 +1,36 @@
 # open-mainframe-assess
 
-A Rust toolkit for assessing mainframe COBOL codebases prior to migration. Provides static analysis (text-based and AST-based), code metrics, compatibility checking, CICS command inventory, DB2 SQL complexity analysis, dead code detection, call graph construction, JCL dependency mapping, batch directory scanning with copybook resolution, multi-format report generation, and assessment snapshot comparison for tracking migration progress.
+Codebase assessment and migration readiness analysis engine for legacy mainframe applications in the OpenMainframe project.
 
-## Overview
+## Purpose
 
-Migrating legacy mainframe COBOL applications to the OpenMainframe runtime requires a thorough understanding of what each program uses: which language features, which middleware (CICS, DB2, IMS), which datasets, and how complex the code actually is. This crate automates that assessment.
+Migrating legacy mainframe applications to modern environments requires in-depth static analysis of COBOL source code, JCL job streams, database interactions, and transaction processing patterns. The `open-mainframe-assess` crate automates migration assessment by performing dual-path analysis (fast text scanning and deep AST syntax tree inspection via `open-mainframe-cobol`), calculating industry-standard code metrics, checking dialect compatibility rules, building program call graphs, identifying dead code, inventorying CICS/DB2/IMS statements, mapping JCL dataset dependencies, generating multi-format migration reports, and diffing snapshot progression.
 
-The crate offers two analysis paths. A text-based `Analyzer` scans source lines for keyword patterns — fast and tolerant of any input. An AST-based `AstAnalyzer` leverages the `open-mainframe-cobol` parser to walk the actual syntax tree for precise feature detection, cyclomatic complexity, and data-item counting, with automatic fallback to text-based analysis when parsing fails.
+## Capabilities
 
-Beyond per-program analysis, the crate provides batch scanning (`Scanner`) that discovers COBOL files in a directory tree, resolves `COPY` copybook includes, runs analysis on each file, and aggregates results into a single report. Reports can be generated in Text, Markdown, JSON, or HTML format. Assessment snapshots can be serialized to JSON and compared across runs to track migration progress over time.
+- **Dual-Path Source Analysis**:
+  - **Text-Based Analyzer (`Analyzer`)**: Fast, error-tolerant regex/keyword scanning for mainframe features across any source file.
+  - **AST-Based Analyzer (`AstAnalyzer`)**: Deep semantic analysis powered by `open-mainframe-cobol` parser, extracting accurate AST constructs, nested control flows, cyclomatic decision counts, and data definitions with automatic fallback to text analysis.
+- **Code Quality & Complexity Metrics (`metrics`)**:
+  - Computes Lines of Code (total, SLOC, blank, comment lines, comment ratio).
+  - Calculates McCabe Cyclomatic Complexity (`IF`, `EVALUATE WHEN`, `PERFORM UNTIL`, `ON SIZE ERROR`, `AT END`).
+  - Halstead software metrics (vocabulary, length, volume, difficulty, effort).
+  - Computes Maintainability Index (MI: normalized 0–100 scale) and technical debt estimates.
+- **Dialect Compatibility Checking (`compatibility`)**:
+  - Rule-based evaluation against IBM Enterprise COBOL, Micro Focus, GnuCOBOL, COBOL-85, and OpenMainframe dialects.
+  - Reports severity classifications (`Info`, `Warning`, `High`, `Critical`) with targeted remediation recommendations.
+- **Subsystem & Middleware Inventory**:
+  - **CICS Inventory (`cics_inventory`)**: Scans for `EXEC CICS` commands, categorizing 12 functional areas and mapping support status against `open-mainframe-cics`.
+  - **DB2 SQL Analysis (`sql_analysis`)**: Extracts `EXEC SQL` blocks, classifies query complexity (`Simple`, `Join`, `Subquery`, `Cursor`, `Dynamic`, `Utility`), computes effort scores, and provides PostgreSQL compatibility guidance.
+  - **IMS / DL/I Detection**: Identifies `EXEC DLI` statements and hierarchical database dependencies.
+- **Structural Codebase Analysis**:
+  - **Call Graph Generator (`callgraph`)**: Builds directed program call graphs from static `CALL`, dynamic calls, and `EXEC CICS LINK/XCTL`, with DFS cycle detection and Kahn's topological sorting for leaf-first migration ordering.
+  - **Dead Code Detection (`dead_code`)**: Identifies unreachable sections, unreferenced paragraphs, and unused variables.
+  - **JCL Job Dependency Mapping (`jcl_deps`)**: Analyzes JCL job streams (`analyze_jcl`), constructing step-to-program maps, dataset I/O dependency graphs, and shared dataset conflict reports.
+- **Batch Scanning & Reporting (`scanner`, `report`, `snapshot`)**:
+  - Directory scanner (`Scanner`) with glob filtering, include path traversal, and copybook resolution (`COPY`).
+  - Report generators producing Text, Markdown, JSON, and HTML executive summaries.
+  - Assessment snapshot diffing (`compare_snapshots`, `SnapshotDiff`) tracking migration velocity and complexity reduction over time.
 
 ## Architecture
 
@@ -257,14 +279,19 @@ let diff = compare_snapshots(&baseline, &current);
 println!("Progress: {:.1}%", diff.progress.progress_percent);
 ```
 
-## Dependencies
+## Integration
 
-| Dependency | Purpose |
-|------------|---------|
-| `open-mainframe-cobol` | COBOL parser for AST-based analysis (lexer, parser, AST types) |
-| `miette` | Diagnostic error reporting |
-| `thiserror` | Ergonomic error type derivation for `AssessError` |
-| `serde` / `serde_json` | Serialization for reports, snapshots, and analysis results |
+### Internal Workspace Dependencies
+
+- `open-mainframe-cobol`: COBOL parser, lexer, and AST types used for deep AST syntax walking in `AstAnalyzer`.
+- `miette`: Diagnostic error reporting.
+- `thiserror`: Error type derive macros.
+- `serde` / `serde_json`: Serialization for reports, snapshots, and assessment results.
+
+### Workspace Consumers
+
+- `open-mainframe-wiki`: Documented in the migration and developer tooling catalog.
+- Root workspace member in `Cargo.toml`.
 
 ## Testing
 
@@ -274,7 +301,7 @@ Run the full test suite:
 cargo test -p open-mainframe-assess
 ```
 
-Each module contains comprehensive inline `#[cfg(test)]` test blocks:
+The crate contains 99 unit tests organized by module:
 
 - **analyzer**: Basic analysis, metrics calculation, DB2/CICS feature detection, complexity rating, recommendation generation
 - **ast_analyzer**: Basic AST parsing, comment false-positive avoidance, DISPLAY detection, cyclomatic complexity with IF statements, paragraph counting, graceful fallback on parse failure
@@ -291,14 +318,19 @@ Each module contains comprehensive inline `#[cfg(test)]` test blocks:
 
 Scanner tests create and clean up temporary directories; all other tests use inline source strings.
 
-## Limitations and Future Work
+## Limitations
 
-- **IMS/DL1 detection**: Only text-based (EXEC DLI pattern match); no AST-level analysis since IMS precompiler syntax is not parsed by `open-mainframe-cobol`
-- **Dead code analysis**: Only tracks explicit references (PERFORM, GO TO, THRU/THROUGH, INPUT/OUTPUT PROCEDURE). Fall-through execution between paragraphs is not modeled, so a paragraph reachable only by fall-through from the preceding paragraph will be flagged as dead.
-- **CICS support status mapping**: The `support_status` function is a static snapshot of `open-mainframe-cics` capabilities and may drift as that crate evolves.
-- **SQL analysis**: Only detects EXEC SQL blocks embedded in COBOL. Standalone SQL scripts or stored procedures are not analyzed. The PostgreSQL compatibility notes cover common DB2 idioms but not exhaustive DB2/zOS SQL dialect differences.
-- **Call graph**: Dynamic calls (CALL variable) are marked as uncertain; the actual target cannot be resolved statically.
-- **Copybook resolution**: Single-level only; nested COPY statements within copybooks are not recursively resolved.
-- **Cyclomatic complexity (text mode)**: Approximated via keyword counting; may overcount due to patterns appearing in data names or string literals. AST mode is more accurate.
-- **Report formats**: HTML report includes basic styling but no interactive features (charts, filtering).
-- **Snapshot comparison**: Progress tracking is program-level; no intra-program change tracking (e.g., which specific issues were resolved).
+- **IMS/DL1 Detection**: Only text-based pattern matching is performed for `EXEC DLI`; AST-level analysis is not available for IMS macros without precompiler expansion.
+- **Dead Code Analysis Scope**: Tracks explicit control flow references (`PERFORM`, `GO TO`, `THRU`/`THROUGH`, `INPUT`/`OUTPUT PROCEDURE`). Fall-through execution across consecutive unreferenced paragraphs is not modeled.
+- **Dynamic Call Target Resolution**: Dynamic subprogram calls (`CALL identifier`) are flagged as uncertain because the runtime target cannot be deterministically resolved at compile time.
+- **Copybook Resolution Depth**: Single-level copybook resolution is performed; nested `COPY` statements inside included copybooks are not recursively expanded.
+- **Text-Mode Complexity Approximation**: Cyclomatic complexity calculated via text scanning estimates decision points by keyword occurrences; AST mode provides exact decision point counts.
+
+## Related Documentation
+
+- [OpenMainframe Crate Map](../../docs/architecture/crate-map.md)
+- [open-mainframe-cobol](../open-mainframe-cobol/README.md)
+- [open-mainframe-dataset](../open-mainframe-dataset/README.md)
+- [open-mainframe-db2](../open-mainframe-db2/README.md)
+- [open-mainframe-cics](../open-mainframe-cics/README.md)
+- [open-mainframe-jcl](../open-mainframe-jcl/README.md)

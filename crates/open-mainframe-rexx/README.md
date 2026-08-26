@@ -1,18 +1,25 @@
 # open-mainframe-rexx
 
-A high-performance Rust implementation of the **REXX (Restructured Extended Executor)** language for the OpenMainframe project — providing a complete lexer, parser, and interpreter with full support for TSO/E REXX features, arbitrary-precision decimal arithmetic, and the powerful PARSE template system.
+REXX (Restructured Extended Executor) language lexer, parser, interpreter, and decimal runtime for OpenMainframe.
 
-## Overview
+## Purpose
 
-REXX is the standard scripting and "glue" language for IBM mainframes, prized for its readability and powerful string manipulation. This crate reimplements the REXX language from the ground up, enabling the execution of REXX scripts in a variety of environments (TSO, USS, Batch). It features a robust interpreter that manages variable pools, supports block scoping, and integrates with host command environments.
+`open-mainframe-rexx` implements the TSO/E REXX scripting language for mainframe automation and batch scripting. It provides complete tokenization, predictive AST parsing, arbitrary-precision decimal arithmetic respecting `NUMERIC DIGITS`, variable pool scoping with compound stemmed arrays (`STEM.I.J`), the sophisticated `PARSE` template engine, and 40+ standard built-in functions.
 
-The implementation comprises:
-1. **Lexical Analysis** — A tokenization engine that handles REXX's unique comment nesting, string literals, and operator rules.
-2. **Predictive Parser** — Translates tokens into a structured Abstract Syntax Tree (AST) while maintaining operator precedence and instruction boundaries.
-3. **Interpreter Core** — A recursive execution engine that manages the call stack, variable pools, and instruction flow.
-4. **Decimal Arithmetic** — A built-in high-precision decimal engine that ensures REXX arithmetic matches mainframe behavior (respecting `NUMERIC DIGITS`).
-5. **PARSE Template Engine** — A dedicated module for the sophisticated `PARSE` instruction, supporting positional, pattern, and variable-based splitting.
-6. **Built-in Function Library** — A comprehensive implementation of standard REXX functions (SUBSTR, WORD, COPIES, etc.).
+## Capabilities
+
+- **Lexical Analysis (`lexer`)**: Handles REXX tokenization, nested block comments (`/* ... /* ... */ ... */`), string literals (single/double quotes with doubling), hex/binary literals (`'FF'X`, `'1010'B`), and operator disambiguation.
+- **Predictive Parser (`parser`)**: Builds a structured `Program` AST containing `Clause` nodes, handling expressions with full operator precedence, multi-clause lines, label markers, and `PARSE` template specifications.
+- **Interpreter & Control Flow (`interpreter`)**:
+  - Statements: `IF/THEN/ELSE`, `DO` loops (simple, counted, `WHILE`, `UNTIL`, `FOREVER`), `SELECT/WHEN/OTHERWISE`, `SIGNAL`, `CALL/RETURN`, `EXIT`, `SAY`, `PULL`, `ARG`.
+  - Scoping: Routine calls with private or shared variable pools and selective exposure via `PROCEDURE EXPOSE`.
+  - Host Command Dispatch: `ADDRESS` statement routing to host environments (e.g. `ADDRESS TSO`).
+- **Compound Stemmed Variables**: Dynamic associative arrays with stem default initialization (e.g. `STEM. = "DEFAULT"`) and compound tails (`STEM.A.1`).
+- **Arbitrary-Precision Decimal Arithmetic (`value`)**:
+  - Formatted decimal operations (`rexx_add`, `rexx_sub`, `rexx_mul`, `rexx_div`, `rexx_idiv`, `rexx_rem`, `rexx_pow`, `rexx_compare`).
+  - Configurable precision (`NUMERIC DIGITS`) and scientific or engineering exponential format (`NUMERIC FORM`).
+- **PARSE Template Engine (`parse_template`)**: Positional numeric patterns (`1 5 10`), relative patterns (`+3`, `-2`), string literal patterns (`PARSE VAR S '(' VAR1 ')'`), variable patterns (`(MARKER)`), and word tokenization.
+- **Built-in Functions Library (`builtins`)**: 40+ functions including `SUBSTR`, `LENGTH`, `POS`, `LASTPOS`, `COPIES`, `STRIP`, `WORD`, `WORDS`, `SUBWORD`, `DELWORD`, `SPACE`, `TRANSLATE`, `VERIFY`, `CENTER`, `LEFT`, `RIGHT`, `COMPARE`, `DATATYPE`, `TIME`, `DATE`, `RANDOM`, `D2X`, `X2D`, `C2X`, `X2C`, `B2X`, `X2B`, `MAX`, `MIN`, `ABS`, `SIGN`, `TRUNC`, `FORMAT`, `REVERSE`, `OVERLAY`, `INSERT`, `DELSTR`, `SOURCELINE`, `QUEUED`.
 
 ## Architecture
 
@@ -48,125 +55,95 @@ The implementation comprises:
 
 ### Module Structure
 
-| Module | Description | Lines |
-|--------|-------------|------:|
-| `interpreter`| Recursive execution engine and state management | ~1,949 |
-| `parser` | Predictive parser building the AST from tokens | ~1,222 |
-| `builtins` | Library of 40+ standard REXX functions | ~1,155 |
-| `value` | REXX value system and high-precision decimal math | ~922 |
-| `lexer` | Robust tokenizer for REXX source code | ~748 |
-| `parse_template`| Splitting logic for PARSE, ARG, and PULL | ~447 |
-| `ast` | AST node definitions for instructions and expressions | ~215 |
-| `token` | Token definitions and source tracking | ~144 |
+| Module | Lines | Description |
+|---|---|---|
+| `interpreter.rs` | ~2 060 | Recursive execution engine, call stack, variable pools, signal handling |
+| `parser.rs` | ~1 220 | Predictive AST parser building clauses and expressions from tokens |
+| `builtins.rs` | ~1 150 | Library of 40+ standard REXX built-in functions |
+| `value.rs` | ~920 | REXX string-based value system and arbitrary-precision decimal math |
+| `lexer.rs` | ~750 | Tokenizer handling comments, literals, operators, and line continuation |
+| `parse_template.rs` | ~450 | PARSE template tokenizer, pattern resolver, and string splitting logic |
+| `ast.rs` | ~220 | AST nodes: `Program`, `Clause`, `ClauseBody`, `Expr`, `DoControl` |
+| `token.rs` | ~140 | Token definitions: `Token`, `TokenKind`, `Span` |
 
-**Total**: ~6,827 lines of Rust.
+## Public API
 
-## Key Types and Components
+### Primary Types & Functions
 
-### Runtime & Values
+- `parse(source: &str) -> Result<Program, ParseError>`: Parses source into a REXX AST.
+- `interpret(program: &Program) -> Result<ExecResult, InterpError>`: Executes a parsed program.
+- `interpret_with_args(program: &Program, args: &str) -> Result<ExecResult, InterpError>`: Executes a program with initial argument strings.
+- `ExecResult`: Contains return code `rc: i32` and captured SAY output `output: Vec<String>`.
+- `RexxValue`: String-based value representation.
+- `NumericSettings` / `NumericForm`: Precision and formatting controls.
+- `lex(source: &str) -> Result<Vec<Token>, LexError>`: Direct tokenizer access.
 
-| Type | Description |
-|------|-------------|
-| `RexxValue` | The universal variant type representing REXX strings/numbers. |
-| `Interpreter`| Orchestrates the execution of a REXX `Program`. |
-| `VariablePool`| Manages variables with support for stemmed arrays (e.g., `VAR.1`). |
-| `NumericSettings`| Controls precision (`DIGITS`) and formatting (`FORM`). |
+## Integration
 
-### Parsing
+### Internal Workspace Dependencies
 
-| Type | Description |
-|------|-------------|
-| `Program` | The root AST node containing a list of `Clause` nodes. |
-| `Clause` | The fundamental unit of execution (Instruction or Expression). |
-| `Expr` | Recursive enum for expressions with operator precedence. |
+*None* — `open-mainframe-rexx` depends only on external crates (`miette`, `thiserror`, `serde`, `tracing`).
 
-### Template Engine
+### Workspace Consumers
 
-| Type | Description |
-|------|-------------|
-| `Template` | Parsed representation of a PARSE template. |
-| `Pattern` | Individual splitting criteria (Positional, Pattern, Variable). |
+- `open-mainframe-tso` — Executes REXX scripts from the TSO/E terminal command line and batch ISPF sessions.
 
-## Implementation Details
+## Examples
 
-### Arbitrary-Precision Arithmetic
-
-REXX values are inherently strings, but they behave as numbers when used in arithmetic. This crate implements:
-- **Precision Control**: Defaults to 9 digits, but can be set via `NUMERIC DIGITS`.
-- **Rounding**: Follows REXX standard rounding rules for multiplication and division.
-- **Form**: Supports both `SCIENTIFIC` and `ENGINEERING` exponential notation.
-
-### Variable Scoping and Exposure
-
-The interpreter supports traditional REXX scoping rules:
-- **Internal Routines**: Share the same variable pool as the caller by default.
-- **PROCEDURE**: Creates a new, isolated pool.
-- **EXPOSE**: Allows specific variables from the caller's pool to be "exposed" to the routine.
-
-### The PARSE Instruction
-
-One of REXX's most powerful features is implemented in the `parse_template` module. It supports:
-- **Positional Patterns**: `PARSE VAR S 5 VAR1 10 VAR2` (splits at col 5 and 10).
-- **String Patterns**: `PARSE VAR S '(' VAR1 ')'` (extracts text between parens).
-- **Variable Patterns**: `PARSE VAR S (MARKER) VAR1` (uses value of MARKER as split point).
-
-## Feature Coverage
-
-| Feature | Category | Status |
-|---------|----------|--------|
-| Decimal Arith   | Types    | Implemented (Arbitrary precision) |
-| Stemmed Vars    | Variables| Implemented (e.g., `A.B.C`) |
-| Scoping         | Control  | Implemented (PROCEDURE EXPOSE) |
-| PARSE Templates | Language | Implemented (All pattern types) |
-| DO Loops        | Control  | Implemented (WHILE, UNTIL, FOREVER) |
-| SELECT / WHEN   | Control  | Implemented |
-| Built-in Funcs  | Lib      | Implemented (40+ functions) |
-| Host Commands   | Interface| Implemented (ADDRESS TSO/USS) |
-| External Subroutines| Lib   | Implemented |
-
-## Usage Examples
-
-### Executing a REXX Script
+### Executing a REXX Script with Arguments
 
 ```rust
-use open_mainframe_rexx::{interpret, parse};
+use open_mainframe_rexx::{interpret_with_args, parse};
 
 let source = r#"
-   PARSE ARG NAME
-   SAY 'Hello,' NAME
-   RETURN 0
+    PARSE ARG name
+    SAY 'Hello, ' || name || '!'
+    RETURN 0
 "#;
 
-let program = parse(source).unwrap();
-let result = interpret(program, &["WORLD"]).unwrap();
-println!("Script RC: {}", result);
+let program = parse(source).expect("Parse error");
+let result = interpret_with_args(&program, "WORLD").expect("Execution error");
+
+assert_eq!(result.rc, 0);
+assert_eq!(result.output, vec!["Hello, WORLD!"]);
 ```
 
-### High-Precision Arithmetic
+### Arbitrary-Precision Decimal Arithmetic
 
 ```rust
-use open_mainframe_rexx::value::RexxValue;
+use open_mainframe_rexx::value::{rexx_mul, NumericSettings};
 
-let a = RexxValue::from("1.23456789");
-let b = RexxValue::from("2");
-let c = a.multiply(&b).unwrap();
-assert_eq!(c.to_string(), "2.46913578");
+let settings = NumericSettings {
+    digits: 12,
+    ..Default::default()
+};
+
+let product = rexx_mul("1.23456789", "2", &settings).unwrap();
+assert_eq!(product, "2.46913578");
 ```
 
 ## Testing
 
-The REXX crate is tested against the standard REXX test suite:
-- **Language Tests**: Verifies complex nesting of IF/DO/SELECT.
-- **Arithmetic Tests**: Ensures mathematical parity with IBM REXX across 100+ cases.
-- **Parse Tests**: Exhaustive testing of the PARSE engine with multi-level patterns.
-- **Built-in Tests**: Unit tests for every standard function with edge-case parameters.
+The crate includes 169 unit tests verifying language syntax, arithmetic precision, PARSE templates, and built-in functions:
 
-```sh
+```bash
 cargo test -p open-mainframe-rexx
 ```
 
-## Limitations and Future Work
+Key test locations:
+- `src/interpreter.rs` — Control flow (IF, DO WHILE/UNTIL, SELECT), PROCEDURE EXPOSE variable isolation, and subroutines.
+- `src/value.rs` — Multi-precision addition, multiplication, division, truncation, and rounding.
+- `src/parse_template.rs` — Absolute and relative positional splits, literal pattern matches, and variable pattern triggers.
+- `src/builtins.rs` — All 40+ built-in functions with edge cases (empty strings, large indices, boundary conversions).
 
-- **Stream I/O**: `STREAM`, `CHARIN`, and `LINEIN` are currently being integrated with the `open-mainframe-dataset` crate.
-- **INTERPRET Instruction**: Support for dynamic code execution (executing a string as code) is in design.
-- **SAA Compliance**: Most SAA REXX features are implemented, with few exceptions in less-common built-ins.
+## Limitations
+
+- **Dynamic `INTERPRET` Instruction**: Dynamic string-to-code execution (`INTERPRET "x = 5"`) is not currently implemented.
+- **Stream I/O Functions**: The `STREAM`, `CHARIN`, and `LINEIN` functions are stubs and are being integrated with `open-mainframe-dataset`.
+- **Host Environments**: External command execution is currently routed through `ADDRESS TSO` and local subprocess wrappers; full z/OS subsystem addressing (e.g. `ADDRESS DSNREXX`, `ADDRESS ISPEXEC`) depends on host subsystem bridges.
+
+## Related Documentation
+
+- [Crate Map](../../docs/architecture/crate-map.md) — Workspace architectural overview.
+- [open-mainframe-tso](../open-mainframe-tso/README.md) — TSO command environment consumer.
+- [open-mainframe-clist](../open-mainframe-clist/README.md) — Companion TSO scripting interpreter.

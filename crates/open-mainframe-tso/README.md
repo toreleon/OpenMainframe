@@ -1,166 +1,161 @@
 # open-mainframe-tso
 
-A comprehensive Rust implementation of **TSO/E (Time Sharing Option/Extensions)** for the OpenMainframe z/OS clone — providing interactive command processing, dataset management, session profile control, and a bridge for REXX and CLIST execution.
+A comprehensive Rust implementation of **TSO/E (Time Sharing Option/Extensions)** for the OpenMainframe project — providing interactive line-mode command processing, dataset allocation management, user session profile controls, parameter parsing services (IKJPARS), and bridges for REXX script execution and JES2 batch interaction.
 
-## Overview
+## Purpose
 
-TSO is the primary interactive interface for mainframe users and developers. This crate reimplements the core TSO/E environment, enabling the execution of TSO commands via a line-oriented interface. It handles command parsing, dynamic dataset allocation, and provides the essential service routines (IKJPARS, PUTLINE, GETLINE) used by TSO command processors.
+TSO/E is the primary interactive command processor on IBM z/OS mainframes. `open-mainframe-tso` models this interactive terminal environment within OpenMainframe:
+1. **Interactive Command Processing**: Dispatches and executes standard TSO commands (`ALLOCATE`, `FREE`, `LISTALC`, `LISTDS`, `PROFILE`, `SUBMIT`, `STATUS`, `CANCEL`, `DELETE`, `RENAME`, `CALL`, `EXEC`, `ALTLIB`).
+2. **IKJPARS Parameter Parsing Service**: Implements the standard z/OS parameter parsing control entry architecture for validating positional parameters, keywords, and flags.
+3. **Session & Profile Management**: Tracks user environment state including dataset prefixes (`USERID.DSN`), message identifiers (`MSGID`), and active DD allocations.
+4. **Subsystem Bridges**: Integrates directly with `open-mainframe-jes2` for batch job submission and status monitoring, and `open-mainframe-rexx` for hosting `ADDRESS TSO` execution environments.
 
-The implementation comprises:
-1. **Command Processor** — A central dispatcher that routes user input to the appropriate command handler (e.g., `ALLOCATE`, `LISTDS`).
-2. **IKJPARS Service** — A high-fidelity implementation of the TSO parameter parsing service, supporting keyword and positional parameters.
-3. **Session Management** — Maintenance of user-specific state, including the PROFILE (PREFIX, MSGID) and active dataset allocations.
-4. **Dataset Management** — Direct integration with MVS `DYNALLOC` for managing datasets and PDS members from the command line.
-5. **JES2 Integration** — Interaction with the batch subsystem via `SUBMIT`, `STATUS`, `CANCEL`, and `OUTPUT` commands.
-6. **REXX & CLIST Bridge** — Hosting environment for executing scripts that interact with TSO services.
+## Capabilities
+
+- **TSO Command Dispatcher (`execute`, `execute_raw`)**:
+  - Direct execution of dataset allocation commands (`ALLOCATE`, `FREE`, `LISTALC`, `LISTDS`).
+  - File manipulation commands (`DELETE`, `RENAME`).
+  - Program execution and invocation (`CALL`, `EXEC`).
+  - Library concatenation management (`ALTLIB`).
+- **IKJPARS Service (`ikjpars`, `ParseControlEntry`)**:
+  - High-fidelity parameter parsing supporting keyword arguments (`DSN('MY.DATA')`), abbreviations, value validation lists, and boolean flags.
+- **Session State (`TsoSession`, `TsoProfile`)**:
+  - Manages active user ID, default dataset prefixing (automatically qualifying non-quoted dataset names), and current allocations.
+- **JES2 Subsystem Integration**:
+  - `SUBMIT` sends JCL files and dataset members directly to the `open-mainframe-jes2` internal reader.
+  - `STATUS`, `CANCEL`, and `OUTPUT` monitor and manage active batch jobs.
+- **REXX / CLIST Hosting**:
+  - Hosts REXX scripts via `open-mainframe-rexx`, routing terminal `SAY`/`PULL` I/O to TSO streams.
 
 ## Architecture
 
-```
+```text
     User Terminal / REST API
            │
     ┌──────▼─────────────────────────────────────────────────┐
     │                  TSO Command Dispatcher                │
-    │  - Command line parsing                                │
-    │  - Alias resolution                                    │
+    │  - Command line parsing (`parse_command`)               │
+    │  - Alias resolution and execution (`execute`)          │
     └──────┬─────────────────────────────────────────────────┘
            │
     ┌──────▼─────────────────────────────────────────────────┐
     │                  TSO Service Routines                  │
-    │  - IKJPARS (Parameter Parsing)                         │
-    │  - PUTLINE / GETLINE (Terminal I/O)                    │
-    │  - STACK (Command Stacking)                            │
+    │  - IKJPARS (Parameter Parsing via ParseControlEntry)   │
+    │  - Memory and Terminal I/O Streams                     │
     └──────┬─────────────────────────────────────────────────┘
            │
     ┌──────▼─────────────────────────────────────────────────┐
     │                  Session & Profile                     │
-    │  - User PREFIX, MSGID settings                         │
+    │  - TsoSession & TsoProfile (PREFIX, MSGID)             │
     │  - Active DD Table (Allocations)                       │
-    │  - ALTLIB (Alternative Libraries)                      │
     └──────┬─────────────────────────────────────────────────┘
            │
     ┌──────▼─────────────────────────────────────────────────┐
     │                 Subsystem Connectors                   │
-    │  - MVS DynAlloc (SVC 99)                               │
-    │  - JES2 Interface (SUBMIT/STATUS)                      │
-    │  - REXX / CLIST Interpreters                           │
+    │  - JES2 Interface (SUBMIT, STATUS, CANCEL)             │
+    │  - REXX Interpreter (ADDRESS TSO)                      │
     └────────────────────────────────────────────────────────┘
 ```
 
 ### Module Structure
 
-| Module | Description | Lines |
-|--------|-------------|------:|
-| `commands` | Implementation of core TSO commands: ALLOCATE, FREE, LISTDS, LISTALC, etc. | ~891 |
-| `jobs` | JES2 interaction: SUBMIT, STATUS, CANCEL, and OUTPUT processing | ~592 |
-| `session` | Session state: User profile, active allocations, and session lifecycle | ~416 |
-| `rexx_tso` | TSO host command environment for REXX (ADDRESS TSO) | ~487 |
-| `exec` | Script execution: Support for CLIST and REXX invocation | ~446 |
-| `parser` | Command line tokenizer and keyword/positional extractor | ~320 |
-| `services` | TSO service routines: Implementation of IKJPARS and TSO I/O | ~323 |
+| Module | Description |
+|--------|-------------|
+| `commands` | Core TSO command implementations: ALLOCATE, FREE, LISTDS, LISTALC, DELETE, RENAME, CALL, PROFILE. |
+| `jobs` | JES2 interaction: SUBMIT, STATUS, CANCEL, and OUTPUT processing. |
+| `session` | Session state: `TsoSession`, `TsoProfile`, active DD allocations (`AllocEntry`). |
+| `services` | TSO service routines: `IKJPARS` parameter parser and `ParseControlEntry`. |
+| `parser` | Command line tokenizer and keyword/positional extractor (`parse_command`, `ParsedCommand`). |
+| `rexx_tso` | REXX host command environment routing `ADDRESS TSO` commands. |
+| `exec` | Script invocation and execution runtime. |
 
-**Total**: ~3,554 lines of Rust.
+## Public API
 
-## Key Types and Components
+### Core Types and Services
 
-### Session & Environment
+```rust
+use open_mainframe_tso::{
+    TsoSession, TsoProfile, AllocEntry,
+    parse_command, execute, execute_raw,
+    ParsedCommand, CommandResult,
+    services::{ikjpars, ParseControlEntry, ParsedParameters},
+};
+```
 
-| Type | Description |
-|------|-------------|
-| `TsoSession` | Manages the state of an interactive user session. |
-| `TsoProfile` | Contains user settings like `PREFIX`, `WTPMSG`, and `MSGID`. |
-| `AllocEntry` | Represents a single active dataset or DD allocation. |
+- `TsoSession`: Central interactive session structure holding user profile and allocation tables.
+- `parse_command` / `execute`: Parse and execute TSO command lines.
+- `ikjpars`: Validates parsed command tokens against a `ParseControlEntry` definition.
 
-### Command Processing
+## Integration
 
-| Type | Description |
-|------|-------------|
-| `ParsedCommand`| Structured representation of a TSO command string. |
-| `CommandResult`| Captures the outcome of a command, including return code and output. |
-| `TsoIo` | Trait for terminal I/O, allowing TSO to run over SSH or REST. |
+### Workspace Dependencies
 
-### Service Routines
+- [`open-mainframe-jes2`](../open-mainframe-jes2/README.md) — Used for submitting JCL and querying batch job statuses.
+- [`open-mainframe-rexx`](../open-mainframe-rexx/README.md) — Powers REXX script execution under TSO.
 
-| Type | Description |
-|------|-------------|
-| `ParseDescriptorList (PDL)`| Definition of expected parameters for `IKJPARS`. |
-| `MemoryIo` | A TSO I/O implementation that buffers output in memory. |
+### Known Consumers
 
-## Implementation Details
+- [`open-mainframe-zosmf`](../open-mainframe-zosmf/README.md) — Powers `/zosmf/tso` REST endpoints for interactive TSO address space sessions.
 
-### IKJPARS Parameter Parsing
-
-The `IKJPARS` service is the heart of TSO command flexibility. This crate implements a Rust-native version that:
-- Supports **Abbreviations**: e.g., `ALLOC` for `ALLOCATE`.
-- Handles **Keyword Values**: e.g., `DSN('MY.DATA')`.
-- Handles **Positional Parameters**: Ensuring required operands are present.
-- Provides **Help Prompts**: If a required parameter is missing, the service can prompt the user (via `GETLINE`).
-
-### TSO Command Dispatch
-
-Commands are registered in a central registry. When a user enters a line:
-1. The first word is extracted and matched against the registry (with alias support).
-2. The remaining string is passed to the command handler.
-3. The handler typically uses `IKJPARS` to validate its operands before calling MVS services.
-
-### REXX/TSO Integration
-
-REXX scripts running under TSO can issue commands using `ADDRESS TSO`. This crate provides the `RexxTsoHost` which:
-- Captures `SAY` output and routes it to `PUTLINE`.
-- Handles the `PULL` instruction via `GETLINE`.
-- Allows scripts to perform TSO-specific actions like `LISTDSI`.
-
-## Feature Coverage
-
-| Feature | Category | Status |
-|---------|----------|--------|
-| IKJPARS         | Services | Implemented (Keyword/Positional) |
-| ALLOCATE / FREE | Dataset  | Implemented (SVC 99 integration) |
-| LISTDS / LISTALC| Dataset  | Implemented |
-| PROFILE         | Session  | Implemented (PREFIX, MSGID, WTP) |
-| SUBMIT / STATUS | JES2     | Implemented |
-| EXEC (REXX)     | Scripting| Implemented |
-| CALL            | Program  | Implemented |
-| ALTLIB          | Session  | Implemented |
-
-## Usage Examples
+## Examples
 
 ### Executing a TSO Command Programmatically
 
 ```rust
-use open_mainframe_tso::{execute, TsoSession};
+use open_mainframe_tso::{TsoSession, parse_command, execute};
+use std::path::PathBuf;
 
-let mut session = TsoSession::new("IBMUSER");
-let result = execute(&mut session, "ALLOCATE F(SYSUT1) DSN('PROD.DATA') SHR").unwrap();
+let mut session = TsoSession::new("IBMUSER", PathBuf::from("/tmp/datasets"));
 
-if result.is_success() {
-    println!("Allocation successful!");
-}
+// Allocate a dataset to DD SYSUT1
+let cmd = parse_command("ALLOCATE FILE(SYSUT1) DA('SYS1.PARMLIB') SHR");
+let result = execute(&mut session, &cmd);
+
+assert!(result.success);
+println!("TSO Output:\n{}", result.output);
 ```
 
-### Parsing Parameters with IKJPARS
+### Validating Parameters with IKJPARS
 
 ```rust
-use open_mainframe_tso::services::ikjpars;
+use open_mainframe_tso::services::{ikjpars, ParseControlEntry};
+use open_mainframe_tso::parse_command;
 
-// Define a simple PDL and parse a command
-let parsed = ikjpars(pdl, "MYCMD KEYWORD(VALUE)").expect("Parse failed");
+let pce = ParseControlEntry::new("MYCMD")
+    .keyword("CLASS", &["A", "B", "C"])
+    .flag("PURGE");
+
+let cmd = parse_command("MYCMD CLASS(A) PURGE");
+let parsed = ikjpars(&pce, &cmd).expect("IKJPARS validation failed");
+
+assert_eq!(parsed.get_keyword("CLASS"), Some(&"A".to_string()));
+assert!(parsed.has_flag("PURGE"));
 ```
 
 ## Testing
 
-The TSO crate is tested for interactive consistency:
-- **Parser Tests**: Validates 50+ command syntax variants.
-- **Command Tests**: Verifies complex `ALLOCATE` scenarios including concatenation.
-- **REXX Integration**: Round-trip tests for REXX scripts issuing TSO commands.
-- **Session Tests**: Ensures `PREFIX` is correctly applied to non-quoted datasets.
+Run tests for the crate:
 
-```sh
+```bash
 cargo test -p open-mainframe-tso
 ```
 
-## Limitations and Future Work
+The test suite covers:
+- **`parser::*`**: Command line tokenization, quoted string handling, keyword and positional argument extraction.
+- **`commands::*`**: `ALLOCATE` (new, old, shr, mod), `FREE`, `LISTALC`, `LISTDS` attributes, `PROFILE` toggles (`PREFIX`, `MSGID`).
+- **`services::*`**: `IKJPARS` keyword matching, flag extraction, positional ordering, and error diagnostics.
+- **`jobs::*`**: `SUBMIT` card generation, job status polling, and cancellation handling.
+- **`session::*`**: Dataset prefixing rules (qualifying unquoted dataset names with user prefix).
 
-- **CLIST Support**: The CLIST interpreter is partially implemented; full support for nested `%` scripts is in progress.
-- **Interactive Prompts**: While the API supports prompting, the current CLI runner is non-interactive for missing parameters.
-- **Full ISPF Integration**: Integration with the `open-mainframe-ispf` crate for `ISPEXEC` commands is currently being refined.
+## Limitations
+
+- **CLIST Language**: REXX is the primary scripting language; legacy CLIST parsing is partially implemented.
+- **Interactive Prompts**: Prompts for missing required parameters return diagnostic messages rather than blocking on interactive stdin.
+- **Terminal Control**: Line-mode TSO execution is fully supported; full-screen ISPF panel integration is handled separately by `open-mainframe-ispf`.
+
+## Related Documentation
+
+- [Crate Map](../../docs/architecture/crate-map.md)
+- [JES2 Batch Subsystem (`open-mainframe-jes2`)](../open-mainframe-jes2/README.md)
+- [REXX Interpreter (`open-mainframe-rexx`)](../open-mainframe-rexx/README.md)
+- [z/OSMF REST Subsystem (`open-mainframe-zosmf`)](../open-mainframe-zosmf/README.md)

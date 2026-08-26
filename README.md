@@ -4,6 +4,13 @@ OpenMainframe is a Rust implementation of core z/OS subsystems with a z/OSMF-com
 
 It is designed to let standard mainframe tooling (including Zowe CLI and compatible workflows) interact with an emulated environment for development, migration, and modernization scenarios.
 
+## Documentation
+
+The [documentation hub](docs/README.md) provides the system architecture, a
+complete map of all workspace crates, task-oriented guides, and reference
+material. Each crate also keeps implementation-level documentation in its local
+README.
+
 ## What This Repository Provides
 
 - z/OSMF-compatible REST API server (`open-mainframe-zosmf`)

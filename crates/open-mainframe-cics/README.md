@@ -1,18 +1,42 @@
 # open-mainframe-cics
 
-A comprehensive Rust implementation of IBM CICS (Customer Information Control System), providing the full transaction-processing runtime: EXEC CICS command preprocessing, program control (LINK/XCTL/RETURN), BMS screen mapping with 3270 data stream rendering, file control, temporary storage and transient data queues, channel/container inter-program data passing, interval control, document generation, terminal I/O with page building, web services with REST/JSON support, system programming (INQUIRE/SET), ENQ/DEQ resource locking, storage management, and a command dispatcher bridging preprocessed COBOL to the runtime.
+A comprehensive Rust implementation of **IBM CICS (Customer Information Control System)** for the OpenMainframe project — providing the transaction-processing runtime, EXEC CICS command preprocessing, BMS screen mapping with 3270 data stream rendering, queue management, channel/container inter-program data passing, interval control, and system programming services.
 
-## Overview
+## Purpose
 
-CICS is the dominant online transaction processing (OLTP) system on IBM mainframes, managing thousands of concurrent terminal users executing business transactions. This crate reimplements the core CICS services in Rust for the OpenMainframe z/OS clone.
+CICS is the dominant online transaction processing (OLTP) system on IBM mainframes, managing thousands of concurrent terminal users executing business transactions. `open-mainframe-cics` models the full CICS application environment within OpenMainframe:
+1. **Source Preprocessing**: Scans COBOL source for `EXEC CICS ... END-EXEC` blocks and replaces them with `CALL` statements referencing structured command parameter blocks.
+2. **Runtime Services**: Routes calls to a central `CicsRuntime` executing program control (LINK/XCTL/RETURN), file control, queues, timers, and inter-program data sharing.
+3. **BMS & 3270 Presentation**: Compiles Basic Mapping Support (BMS) macro source definitions into structured maps, renders them to 3270 data streams, and generates COBOL symbolic copybooks.
 
-The architecture mirrors real CICS: a COBOL program containing `EXEC CICS ... END-EXEC` blocks is first processed by the `CicsPreprocessor`, which replaces those blocks with `CALL` statements referencing a command parameter block. At runtime, the `CicsDispatcher` routes those calls to the `CicsRuntime`, which provides the actual CICS services — program management, file I/O, queue operations, terminal control, and more. Data passes between programs via the legacy COMMAREA (up to 32KB) or modern Channel/Container mechanism (unlimited size).
+## Capabilities
 
-The BMS subsystem is fully functional: BMS map source macros (DFHMSD/DFHMDI/DFHMDF) are parsed into structured map definitions, rendered to 3270 data streams with SBA/SF/SFE orders, and can generate COBOL symbolic copybooks. The terminal manager supports multi-terminal sessions, SEND MAP ACCUM page building, and CONVERSE (combined send/receive).
+- **EXEC CICS Preprocessing**:
+  - `CicsScanner` scans fixed-format COBOL source (columns 8–72), respecting column-7 comment indicators (`*`).
+  - `CicsPreprocessor` parses 37 command types with nested option parenthesis extraction, generating `CALL "CICSxxxx" USING CICS-CMD-nnn DFHEIBLK` invocations in reverse order to preserve source line mapping.
+- **Program Control & Data Passing**:
+  - `LINK`, `XCTL`, and `RETURN` (with `TRANSID`, `COMMAREA`, or `CHANNEL`).
+  - Dual communication models: legacy `COMMAREA` (up to 32 KB) and modern `Channel` / `Container` infrastructure (unlimited size, case-insensitive container names).
+- **Basic Mapping Support (BMS)**:
+  - Parses `DFHMSD`, `DFHMDI`, and `DFHMDF` macros with continuation support and multi-value `ATTRB` lists (PROT, UNPROT, NUM, BRT, DRK, ASKIP, IC, FSET).
+  - 3270 data stream generation: SBA address calculation (12-bit and 14-bit), SF, SFE (extended color and highlight attribute pairs), WCC (keyboard restore, alarm, MDT reset), and EBCDIC CP037 character translation.
+  - Generates COBOL symbolic copybooks with standard 12-byte `TIOAPFX` and length/flag/attribute/color field structures, including `decompose_from_buffer` and `compose_to_display_string`.
+  - Supports 3270 display sizes: Model 2 (24x80), Model 3 (32x80), Model 4 (43x80), Model 5 (27x132).
+- **Queues (TS and TD)**:
+  - **Temporary Storage (TS)**: Main (in-memory) and Auxiliary (disk-persisted JSON) storage, supporting indexed `READQ TS`, sequential `READQ TS NEXT`, rewrite, and `DELETEQ TS`.
+  - **Transient Data (TD)**: FIFO destructive read queues with Destination Control Table (DCT) definitions, trigger thresholds triggering asynchronous transids, and extrapartition file flushing.
+- **Terminal Control**:
+  - Multi-terminal session manager supporting `SEND MAP`, `RECEIVE MAP`, `SEND TEXT`, `SEND PAGE` with `ACCUM` page building, `CONVERSE`, and `PURGE MESSAGE`.
+- **System & Support Services**:
+  - **Interval Control**: `START`, `CANCEL`, `DELAY`, and `RETRIEVE` with HHMMSS calculation.
+  - **Time Services**: `ASKTIME` and `FORMATTIME` with standard formatting options.
+  - **Synchronization**: `ENQ` and `DEQ` resource locking.
+  - **System Programming Interface (SPI)**: `INQUIRE` and `SET` for programs, transactions, and files (including `NEWCOPY`).
+  - **Document & Web Services**: Template registration, symbol substitution, URIMAP pattern matching, and JSON pipeline transforms.
 
 ## Architecture
 
-```
+```text
     COBOL Source                         Runtime Execution
     ┌─────────────┐                      ┌──────────────────┐
     │ EXEC CICS   │    Preprocessing     │   CicsRuntime    │
@@ -27,20 +51,19 @@ The BMS subsystem is fully functional: BMS map source macros (DFHMSD/DFHMDI/DFHM
     │ USING ...   │                      │ └──────────────┘ │
     └─────────────┘                      │ ┌──────────────┐ │
                                          │ │ Terminal I/O  │ │
-                                         │ │SEND/RECV MAP │ │
-                                         │ └──────────────┘ │
-    ┌───────────────────────────┐        │ ┌──────────────┐ │
-    │        BMS Subsystem      │        │ │ Queue Svcs    │ │
-    │ Parser → Map → Renderer   │ <───>  │ │ TS / TD      │ │
-    │ SymbolicMapGenerator      │        │ └──────────────┘ │
-    │ FROM/INTO buffer decompose│        │ ┌──────────────┐ │
-    └───────────────────────────┘        │ │ Channels      │ │
-                                         │ │ PUT/GET/MOVE  │ │
-    ┌───────────────────────────┐        │ └──────────────┘ │
-    │      Support Services     │        │ ┌──────────────┐ │
-    │ Document / Interval       │        │ │ Web Services  │ │
-    │ SPI / Web / Sysid / ENQ   │        │ │ REST / JSON   │ │
+    ┌───────────────────────────┐        │ │SEND/RECV MAP │ │
+    │        BMS Subsystem      │        │ └──────────────┘ │
+    │ Parser → Map → Renderer   │ <───>  │ ┌──────────────┐ │
+    │ SymbolicMapGenerator      │        │ │ Queue Svcs    │ │
+    │ FROM/INTO buffer decompose│        │ │ TS / TD      │ │
     └───────────────────────────┘        │ └──────────────┘ │
+                                         │ ┌──────────────┐ │
+    ┌───────────────────────────┐        │ │ Channels      │ │
+    │      Support Services     │        │ │ PUT/GET/MOVE  │ │
+    │ Document / Interval / SPI │        │ └──────────────┘ │
+    │ Sync / Time / Web / ENQ   │        │ ┌──────────────┐ │
+    └───────────────────────────┘        │ │ Web / SPI    │ │
+                                         │ └──────────────┘ │
                                          └──────────────────┘
 ```
 
@@ -48,284 +71,180 @@ The BMS subsystem is fully functional: BMS map source macros (DFHMSD/DFHMDI/DFHM
 
 | Module | Description |
 |--------|-------------|
-| `lib` | Crate root: `CicsError`, `CicsResponse` (50+ CICS response codes), `CicsResult<T>` |
-| `bms::parser` | BMS macro parser: `BmsParser`, `BmsMapset`, `BmsMap` from DFHMSD/DFHMDI/DFHMDF source |
-| `bms::field` | BMS field definitions: `BmsField`, `FieldAttribute`, `FieldJustify`, `FieldType` |
-| `bms::render` | 3270 data stream renderer: `MapRenderer`, `Wcc`, SBA/SF/SFE orders, EBCDIC translation |
-| `bms::symbolic` | COBOL copybook generator: `SymbolicMapGenerator`, `decompose_from_buffer`, `compose_to_display_string` |
-| `bms` (mod) | BMS core types: `ScreenSize` (Model2-5), `AttributeByte`, `FieldColor` (8), `FieldHighlight` (3), `ExtendedAttribute` |
-| `channels` | Channel/Container: `Channel`, `Container`, `ChannelManager` — modern data passing (>32KB) |
-| `document` | Document services: `Document`, `DocumentManager`, template registration, symbol substitution, insert/retrieve/delete |
-| `interval` | Interval control: `IntervalManager`, `ScheduledTransaction`, START/CANCEL/DELAY/RETRIEVE |
-| `preprocess` | EXEC CICS preprocessor: `CicsPreprocessor`, `CicsScanner`, `CicsBlock`, `CicsCommandType` (37 types), `CicsOption` |
-| `queues::ts` | Temporary Storage: `TsQueue`, `TsQueueManager`, `TsItem`, `TsType` (Main/Auxiliary), disk persistence |
-| `queues::td` | Transient Data: `TdQueue`, `TdQueueManager`, `DctEntry`, trigger mechanism, extrapartition flush |
-| `runtime` (mod) | Transaction context: `Commarea`, `ConditionHandler`, `TransactionContext` |
-| `runtime::commands` | Command execution engine: `CicsRuntime`, `ProgramRegistry`, `ProgramResult`, all CICS operations |
-| `runtime::dispatcher` | CALL-to-runtime bridge: `CicsDispatcher`, `CommandParamBlock`, `DispatchResult`, routes 30+ commands |
-| `terminal` | Terminal I/O: `Terminal`, `TerminalManager`, SEND/RECEIVE MAP, SEND TEXT, CONVERSE, ACCUM page building |
-| `syspr` | System Programming Interface: `SystemProgrammingInterface`, INQUIRE/SET for programs, transactions, files |
-| `web` | Web services: `WebClient`, `WebSession`, `UriRouter`, `UriMap`, `Pipeline`, JSON transform, REST support |
+| `lib` | Crate root defining `CicsError`, `CicsResponse` (50+ condition codes), and `CicsResult<T>`. |
+| `preprocess` | COBOL preprocessor: `CicsPreprocessor`, `CicsScanner`, `CicsBlock`, `CicsCommandType`, and `CicsOption`. |
+| `runtime::commands` | Execution runtime: `CicsRuntime`, `ProgramRegistry`, `ProgramResult`, `Commarea`, and core command methods. |
+| `runtime::dispatcher` | Bridge mapping `CALL "CICSxxxx"` invocations and `CommandParamBlock` payloads to `CicsRuntime`. |
+| `runtime::eib` | EXEC Interface Block (`Eib`) maintaining `EIBRESP`, `EIBRESP2`, `EIBFN`, `EIBTRNID`, and execution metadata. |
+| `runtime::files` | In-memory and dataset-backed file control (`FileManager`, `FileRecord`, `FileStatus`). |
+| `bms::parser` | BMS macro parser: `BmsParser`, `BmsMapset`, `BmsMap`, `BmsField` from DFHMSD/DFHMDI/DFHMDF source. |
+| `bms::field` | BMS field definitions: `BmsField`, `FieldAttribute`, `FieldType`, and buffer position calculation. |
+| `bms::render` | 3270 data stream renderer: `MapRenderer`, `Wcc`, SBA/SF/SFE orders, and CP037 EBCDIC conversion. |
+| `bms::symbolic` | COBOL copybook generator: `SymbolicMapGenerator`, `decompose_from_buffer`, `compose_to_display_string`. |
+| `bms` (mod) | Screen models (`ScreenSize::Model2` through `Model5`), `AttributeByte`, colors, and highlight types. |
+| `channels` | Channel and container manager: `Channel`, `Container`, `ChannelManager` for large inter-program payloads. |
+| `queues::ts` | Temporary Storage queues: `TsQueue`, `TsQueueManager`, `TsItem`, and auxiliary disk persistence. |
+| `queues::td` | Transient Data queues: `TdQueue`, `TdQueueManager`, `DctEntry`, `TdDestType`, triggers, and file export. |
+| `terminal` | 3270 terminal handling: `Terminal`, `TerminalManager`, `ScreenBuffer`, `SendMapOptions`, and page accumulation. |
+| `interval` | Interval control: `IntervalManager`, `ScheduledTransaction`, `START`, `CANCEL`, `DELAY`, `RETRIEVE`. |
+| `time` | Mainframe time services: `TimeManager`, `Abstime`, `FormatTimeOptions`, `days_to_ymd`. |
+| `sync` | Resource locking and synchronization: `SyncManager`, `EnqResource`, `LockState`. |
+| `syspr` | System Programming Interface: `SystemProgrammingInterface`, `ProgramDef`, `TransactionDef`, `FileDef`. |
+| `document` | Document services: `Document`, `DocumentManager`, template insertion, symbol substitution. |
+| `web` | Web services client: `WebClient`, `WebSession`, `WebRequest`, `WebResponse`, `UriRouter`, `Pipeline`. |
 
-## Key Types and Traits
+## Public API
 
-### Error Handling
-- `CicsError` — Top-level error: SyntaxError, UnknownCommand, ProgramNotFound, FileNotFound, NotAuthorized, InvalidRequest, etc.
-- `CicsResponse` — 50+ CICS condition codes: Normal, Error, Notfnd, Duprec, Pgmiderr, Invreq, Ioerr, Lengerr, Endfile, Itemerr, Qiderr, etc.
-- `CicsResult<T>` — `Result<T, CicsError>` alias
+### Core Types and Error Handling
 
-### Program Control
-- `ProgramResult` — Return / ReturnTransid / ReturnCommarea / ReturnChannel / Xctl / Abend
-- `ProgramEntry` — `Box<dyn Fn(&mut CicsRuntime) -> CicsResult<ProgramResult>>`
-- `ProgramRegistry` — Program lookup and registration by name
-- `CicsRuntime` — Central execution environment: EIB, context, files, queues, terminal, channels, storage
+```rust
+use open_mainframe_cics::{CicsError, CicsResponse, CicsResult};
 
-### BMS
-- `BmsParser` — Parses DFHMSD/DFHMDI/DFHMDF macros into `BmsMapset` / `BmsMap` / `BmsField`
-- `BmsField` — Field with name, row, column, length, attributes (protection, numeric, bright/dark, color, highlight, initial cursor, PICIN/PICOUT)
-- `MapRenderer` — Generates 3270 data streams: SBA address encoding (12-bit/14-bit), SF/SFE orders, WCC, EBCDIC translation via CP037
-- `SymbolicMapGenerator` — Generates COBOL copybooks (input/output maps, TIOAPFX, L/F/A/C/data fields, DFHBMSCA constants)
-- `ScreenSize` — Model2 (24x80), Model3 (32x80), Model4 (43x80), Model5 (27x132)
+let resp = CicsResponse::Normal;
+assert_eq!(resp.condition_name(), "NORMAL");
+```
 
-### Queues
-- `TsQueue` / `TsQueueManager` — WRITEQ TS (append/rewrite), READQ TS, READQ TS NEXT, DELETEQ TS, auxiliary disk persistence
-- `TdQueue` / `TdQueueManager` — WRITEQ TD, READQ TD (destructive FIFO), DELETEQ TD, DCT-based triggers, extrapartition file backing
+### Preprocessor and Dispatcher
 
-### Terminal
-- `Terminal` — Screen buffer, input data, screen size
-- `TerminalManager` — Multi-terminal registry, SEND MAP (with FROM buffer decomposition), RECEIVE MAP, SEND MAP ACCUM page building, SEND PAGE, CONVERSE, PURGE MESSAGE
-- `SendMapOptions` — Erase, eraseaup, maponly, dataonly, cursor, freekb, alarm, frset, accum
+- `CicsPreprocessor`: Transforms raw COBOL source code containing `EXEC CICS` blocks into `CALL` statements.
+- `CicsDispatcher`: Bridges CALL parameter blocks (`CommandParamBlock`) to runtime handler execution.
 
-### Web
-- `WebClient` — HTTP session management (OPEN/CONVERSE/CLOSE)
-- `WebRequest` / `WebResponse` — HTTP request/response with headers, body, query params
-- `UriRouter` / `UriMap` — URI pattern matching with wildcards for request routing
-- `Pipeline` / `PipelineStep` — SOAP/REST processing pipeline
+### Runtime and Program Management
 
-### System Programming
-- `SystemProgrammingInterface` — INQUIRE/SET for programs, transactions, files, system settings
-- `ProgramDef`, `TransactionDef`, `FileDef` — Resource definitions with status, language, properties
+- `CicsRuntime`: Main execution engine managing transaction state, EIB, queues, files, channels, and terminals.
+- `ProgramRegistry`: Registers and looks up executable program entrypoints (`ProgramResult`).
 
-## Implementation Details
+## Integration
 
-### EXEC CICS Preprocessing
-The `CicsScanner` identifies `EXEC CICS ... END-EXEC` blocks in standard COBOL format (columns 8-72), respecting comment lines (column 7 = `*`). Multi-line blocks are joined with whitespace normalization. The `CicsPreprocessor` processes blocks in reverse order (to preserve line numbers), classifies each via `CicsCommandType::from_text()` into 37 command types, parses options with a state machine (tracking parenthesis nesting), and generates `CALL "CICSxxxx" USING CICS-CMD-nnn DFHEIBLK` replacements.
+### Workspace Dependencies
 
-### BMS Map Parsing
-`BmsParser` handles the three BMS macro types: DFHMSD (mapset), DFHMDI (map with SIZE), and DFHMDF (field with POS, LENGTH, ATTRB, INITIAL, COLOR, HILIGHT, PICIN, PICOUT, JUSTIFY). The parser supports continuation lines (non-blank column 72 or leading whitespace continuation), multi-value ATTRB lists (PROT, UNPROT, NUM, BRT, DRK, ASKIP, IC, FSET), and all 8 extended colors plus 3 highlight types.
+- [`open-mainframe-encoding`](../open-mainframe-encoding/README.md) — EBCDIC CP037 character set encoding for 3270 byte streams.
+- [`open-mainframe-dataset`](../open-mainframe-dataset/README.md) — Underlying dataset structures.
 
-### 3270 Data Stream Rendering
-`MapRenderer::render()` generates a byte stream starting with ERASE_WRITE or WRITE command + WCC, then for each field: SBA (Set Buffer Address) with 12-bit or 14-bit encoding, SF (Start Field) for basic attributes or SFE (Start Field Extended) when color/highlight is present with attribute pairs, field data translated to EBCDIC via `open-mainframe-encoding::CP037`, null-padded to field length, and IC (Insert Cursor) if the field has initial cursor. The `render_text()` method produces an ASCII screen representation for debugging.
+### Known Consumers
 
-### Symbolic Map Buffer Layout
-The symbolic map layout follows CICS conventions: 12-byte TIOAPFX, then per named field: 2-byte L (length, S9(4) COMP), 1-byte F (flag), 1-byte A (attribute), 1-byte C (color), then data (PIC X(n)). `decompose_from_buffer()` and `decompose_from_display_string()` parse incoming FROM data; `compose_to_display_string()` builds INTO data for RECEIVE MAP.
+- [`open-mainframe-precompilers`](../open-mainframe-precompilers/README.md) — Integrates CICS preprocessing into the compilation toolchain.
+- [`open-mainframe-zosmf`](../open-mainframe-zosmf/README.md) — Implements `/zosmf/cicsApp/terminal` REST session runners.
+- [`open-mainframe-tui`](../open-mainframe-tui/README.md) — Interactive terminal UI for CICS 3270 screens.
+- [`open-mainframe`](../open-mainframe/README.md) — CLI runner for headless and interactive CICS execution.
+- [`open-mainframe-wiki`](../open-mainframe-wiki/README.md) — Automated documentation and syntax diagrams.
 
-### Channel/Container Data Passing
-Channels replace COMMAREA for new applications, supporting unlimited data size. `ChannelManager` maintains a `HashMap<String, Channel>`, each channel holding a `HashMap<String, Container>`. All names are case-insensitive (uppercased). Channels flow with LINK/XCTL via `link_with_channel()` and `xctl_with_channel()`. The current channel is tracked per transaction.
+## Examples
 
-### Queue Services
-- **TS Queues**: In-memory (`Main`) or disk-backed (`Auxiliary`). Items are numbered 1..N. WRITEQ with existing item_number performs rewrite; without one it appends. Auxiliary queues serialize to JSON and persist to a storage directory.
-- **TD Queues**: FIFO destructive reads. DCT entries define trigger levels — when record count reaches the threshold, `get_pending_triggers()` returns transaction IDs to start. Extrapartition queues support `flush_to_file()` for file backing.
-
-### Command Dispatcher
-`CicsDispatcher::dispatch()` maps CALL names (CICSLINK, CICSREAD, CICSSMAP, etc.) to `CicsRuntime` method calls. It deserializes `CommandParamBlock` fields, invokes the runtime, and returns `DispatchResult` with EIBRESP/EIBRESP2 and any output data. Supports 30+ distinct CICS commands.
-
-## Syntax / Feature Coverage
-
-### EXEC CICS Commands
-
-| Command | Category | Status |
-|---------|----------|--------|
-| LINK PROGRAM | Program Control | Implemented (with COMMAREA and CHANNEL) |
-| XCTL PROGRAM | Program Control | Implemented (with COMMAREA and CHANNEL) |
-| RETURN | Program Control | Implemented (with TRANSID, COMMAREA, CHANNEL) |
-| READ FILE | File Control | Implemented |
-| WRITE FILE | File Control | Implemented |
-| REWRITE FILE | File Control | Implemented |
-| DELETE FILE | File Control | Implemented |
-| SEND MAP | Terminal (BMS) | Implemented (ERASE, MAPONLY, DATAONLY, FROM, ACCUM, ALARM, FREEKB, FRSET, CURSOR) |
-| RECEIVE MAP | Terminal (BMS) | Implemented (INTO buffer composition) |
-| SEND TEXT | Terminal | Implemented |
-| SEND PAGE | Terminal | Implemented (ACCUM page delivery) |
-| RECEIVE | Terminal | Implemented |
-| CONVERSE | Terminal | Implemented (combined SEND+RECEIVE) |
-| PURGE MESSAGE | Terminal | Implemented |
-| WRITEQ TS | Temp Storage | Implemented (append, rewrite, auxiliary) |
-| READQ TS | Temp Storage | Implemented (by item number) |
-| READQ TS NEXT | Temp Storage | Implemented (sequential browse) |
-| DELETEQ TS | Temp Storage | Implemented |
-| WRITEQ TD | Transient Data | Implemented (with trigger support) |
-| READQ TD | Transient Data | Implemented (destructive FIFO) |
-| DELETEQ TD | Transient Data | Implemented |
-| PUT CONTAINER | Channels | Implemented |
-| GET CONTAINER | Channels | Implemented |
-| MOVE CONTAINER | Channels | Implemented |
-| DELETE CONTAINER | Channels | Implemented |
-| GETMAIN | Storage | Implemented |
-| FREEMAIN | Storage | Implemented |
-| HANDLE CONDITION | Exception | Implemented |
-| HANDLE ABEND | Exception | Implemented |
-| HANDLE AID | Exception | Implemented (type defined) |
-| IGNORE CONDITION | Exception | Implemented |
-| START | Interval Control | Implemented (INTERVAL, TIME, DATA) |
-| RETRIEVE | Interval Control | Implemented |
-| CANCEL | Interval Control | Implemented |
-| DELAY | Interval Control | Implemented |
-| ASKTIME | Time | Implemented |
-| FORMATTIME | Time | Implemented |
-| ASSIGN | System | Implemented (SYSID, APPLID, USERID, OPID, FACILITY, NETNAME, STARTCODE, SCRNHT, SCRNWD, CWALENG, EIBCALEN) |
-| ADDRESS | System | Implemented (type defined) |
-| ENQ | Synchronization | Implemented |
-| DEQ | Synchronization | Implemented |
-| SYNCPOINT | Synchronization | Implemented (type defined) |
-| ABEND | Exception | Implemented |
-| DOCUMENT CREATE | Document | Implemented (template + inline) |
-| DOCUMENT INSERT | Document | Implemented (before/after) |
-| DOCUMENT SET | Document | Implemented (symbol substitution) |
-| DOCUMENT RETRIEVE | Document | Implemented |
-| DOCUMENT DELETE | Document | Implemented |
-| INQUIRE PROGRAM | SPI | Implemented |
-| SET PROGRAM | SPI | Implemented (status, NEWCOPY) |
-| INQUIRE TRANSACTION | SPI | Implemented |
-| SET TRANSACTION | SPI | Implemented |
-| INQUIRE FILE | SPI | Implemented |
-| SET FILE | SPI | Implemented (status, open status) |
-| INQUIRE SYSTEM | SPI | Implemented |
-| WEB OPEN | Web | Implemented |
-| WEB CONVERSE | Web | Implemented |
-| WEB CLOSE | Web | Implemented |
-
-### BMS Macro Support
-
-| Macro / Keyword | Status |
-|----------------|--------|
-| DFHMSD TYPE=MAP/FINAL | Implemented |
-| DFHMDI SIZE=(r,c) | Implemented |
-| DFHMDF POS=(r,c) | Implemented |
-| LENGTH | Implemented |
-| ATTRB (PROT, UNPROT, NUM, BRT, DRK, ASKIP, IC, FSET) | Implemented |
-| INITIAL | Implemented |
-| COLOR (BLUE, RED, PINK, GREEN, TURQUOISE, YELLOW, WHITE, NEUTRAL) | Implemented |
-| HILIGHT (BLINK, REVERSE, UNDERLINE) | Implemented |
-| PICIN / PICOUT | Implemented |
-| JUSTIFY (LEFT, RIGHT, ZERO) | Implemented |
-| Continuation lines | Implemented |
-| SFE extended attribute rendering | Implemented |
-| Symbolic map generation (I/O maps, DFHBMSCA) | Implemented |
-
-### 3270 Data Stream Orders
-
-| Order | Status |
-|-------|--------|
-| SBA (Set Buffer Address) | Implemented (12-bit + 14-bit) |
-| SF (Start Field) | Implemented |
-| SFE (Start Field Extended) | Implemented (color + highlight) |
-| IC (Insert Cursor) | Implemented |
-| WRITE / ERASE_WRITE commands | Implemented |
-| WCC (Write Control Character) | Implemented (Reset MDT, Alarm, Keyboard Restore) |
-
-## Usage Examples
+### Preprocessing EXEC CICS Statements
 
 ```rust
 use open_mainframe_cics::preprocess::CicsPreprocessor;
-use open_mainframe_cics::runtime::commands::{CicsRuntime, ProgramRegistry, ProgramResult};
+
+let cobol_source = r#"
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. HELLO.
+       PROCEDURE DIVISION.
+           EXEC CICS
+               SEND TEXT FROM('HELLO WORLD') ERASE
+           END-EXEC.
+           EXEC CICS RETURN END-EXEC.
+"#;
+
+let mut preprocessor = CicsPreprocessor::new();
+let result = preprocessor.process(cobol_source).unwrap();
+assert!(result.cobol_source.contains("CALL \"CICSTEXT\""));
+```
+
+### Running CICS Programs with Channels and Containers
+
+```rust
+use open_mainframe_cics::runtime::commands::{CicsRuntime, ProgramResult};
+
+let mut runtime = CicsRuntime::new("TRN1");
+
+runtime.register_program("SUBPGM", |rt| {
+    let payload = rt.get_container("MY-CHANNEL", "INPUT-DATA")?;
+    assert_eq!(payload, b"HELLO FROM CALLER");
+    rt.put_container("MY-CHANNEL", "OUTPUT-DATA", b"PROCESSED")?;
+    Ok(ProgramResult::Return)
+});
+
+runtime.put_container("MY-CHANNEL", "INPUT-DATA", b"HELLO FROM CALLER").unwrap();
+runtime.link_with_channel("SUBPGM", "MY-CHANNEL").unwrap();
+
+let response = runtime.get_container("MY-CHANNEL", "OUTPUT-DATA").unwrap();
+assert_eq!(response, b"PROCESSED");
+```
+
+### Parsing BMS Mapsets and Rendering 3270 Streams
+
+```rust
 use open_mainframe_cics::bms::parser::BmsParser;
 use open_mainframe_cics::bms::render::MapRenderer;
 use open_mainframe_cics::bms::{ScreenSize, SymbolicMapGenerator};
-use open_mainframe_cics::channels::ChannelManager;
-use open_mainframe_cics::queues::{TsQueueManager, TdQueueManager};
 
-// --- Preprocess COBOL source ---
-let mut preprocessor = CicsPreprocessor::new();
-let result = preprocessor.process(cobol_source).unwrap();
-// result.cobol_source has CALL replacements
-// result.commands has extracted CICS commands
+let bms_source = r#"
+MAPSET   DFHMSD TYPE=MAP,MODE=INOUT,LANG=COBOL,STORAGE=AUTO
+MAP1     DFHMDI SIZE=(24,80)
+TITLE    DFHMDF POS=(1,1),LENGTH=20,INITIAL='ACCOUNT INQUIRY',ATTRB=PROT
+ACCTNO   DFHMDF POS=(3,1),LENGTH=8,ATTRB=(UNPROT,IC),COLOR=TURQUOISE
+         DFHMSD TYPE=FINAL
+"#;
 
-// --- Runtime execution ---
-let mut runtime = CicsRuntime::new("TXN1");
-runtime.register_program("SUBPROG", |rt| {
-    // Program logic here
-    Ok(ProgramResult::Return)
-});
-runtime.link("SUBPROG", None)?;  // LINK with no COMMAREA
-
-// --- LINK with Channel ---
-runtime.put_container("MY-CH", "DATA1", b"payload")?;
-runtime.link_with_channel("SUBPROG", "MY-CH")?;
-let data = runtime.get_container("MY-CH", "DATA1")?;
-
-// --- BMS map parsing and rendering ---
 let mut parser = BmsParser::new();
 let mapset = parser.parse(bms_source).unwrap();
 let map = &mapset.maps[0];
 
 let mut renderer = MapRenderer::new(ScreenSize::Model2);
-renderer.set_field_string("CUSTNO", "12345");
-let stream = renderer.render(map, true);  // 3270 byte stream
+renderer.set_field_string("ACCTNO", "12345678");
+let stream = renderer.render(map, true);
 
-// Generate COBOL copybook
-let generator = SymbolicMapGenerator::new();
-let copybook = generator.generate(&mapset);
-
-// --- TS Queue operations ---
-let mut ts = TsQueueManager::new();
-ts.writeq("MYQUEUE", b"item data", None, false)?;
-let item = ts.readq("MYQUEUE", 1)?;
-let next = ts.readq_next("MYQUEUE")?;
-
-// --- TD Queue with trigger ---
-let mut td = TdQueueManager::new();
-td.define_queue("LOGQ", TdDestType::Intrapartition,
-    Some(DctEntry { trigger_level: 100, trigger_transid: "LOGP".into(), .. }));
-td.writeq("LOGQ", b"log record")?;
-let triggers = td.get_pending_triggers();  // Returns ["LOGP"] when 100 reached
+let copybook = SymbolicMapGenerator::new().generate(&mapset);
+assert!(copybook.contains("01  MAP1I."));
 ```
 
-## Dependencies
+### Transient Data Queues with DCT Trigger
 
-| Dependency | Purpose |
-|------------|---------|
-| `open-mainframe-encoding` | EBCDIC/ASCII translation (CP037) for 3270 data streams |
-| `miette` | Diagnostic error reporting |
-| `thiserror` | Ergonomic error type derivation |
-| `serde` / `serde_json` | Serialization for TS queue persistence and web JSON transforms |
-| `tracing` | Structured logging throughout the runtime |
+```rust
+use open_mainframe_cics::queues::td::{DctEntry, TdQueueManager};
+
+let mut td_mgr = TdQueueManager::new();
+let entries = vec![
+    DctEntry::intra("LOGQ").with_trigger(3, "LOGP"),
+];
+td_mgr.load_dct(&entries);
+
+td_mgr.writeq("LOGQ", b"Record 1".to_vec()).unwrap();
+td_mgr.writeq("LOGQ", b"Record 2".to_vec()).unwrap();
+assert!(td_mgr.get_pending_triggers().is_empty());
+
+td_mgr.writeq("LOGQ", b"Record 3".to_vec()).unwrap();
+let triggers = td_mgr.get_pending_triggers();
+assert_eq!(triggers, vec!["LOGP"]);
+```
 
 ## Testing
 
 Run the full test suite:
 
-```sh
+```bash
 cargo test -p open-mainframe-cics
 ```
 
-The crate has extensive inline `#[cfg(test)]` test blocks totaling 200+ tests across all modules:
+The test suite covers:
+- **`bms::*`**: Mapset macro parsing, continuation handling, attribute byte calculation, 3270 stream SBA/SF/SFE generation, EBCDIC CP037 roundtrips, symbolic copybook generation, and buffer decomposition.
+- **`preprocess::*`**: 37 command types, option nesting, multiline command extraction, line-number preservation.
+- **`runtime::commands`**: LINK/XCTL/RETURN nesting, COMMAREA and channel passing, abend recovery, storage allocation (`GETMAIN`/`FREEMAIN`).
+- **`queues::*`**: TS Main/Auxiliary persistence, browse cursor indexing, TD trigger thresholds, and extrapartition file output.
+- **`terminal::*`**: Page accumulation (`ACCUM`), `CONVERSE`, multi-terminal routing.
 
-- **bms::parser**: Mapset/map/field parsing, attributes, COLOR/HILIGHT, continuation lines, POS extraction, PICIN/PICOUT, JUSTIFY
-- **bms::field**: Field construction, attribute builders, initial values, buffer position calculation
-- **bms::render**: WCC encoding, 14-bit address encoding, EBCDIC translation (full printable ASCII round-trip), SF/SFE rendering, mixed field rendering, attribute encoding
-- **bms::symbolic**: Copybook generation, PIC clause generation, DFHBMSCA constants, map size calculation, `decompose_from_buffer`, `decompose_from_display_string`, `compose_to_display_string` round-trips
-- **channels**: Container CRUD, case-insensitivity, MOVE CONTAINER, large data (>32KB), ChannelManager operations
-- **document**: Template registration, CREATE/INSERT/SET/RETRIEVE/DELETE, symbol substitution, full lifecycle
-- **interval**: HHMMSS parsing, START INTERVAL, CANCEL, ready transaction detection, RETRIEVE data, DELAY
-- **preprocess**: Command type detection (37 types), option parsing, CALL generation, multi-command source processing, container/TD/CONVERSE commands
-- **queues::ts**: Write/read/rewrite, auxiliary persistence, READQ NEXT sequential browse, DELETEQ, corruption handling
-- **queues::td**: DCT configuration, WRITEQ/READQ (FIFO), trigger mechanism, extrapartition flush, disabled queue handling
-- **runtime**: COMMAREA operations, TransactionContext builders, condition handler registration
-- **runtime::commands**: LINK/XCTL/RETURN (60+ tests), container passing, TD queues, SEND/RECEIVE, CONVERSE, ASSIGN fields, GETMAIN/FREEMAIN, HANDLE CONDITION/ABEND, ABEND command
-- **runtime::dispatcher**: CommandParamBlock serialization, dispatch routing for all 30+ commands
-- **terminal**: SEND MAP/RECEIVE MAP, page building (ACCUM/SEND PAGE), CONVERSE, screen sizes, multi-terminal sessions
-- **syspr**: INQUIRE/SET for programs, transactions, files, system settings, NEWCOPY
-- **web**: HTTP sessions, CONVERSE, URI routing with wildcards, JSON transforms, pipelines
+## Limitations
 
-## Limitations and Future Work
+- **VSAM Integration**: While runtime file operations (`READ`, `WRITE`, `REWRITE`, `DELETE`) operate correctly through `FileManager`, full VSAM key-sequenced dataset indexing in execution bridges relies on the external `open-mainframe-dataset` catalog.
+- **Quasi-Reentrancy**: Each `CicsRuntime` session runs synchronously on a dedicated thread; multi-tasking is achieved via session thread pools rather than internal quasi-reentrant task slicing.
+- **Attention Identifiers (AID)**: `HANDLE AID` commands are parsed, but automatic runtime paragraph branching requires orchestration by the calling interpreter.
+- **Web Services**: Outbound `WEB OPEN`/`WEB CONVERSE` manages session state and headers but relies on simulated backend responses.
 
-- **File Control**: File I/O (READ/WRITE/REWRITE/DELETE FILE) is dispatched through the runtime but uses in-memory storage rather than the `open-mainframe-dataset` VSAM engine. Integration with actual VSAM datasets would provide realistic file behavior.
-- **HANDLE AID**: The preprocessor recognizes HANDLE AID but the runtime does not yet dispatch attention key (PF key) handling to labeled paragraphs.
-- **SYNCPOINT**: Type defined but not wired to actual transaction commit/rollback logic.
-- **Interval Control TIME mode**: `start_at_time()` treats the time value as a relative offset rather than an absolute wall-clock time.
-- **Security**: No RACF integration for transaction/resource authorization checks.
-- **Multi-threading**: The runtime is single-threaded; real CICS supports concurrent tasks with quasi-reentrant programs.
-- **Web Services**: `WebClient` manages sessions but does not perform actual HTTP requests — responses must be simulated. Integration with an HTTP library would enable real outbound calls.
-- **URIMAP**: Pattern matching supports wildcards but not full CICS URIMAP template syntax.
-- **EIB fields**: EIBRESP and EIBRESP2 are set by the dispatcher; other EIB fields (EIBDATE, EIBTIME, EIBTASKN, EIBTRNID) are populated partially.
+## Related Documentation
+
+- [Crate Map](../../docs/architecture/crate-map.md)
+- [EBCDIC Encoding Engine (`open-mainframe-encoding`)](../open-mainframe-encoding/README.md)
+- [Dataset Storage Engine (`open-mainframe-dataset`)](../open-mainframe-dataset/README.md)
+- [z/OSMF REST Server (`open-mainframe-zosmf`)](../open-mainframe-zosmf/README.md)
+- [Interactive 3270 Terminal UI (`open-mainframe-tui`)](../open-mainframe-tui/README.md)

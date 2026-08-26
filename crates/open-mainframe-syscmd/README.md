@@ -1,94 +1,177 @@
 # open-mainframe-syscmd
 
-z/OS System Commands & Console — a comprehensive Rust implementation of the mainframe's operator command interface and SDSF (System Display and Search Facility) for the OpenMainframe project.
+z/OS System Commands & SDSF — command dispatcher and SDSF (System Display and Search Facility) monitoring engine for the OpenMainframe project.
 
-## Overview
+## Purpose
 
-System Commands are the primary way operators interact with and manage z/OS. This crate reimplements the MVS command dispatcher, providing support for standard DISPLAY, START, STOP, and CANCEL commands, as well as a full SDSF-compatible engine for monitoring jobs, initiators, and system logs.
+Operators and automated operations on z/OS interact with the operating system and subsystems via operator commands (`DISPLAY`, `START`, `STOP`, `MODIFY`, `CANCEL`, `REPLY`) and browse active workloads and spool files via SDSF panels. This crate implements the MVS system command parser, routing dispatcher, and an in-memory SDSF query and line-command engine.
+
+## Capabilities
+
+- **Command Dispatcher** (`commands`): Parses and executes standard MVS console commands:
+  - `DISPLAY` (`D`): Display active address spaces (`D A,L` with optional jobname filtering), job details (`D J,jobname`), system date/time and IPL volume (`D T`), and virtual storage areas (`D M`).
+  - `START` (`S`): Start an address space with optional `PARM=` parameters.
+  - `STOP` (`P`): Request graceful address space shutdown.
+  - `MODIFY` (`F`): Send subsystem or application-specific modify command strings.
+  - `CANCEL` (`C`): Cancel an address space with optional dump request (`DUMP`).
+  - `FORCE`: Forcibly terminate a stuck address space.
+  - `REPLY` (`R`): Deliver replies to outstanding Write-to-Operator with Reply (WTOR) messages.
+  - Custom command registration via `CommandRegistry`.
+- **JES2 Command Routing**: Identifies and parses `$DA`, `$DJ`, `$SA`, `$PA`, `$CA`, `$TA` commands.
+- **SDSF Engine** (`sdsf`): Data model and panel renderer for monitoring batch jobs, started tasks (STC), and TSO users (TSU):
+  - Panels: `DA` (Display Active), `ST` (Status), `O` (Output), `H` (Held Output), and `LOG` (System Log).
+  - Prefix filtering (`set_prefix`) and multi-column sorting (`set_sort` by Name, Time, Priority, Status).
+  - Line commands: `S` (Browse SYSOUT), `SJ` (View JCL), `SE` (View JES messages), `SP` (Purge), `SB` (Browse), and `?` (Job Details).
+  - REXX ISFEXEC interface (`isfexec()`): Returns panel columns in a structured key-value map compatible with REXX stem variables.
 
 ## Architecture
 
 ```
-    Operator Input                        System Command Environment
-    ┌──────────────┐                      ┌────────────────────┐
-    │  DISPLAY A,L │    Command           │    Dispatcher      │
-    │  START MYJOB │ ──────────────────>  │    (Routing)       │
-    └──────────────┘    CommandParser     │  MVS, JES2, Subsys │
-           │                               └────────────────────┘
-           ▼                                        │
-    ┌──────────────┐    SDSF Engine       ┌────────────────────┐
-    │  SDSF Panels │ ──────────────────>  │   Status Monitor   │
-    │  DA, ST, LOG │    SdsfEngine        │   ASIDs, Jobs, CPU │
-    └──────────────┘                      └────────────────────┘
-                                                    │
-                                                    ▼
-    ┌──────────────┐    Console I/O       ┌────────────────────┐
-    │  WTO / WTOR  │ <──────────────────  │    System Console  │
-    │  Replies     │    CommandRegistry   │    Master Console  │
-    └──────────────┘                      └────────────────────┘
+                       Operator Console / API Call
+                                   │
+                                   ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                      parse_command()                        │
+    │  - Normalizes verb (D, S, P, F, C, FORCE, R, $...)          │
+    │  - Produces structured SystemCommand enum                   │
+    └──────────────────────────────┬──────────────────────────────┘
+                                   │
+                                   ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                     CommandDispatcher                       │
+    │  - Custom handler lookup via CommandRegistry                │
+    │  - Built-in command processing against SystemState          │
+    └──────────────────────────────┬──────────────────────────────┘
+                                   │
+                                   ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                        SystemState                          │
+    │  - address_spaces (ASID, status, step, program, CPU)        │
+    │  - wtors (outstanding WTOR entries & replies)               │
+    │  - memory (REAL, AUX, CSA, SQA storage areas)               │
+    │  - jes2_jobs (in-memory job definitions)                    │
+    └─────────────────────────────────────────────────────────────┘
+                                   ▲
+                                   │ (Job & Spool Data)
+    ┌──────────────────────────────┴──────────────────────────────┐
+    │                         SdsfEngine                          │
+    │  - Manages SdsfJob models and SysoutDataset entries         │
+    │  - Renders DA, ST, O, H, LOG panels (RenderedPanel)         │
+    │  - Executes LineCommand (Select, Purge, Details, etc.)      │
+    │  - Provides isfexec() tabular export for REXX               │
+    └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Module Structure
 
 | Module | Description |
 |--------|-------------|
-| `commands` | MVS command dispatcher: Implementation of D, S, P, C, A, and R commands |
-| `sdsf` | SDSF engine: Support for DA, I, O, ST, H, and LOG panels with line commands |
+| `commands` | Command parser (`parse_command`), `CommandDispatcher`, `CommandRegistry`, and `SystemState` model |
+| `sdsf` | `SdsfEngine`, panel definitions (`PanelType`, `RenderedPanel`), line commands (`LineCommand`), and `isfexec` API |
 
-## Key Types and Components
+## Public API
 
-### Command Dispatcher
-- `CommandDispatcher`: Orchestrates the parsing and execution of system commands.
-- `SystemCommand`: Enumeration of all supported MVS and JES2 operator commands.
-- `AddressSpace`: Represents an active ASID with its status and resource usage.
+### Primary Types and Functions
 
-### SDSF Engine
-- `SdsfEngine`: Provides a structured API for querying system state in an SDSF-like format.
-- `SdsfJob`: Represents a job row in the SDSF ST or DA panels.
-- `LineCommand`: Implementation of SDSF line commands (e.g., `S` for browse, `C` for cancel).
+- `CommandDispatcher`: Main entry point for executing console command strings (`new()`, `execute()`, `dispatch()`, `add_address_space()`, `add_wtor()`).
+- `SystemCommand`: Parsed command representation (`DisplayActive`, `DisplayJob`, `DisplayTime`, `DisplayMemory`, `Start`, `Stop`, `Modify`, `Cancel`, `Force`, `Reply`, `Jes2`, `Unknown`).
+- `CommandOutput`: Command execution result containing message lines (`Vec<String>`), success flag, and return code (`ok()`, `error()`).
+- `SystemState`: State container holding active address spaces (`AddressSpace`, `AsidStatus`), outstanding WTORs (`WtorEntry`), memory statistics (`MemoryInfo`, `StorageArea`), and system date/time (`SystemTime`).
+- `CommandRegistry`: Extensible registry for attaching custom closures to command verbs.
+- `SdsfEngine`: SDSF query and line command manager (`new()`, `add_job()`, `add_log()`, `set_prefix()`, `set_sort()`, `render_panel()`, `execute_line_command()`, `isfexec()`, `cancel_job()`, `purge_job()`).
+- `SdsfJob`: Job metadata model (`jobname`, `jobid`, `job_type`, `owner`, `status`, `step_name`, `program`, `cpu_time`, `return_code`, `sysout_datasets`, `jcl`).
+- `JobType` (`Job`, `Stc`, `Tsu`) / `JobStatus` (`Active`, `Input`, `Output`, `Complete`, `Canceled`, `Abended`).
+- `PanelType`: Supported SDSF panels (`Da`, `St`, `Output`, `Held`, `Log`).
+- `LineCommand`: Line command actions (`Select`, `SelectJcl`, `SelectMessages`, `Purge`, `Browse`, `Details`).
+- `LineCommandResult`: Output and status of a line command execution.
 
-## Feature Coverage
+## Integration
 
-| Feature | Category | Status |
-|---------|----------|--------|
-| DISPLAY A,L     | MVS      | Implemented |
-| START / STOP    | MVS      | Implemented (Address space lifecycle) |
-| CANCEL / FORCE  | MVS      | Implemented |
-| REPLY (R)       | MVS      | Implemented (WTOR response) |
-| $D / $S / $P    | JES2     | Implemented (Routed to JES2) |
-| SDSF DA Panel   | SDSF     | Implemented |
-| SDSF LOG Panel  | SDSF     | Implemented (SYSLOG browsing) |
+- **Internal workspace dependencies**: None (depends on workspace-configured `miette`, `thiserror`).
+- **Consumers**: Standalone system operations library; models console and SDSF behavior for operator tooling and simulation harnesses.
 
-## Usage Examples
+## Examples
 
-### Executing a DISPLAY Command
+### Executing Console Commands
 
 ```rust
-use open_mainframe_syscmd::commands::CommandDispatcher;
+use open_mainframe_syscmd::{
+    AddressSpace, AsidStatus, CommandDispatcher,
+};
 
 let mut dispatcher = CommandDispatcher::new();
-let result = dispatcher.execute("DISPLAY A,L").unwrap();
-println!("Active Jobs: {}", result.output);
+
+// Populate an active address space
+dispatcher.add_address_space(AddressSpace {
+    jobname: "PAYROLL".to_string(),
+    asid: 0x002A,
+    status: AsidStatus::In,
+    step_name: "STEP01".to_string(),
+    program: "PAYPROG".to_string(),
+    cpu_time: 1.25,
+    initiator: Some("INIT1".to_string()),
+});
+
+let output = dispatcher.execute("DISPLAY A,L");
+assert!(output.success);
+assert!(output.messages[0].starts_with("IEE114I"));
 ```
 
-### Querying the SDSF Status Panel
+### Querying SDSF Panels and Executing Line Commands
 
 ```rust
-use open_mainframe_syscmd::sdsf::SdsfEngine;
+use open_mainframe_syscmd::sdsf::{
+    JobStatus, JobType, LineCommand, PanelType, SdsfEngine, SdsfJob,
+};
 
-let engine = SdsfEngine::new();
-let jobs = engine.get_jobs().unwrap(); // Example call
-for job in jobs {
-    println!("Job: {}, Owner: {}, Status: {}", job.name, job.owner, job.status);
-}
+let mut engine = SdsfEngine::new();
+engine.add_job(SdsfJob {
+    jobname: "JOB001".to_string(),
+    jobid: "JOB00001".to_string(),
+    job_type: JobType::Job,
+    owner: "IBMUSER".to_string(),
+    status: JobStatus::Output,
+    step_name: "STEP1".to_string(),
+    program: "IEBGENER".to_string(),
+    cpu_time: 0.45,
+    return_code: Some(0),
+    priority: 9,
+    sysout_datasets: Vec::new(),
+    jcl: "//JOB001 JOB ...".to_string(),
+});
+
+// Render the Status panel
+let panel = engine.render_panel(PanelType::St);
+assert_eq!(panel.rows.len(), 1);
+
+// Execute the View JCL line command
+let result = engine.execute_line_command("JOB001", LineCommand::SelectJcl);
+assert!(result.success);
 ```
 
 ## Testing
 
-The System Commands crate includes 150+ tests:
-- **Dispatcher**: Validates command parsing and routing across various subsystems.
-- **SDSF**: Verifies the correct population of SDSF panels from system data.
+Run unit tests:
 
-```sh
+```bash
 cargo test -p open-mainframe-syscmd
 ```
+
+The test suite contains 52 unit tests covering:
+- Parsing of all `DISPLAY`, `START`, `STOP`, `MODIFY`, `CANCEL`, `FORCE`, `REPLY`, and JES2 command variants.
+- IBM `IEE` message prefix formatting and return codes.
+- SDSF panel rendering (`DA`, `ST`, `O`, `H`, `LOG`) with prefix filtering and multi-attribute sorting.
+- SDSF line commands (`S`, `SJ`, `SE`, `SP`, `?`) and spool content extraction.
+- REXX `ISFEXEC` tabular data export.
+
+## Limitations
+
+- **In-Memory State**: `CommandDispatcher` and `SdsfEngine` operate on in-memory Rust structures (`SystemState`, `Vec<SdsfJob>`) rather than controlling live OS processes or kernel address spaces.
+- **JES2 Cross-Crate Decoupling**: JES2 commands (`$D`, `$S`, `$P`, etc.) parse command strings and query/modify `SystemState.jes2_jobs` directly in-memory, without cross-crate RPC or dynamic IPC to a live JES2 daemon.
+- **Spool Files**: SDSF SYSOUT datasets are stored in memory strings (`SysoutDataset.content`) rather than on physical DASD spool volumes.
+
+## Related Documentation
+
+- [OpenMainframe Crate Map](../../docs/architecture/crate-map.md)
+- [open-mainframe-jes2](../open-mainframe-jes2/README.md)
+- [open-mainframe-mvs](../open-mainframe-mvs/README.md)
