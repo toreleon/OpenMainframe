@@ -8,6 +8,12 @@ to find the canonical details for a subsystem.
 
 - [Architecture overview](architecture/overview.md) — system boundaries,
   dependency layers, and the main execution paths.
+- [Scalable execution backend](architecture/execution-backend.md) — proposed
+  plugin contracts, scheduling, isolation, state model, and migration plan.
+- [Platform roadmap](architecture/platform-roadmap.md) — R0–R7 gated refactor
+  sequence, promotion evidence, scale, and ecosystem milestones.
+- [Workspace convergence](architecture/workspace-convergence.md) — all-crate
+  product profiles, dependency/authority rules, ownership, and retirement gates.
 - [Crate map](architecture/crate-map.md) — all workspace crates grouped by
   responsibility, with links to their source-level documentation.
 - [Getting started](guides/getting-started.md) — build, run, and verify a local
@@ -42,7 +48,12 @@ docs/
 ├── README.md                  # This navigation hub and ownership model
 ├── architecture/             # Stable cross-crate boundaries and flows
 │   ├── overview.md
-│   └── crate-map.md
+│   ├── crate-map.md
+│   ├── execution-backend.md
+│   ├── plugin-ir-architecture.md
+│   ├── workspace-convergence.md
+│   ├── platform-roadmap.md
+│   └── roadmap/
 ├── guides/                   # Goal-oriented procedures
 │   └── getting-started.md
 ├── reference/                # Factual lookup material

@@ -5,6 +5,13 @@ z/OSMF-compatible REST server. It enables standard mainframe tooling—including
 Zowe CLI, Zowe Explorer, and automation pipelines—to interact with an emulated
 mainframe environment locally or in containerized workflows.
 
+> The current execution flows below describe the implementation in `master`.
+> The proposed cross-plugin execution architecture is documented separately in
+> [Scalable Execution Backend](execution-backend.md). The portfolio-wide target,
+> including product profiles and disposition for all 44 current crates, is in
+> [Workspace Convergence and Sustainable Architecture](workspace-convergence.md)
+> and sequenced by the [R0–R7 Platform Roadmap](platform-roadmap.md).
+
 ## System Boundary and Dependency Layers
 
 The workspace is organized into six functional layers. Dependencies flow
@@ -104,7 +111,7 @@ graph TD
    - [`open-mainframe-easytrieve`](../../crates/open-mainframe-easytrieve/README.md): Easytrieve Plus compiler and report generation engine.
    - [`open-mainframe-natural`](../../crates/open-mainframe-natural/README.md): Software AG Natural 4GL parser and execution engine.
    - [`open-mainframe-focus`](../../crates/open-mainframe-focus/README.md): Information Builders FOCUS 4GL reporting and TABLE/GRAPH engine.
-   - [`open-mainframe-symbolic`](../../crates/open-mainframe-symbolic/README.md): Symbolic execution and Z3-backed formal verification engine for COBOL.
+   - [`open-mainframe-symbolic`](../../crates/open-mainframe-symbolic/README.md): Dependency-free symbolic execution and bounded constraint verification engine for COBOL.
 
 5. **Foundational Runtime & Language Core**
    - [`open-mainframe-runtime`](../../crates/open-mainframe-runtime/README.md): Language Environment (LE) runtime services, condition handling, and interpreter execution loop.

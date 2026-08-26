@@ -33,7 +33,7 @@ pub struct InterpreterConfig {
     pub max_depth: usize,
     /// Exploration strategy.
     pub strategy: ExplorationStrategy,
-    /// Whether to check feasibility with Z3 at every branch.
+    /// Whether to check constraint feasibility at every branch.
     pub eager_feasibility: bool,
 }
 
@@ -484,7 +484,7 @@ mod tests {
 
         let mut config = InterpreterConfig::default();
         config.max_loop_iterations = 3;
-        config.eager_feasibility = false; // skip Z3 for speed
+        config.eager_feasibility = false; // skip constraint solving for speed
 
         let interp = SymbolicInterpreter::new(stmts, config);
         let result = interp.execute(ExecutionState::new());

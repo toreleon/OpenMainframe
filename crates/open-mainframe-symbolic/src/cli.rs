@@ -1011,8 +1011,8 @@ fn run_golden_master_cmd(
     ));
     out.push_str(&format!(
         "Total tests:   {}\n\
-         Passed:        {} (Z3 prediction matched GnuCOBOL)\n\
-         Failed:        {} (Z3 prediction differs from GnuCOBOL)\n\
+         Passed:        {} (symbolic prediction matched GnuCOBOL)\n\
+         Failed:        {} (symbolic prediction differs from GnuCOBOL)\n\
          Errors:        {} (compilation or runtime error)\n\n",
         report.total_tests, report.passed, report.failed, report.errors,
     ));
@@ -1027,12 +1027,12 @@ fn run_golden_master_cmd(
                 out.push_str(&format!("[ERROR] {}\n", truncate(e, 120)));
             } else {
                 out.push_str("[DIFF]\n");
-                // Show diffs between Z3 and GnuCOBOL.
+                // Show diffs between symbolic execution and GnuCOBOL.
                 if let Some(test) = suite.test_cases.iter().find(|t| t.id == r.test_id) {
                     let diffs = gnucobol::compare_outputs(&test.expected_outputs, &r.actual_outputs);
                     for (var, exp, act) in diffs.iter().take(5) {
                         out.push_str(&format!(
-                            "    {}: Z3={} GnuCOBOL={}\n",
+                            "    {}: symbolic={} GnuCOBOL={}\n",
                             var, exp, act
                         ));
                     }

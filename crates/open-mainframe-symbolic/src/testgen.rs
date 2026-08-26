@@ -2,7 +2,7 @@
 //!
 //! This module generates concrete test cases for migration equivalence
 //! verification. It takes the `final_states` from symbolic execution,
-//! solves path conditions with Z3 to get concrete inputs, classifies
+//! solves path conditions to get concrete inputs, classifies
 //! variables as inputs vs outputs, extracts decision boundaries, and
 //! emits structured test case files (JSON/YAML).
 //!
@@ -461,7 +461,7 @@ pub fn generate_equivalence_tests(
     let mut counterexamples = Vec::new();
     let mut all_equivalent = true;
 
-    // For each path in program A, get concrete inputs from Z3.
+    // For each path in program A, get concrete inputs from the constraint solver.
     for (i, state_a) in result_a.final_states.iter().enumerate() {
         let (inputs_a, outputs_a) = classify_variables(state_a, stmts_a);
         let concrete_inputs = solve_for_inputs(&solver, &state_a.path_condition, &inputs_a);
@@ -794,7 +794,11 @@ fn is_path_compatible(
             TestValue::Bool(b) => SymbolicValue::bool(*b),
             _ => continue,
         };
-        let eq_constraint = SymbolicValue::sym_int(name).eq(concrete);
+        let symbolic = match value {
+            TestValue::Bool(_) => SymbolicValue::sym_bool(name),
+            _ => SymbolicValue::sym_int(name),
+        };
+        let eq_constraint = symbolic.eq(concrete);
         pc.add(crate::path::Constraint {
             condition: eq_constraint,
             source: open_mainframe_lang_core::Span::default(),
@@ -950,7 +954,7 @@ fn format_condition(value: &SymbolicValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interpreter::{FlatProgramBuilder, FlatStatement, InterpreterConfig, SymbolicInterpreter};
+    use crate::interpreter::{FlatStatement, InterpreterConfig, SymbolicInterpreter};
     use crate::state::ExecutionState;
 
     fn span() -> open_mainframe_lang_core::Span {

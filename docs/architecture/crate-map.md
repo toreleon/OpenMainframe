@@ -8,6 +8,12 @@ Every workspace member is listed exactly once, grouped by functional
 responsibility, with links to its crate-level documentation, implemented role,
 direct internal workspace dependencies, and primary workspace consumers.
 
+This is a current-state Cargo map, not a retention decision. Declared dependency
+does not prove source use, and a crate with no incoming workspace dependency may
+still be a valid binary, plugin, or independent product. Target profiles,
+mechanical edge verification, ownership, and retirement are governed by
+[Workspace Convergence and Sustainable Architecture](workspace-convergence.md).
+
 ---
 
 ## Summary by Responsibility Group
@@ -47,7 +53,7 @@ direct internal workspace dependencies, and primary workspace consumers.
 | [`open-mainframe-easytrieve`](../../crates/open-mainframe-easytrieve/README.md) | Easytrieve Plus compiler and execution engine: data definitions, report generation, match-file processing, and summary calculations. | None | *Standalone / Tooling* |
 | [`open-mainframe-natural`](../../crates/open-mainframe-natural/README.md) | Software AG Natural 4GL parser and execution engine with database simulation (ADABAS/SQL), interactive maps, and reporting. | None | *Standalone / Tooling* |
 | [`open-mainframe-focus`](../../crates/open-mainframe-focus/README.md) | Information Builders FOCUS 4GL reporting engine, TABLE/GRAPH request processor, Dialogue Manager, and data adapter interfaces. | None | *Standalone / Tooling* |
-| [`open-mainframe-symbolic`](../../crates/open-mainframe-symbolic/README.md) | Symbolic execution and formal verification engine for COBOL programs using the Z3 SMT solver for path exploration and constraint validation. | `open-mainframe-cobol`, `open-mainframe-lang-core` | *Standalone / Tooling* |
+| [`open-mainframe-symbolic`](../../crates/open-mainframe-symbolic/README.md) | Symbolic execution and bounded verification engine for COBOL programs using a pure-Rust constraint solver for path exploration and model generation. | `open-mainframe-cobol`, `open-mainframe-lang-core` | *Standalone / Tooling* |
 
 ---
 

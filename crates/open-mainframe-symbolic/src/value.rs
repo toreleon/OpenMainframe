@@ -14,7 +14,7 @@ use crate::sort::Sort;
 ///
 /// Concrete values are evaluated eagerly (e.g. `Concrete(42)`).
 /// Symbolic variables and expressions are carried through execution
-/// and eventually fed to the Z3 solver for satisfiability checking.
+/// and eventually fed to the constraint solver for satisfiability checking.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SymbolicValue {
     /// Concrete integer value.

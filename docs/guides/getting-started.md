@@ -14,21 +14,13 @@ OpenMainframe z/OSMF server and CLI tools locally.
   - `curl` and `jq` (for API verification)
   - `zowe` (Zowe CLI)
 
-> [!NOTE]
-> The crate `open-mainframe-symbolic` requires the system C library `libz3`
-> (`z3.h`). All other 43 crates—including the z/OSMF REST server, CICS runtime,
-> JCL executor, datasets, and CLI binary—build with standard Rust without external
-> C library dependencies.
-
----
-
 ## Building the Workspace
 
-### 1. Build All Binaries and Standard Crates
+### 1. Build All Binaries and Crates
 
 ```bash
-# Build standard release binaries (excludes symbolic prover)
-cargo build --release --workspace --exclude open-mainframe-symbolic
+# Build the complete workspace, including the symbolic execution tool
+cargo build --release --workspace
 ```
 
 ### 2. Build Specific Binaries
@@ -358,11 +350,11 @@ cargo test -p open-mainframe-racf
 # Run DB2 SQL engine tests
 cargo test -p open-mainframe-db2
 
-# Run full workspace test suite (excluding Z3 symbolic prover)
-cargo test --workspace --exclude open-mainframe-symbolic
+# Run full workspace test suite
+cargo test --workspace
 
 # Check lints and code style
-cargo clippy --workspace --exclude open-mainframe-symbolic -- -D warnings
+cargo clippy --workspace -- -D warnings
 cargo fmt --check
 ```
 

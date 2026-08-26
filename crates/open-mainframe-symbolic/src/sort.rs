@@ -1,6 +1,6 @@
 //! Sort (type) system for symbolic values.
 //!
-//! A [`Sort`] classifies every symbolic value with a Z3-compatible type.
+//! A [`Sort`] classifies every value in the symbolic constraint domain.
 //! The type system covers integers, booleans, fixed-width bit-vectors,
 //! and arrays (maps from one sort to another), which together suffice to
 //! model the COBOL data items encountered during symbolic execution.
@@ -11,23 +11,22 @@ use serde::{Deserialize, Serialize};
 
 /// A sort (type) in the symbolic domain.
 ///
-/// Each variant maps directly to a Z3 sort, enabling straightforward
-/// translation when building solver constraints.
+/// Each variant describes the intended semantics of a symbolic value.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Sort {
-    /// Arbitrary-precision integer (Z3 `Int`).
+    /// Signed integer.
     Int,
 
-    /// Boolean (Z3 `Bool`).
+    /// Boolean.
     Bool,
 
-    /// Fixed-width bit-vector of the given width in bits (Z3 `BitVec`).
+    /// Fixed-width bit-vector of the given width in bits.
     ///
     /// COBOL `PIC 9(n) COMP` items are modelled as `BitVec(n * 4)` or
     /// an appropriate power-of-two width.
     BitVec(u32),
 
-    /// Array mapping keys of one sort to values of another (Z3 `Array`).
+    /// Array mapping keys of one sort to values of another.
     ///
     /// Useful for modelling COBOL tables / OCCURS arrays symbolically.
     Array {

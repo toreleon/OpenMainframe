@@ -14,7 +14,6 @@ path = "src/main.rs"
 [dependencies]
 open-mainframe-lang-core = { workspace = true }
 open-mainframe-cobol = { path = "../open-mainframe-cobol" }
-z3 = { workspace = true }
 thiserror = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }

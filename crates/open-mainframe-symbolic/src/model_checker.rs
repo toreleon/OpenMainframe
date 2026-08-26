@@ -254,8 +254,12 @@ impl ModelChecker {
                 Ok(())
             }
             CheckResult::Unknown => {
-                // Inconclusive — treat as passing with a warning.
-                Ok(())
+                // Never claim a proof when the bounded solver is inconclusive.
+                Err(PropertyViolation {
+                    property: property.clone(),
+                    counterexample: state.clone(),
+                    message: format!("Condition is inconclusive: {}", property.name()),
+                })
             }
         }
     }

@@ -3,6 +3,10 @@
 This reference documents the configuration system for the OpenMainframe z/OSMF
 server (`open-mainframe-zosmf`), CICS application runner, and subsystem services.
 
+> This page describes the current implementation. The proposed refactor makes
+> these and deployment-specific formats adapters to one versioned product
+> schema; see [Workspace Convergence](../architecture/workspace-convergence.md#configuration).
+
 ---
 
 ## How the Server Binary Resolves Configuration

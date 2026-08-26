@@ -43,7 +43,6 @@ open-mainframe-lang-core.workspace = true
 open-mainframe-cobol.workspace = true
 
 # External deps
-z3 = { version = "0.12", features = ["static-link-z3"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 miette.workspace = true
@@ -332,96 +331,15 @@ impl ExecutionState {
 
 ---
 
-## Phase 2: Z3 Integration
+## Phase 2: Constraint Solver Integration
 
-### 2.1 Z3 Solver Wrapper (`src/solver.rs`)
+### 2.1 Pure-Rust Solver Wrapper (`src/solver.rs`)
 
-```rust
-use z3::{Context, Solver, Model, SatResult, Config};
-use crate::value::SymbolicValue;
-use crate::path::PathCondition;
-
-/// Z3 solver context
-pub struct SymbolicSolver {
-    ctx: Context,
-    solver: Solver,
-}
-
-impl SymbolicSolver {
-    pub fn new() -> Self {
-        let cfg = Config::new();
-        let ctx = Context::new(&cfg);
-        let solver = Solver::new(&ctx);
-        Self { ctx, solver }
-    }
-    
-    /// Check if path condition is satisfiable
-    pub fn check(&mut self, path: &PathCondition) -> SatResult {
-        // Push to save current state
-        self.solver.push();
-        
-        // Assert all constraints
-        for constraint in path.constraints() {
-            let z3_expr = self.to_z3_bool(&constraint.condition);
-            self.solver.assert(&z3_expr);
-        }
-        
-        // Check satisfiability
-        let result = self.solver.check();
-        
-        // Pop to restore state
-        self.solver.pop(1);
-        
-        result
-    }
-    
-    /// Get a model (concrete values) for satisfiable path
-    pub fn get_model(&mut self, path: &PathCondition) -> Option<Model> {
-        if self.check(path) == SatResult::Sat {
-            // Re-assert for model extraction
-            self.solver.push();
-            for constraint in path.constraints() {
-                let z3_expr = self.to_z3_bool(&constraint.condition);
-                self.solver.assert(&z3_expr);
-            }
-            
-            if self.solver.check() == SatResult::Sat {
-                let model = self.solver.get_model()?;
-                self.solver.pop(1);
-                return Some(model);
-            }
-            self.solver.pop(1);
-        }
-        None
-    }
-    
-    /// Get unsat core for conflicting constraints
-    pub fn get_unsat_core(&mut self, path: &PathCondition) -> Vec<usize> {
-        // Enable unsat core tracking
-        self.solver.push();
-        
-        let mut indices = Vec::new();
-        for (i, constraint) in path.constraints().iter().enumerate() {
-            let z3_expr = self.to_z3_bool(&constraint.condition);
-            let name = format!("c{}", i);
-            let const_decl = z3::ConstDecl::new(&self.ctx, &name);
-            // ... (simplified for brevity)
-            indices.push(i);
-        }
-        
-        self.solver.pop(1);
-        indices
-    }
-    
-    /// Convert SymbolicValue to Z3 expression
-    fn to_z3_bool(&mut self, value: &SymbolicValue) -> z3::Bool {
-        // Implement conversion logic
-        // This is complex - need to handle all SymbolicValue variants
-        // For now, return a placeholder
-        z3::Bool::from_bool(&self.ctx, true)
-    }
-}
-```
+Implement `SymbolicSolver` using direct bound propagation and bounded,
+deterministic candidate search. The solver must return `Sat` only when it has a
+concrete model, `Unsat` only for a proven contradiction, and `Unknown` for
+unsupported or inconclusive constraints. Treat `Unknown` as feasible during
+path exploration so valid paths are never silently discarded.
 
 ---
 
@@ -808,7 +726,7 @@ mod tests {
 - [ ] `src/value.rs` - SymbolicValue, Sort, ExprOp
 - [ ] `src/path.rs` - PathCondition, BranchDecision, Constraint
 - [ ] `src/state.rs` - ExecutionState, CallFrame
-- [ ] `src/solver.rs` - SymbolicSolver with Z3 integration
+- [ ] `src/solver.rs` - Pure-Rust bounded `SymbolicSolver`
 - [ ] `src/interpreter.rs` - SymbolicInterpreter with worklist
 - [ ] `src/spec.rs` - Property types and parsers
 - [ ] `src/model_checker.rs` - Verification engine
@@ -825,7 +743,7 @@ mod tests {
 1. Read existing crates to understand workspace conventions
 2. Create the crate structure
 3. Implement Phase 1 (data structures)
-4. Implement Phase 2 (Z3 integration)
+4. Implement Phase 2 (constraint solver integration)
 5. Implement Phase 3 (interpreter)
 6. Implement Phase 4-6 (properties, model checker, CLI)
 7. Write tests

@@ -4,7 +4,7 @@
 //! compiles them with `cobc` (GnuCOBOL), runs the resulting binaries, and
 //! parses the DISPLAY output to capture actual variable values.
 //!
-//! The captured outputs replace the Z3-predicted expected values to produce
+//! The captured outputs replace symbolic predictions to produce
 //! a **golden master** — a test suite grounded in real COBOL execution.
 
 use std::collections::BTreeMap;
@@ -213,7 +213,7 @@ pub fn generate_unit_harness(
 /// Returns true if a variable name is a synthetic artifact from the symbolic
 /// engine rather than a real COBOL variable.
 fn is_synthetic_variable(name: &str) -> bool {
-    // IS_Numeric_XXX is a Z3 helper for the NUMERIC class condition.
+    // IS_Numeric_XXX is a symbolic helper for the NUMERIC class condition.
     if name.starts_with("IS_Numeric_") || name.starts_with("IS_NUMERIC_") {
         return true;
     }

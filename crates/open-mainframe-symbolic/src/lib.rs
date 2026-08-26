@@ -18,7 +18,7 @@
 //!                                            │
 //!                  ┌──────────────┐   ┌──────▼──────┐
 //!                  │  solver.rs   │◀──│  state.rs   │
-//!                  │ (Z3 ↔ SMT)  │   │  path.rs    │
+//!                  │ (constraints)│   │  path.rs    │
 //!                  └──────────────┘   │  value.rs   │
 //!                                     │  sort.rs    │
 //!                                     └─────────────┘
@@ -44,7 +44,7 @@ pub use interpreter::{
 };
 pub use model_checker::{CoverageMetrics, ModelChecker, PropertyViolation, VerificationResult};
 pub use path::{BranchDecision, Constraint, PathCondition};
-pub use solver::{CheckResult, SymbolicSolver};
+pub use solver::{CheckResult, SatResult, SolverModel, SymbolicSolver};
 pub use sort::Sort;
 pub use lowering::{lower_cobol_file, lower_cobol_source, LoweringResult, LoweringStats};
 pub use spec::{Property, PropertyLocation};

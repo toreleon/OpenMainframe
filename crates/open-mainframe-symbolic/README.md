@@ -1,6 +1,6 @@
 # open-mainframe-symbolic
 
-`open-mainframe-symbolic` is a symbolic execution and formal verification engine for COBOL programs in the OpenMainframe workspace. It uses the Z3 SMT solver to perform automated path exploration, formal property verification, test suite generation, counterexample discovery, and semantic equivalence checking.
+`open-mainframe-symbolic` is a symbolic execution and bounded verification engine for COBOL programs in the OpenMainframe workspace. It uses a dependency-free constraint solver to perform automated path exploration, property checking, test suite generation, counterexample discovery, and semantic equivalence analysis.
 
 ## Purpose
 
@@ -17,7 +17,7 @@ Traditional testing of mainframe legacy code relies on concrete test inputs whic
   - Depth-First Search (`ExplorationStrategy::Dfs`)
   - Breadth-First Search (`ExplorationStrategy::Bfs`)
   - Coverage-Guided Exploration (`ExplorationStrategy::CoverageGuided`)
-- **Z3 SMT Solver Integration**: Encodes symbolic expressions (`SymbolicValue`, `ExprOp`) and path constraints (`Constraint`, `PathCondition`) into Z3 SMT formulas to check path feasibility (`CheckResult::Sat`, `CheckResult::Unsat`, `CheckResult::Unknown`) and extract satisfying concrete assignments.
+- **Pure-Rust Constraint Solving**: Propagates integer and Boolean bounds, performs bounded deterministic model search, reports path feasibility (`CheckResult::Sat`, `CheckResult::Unsat`, `CheckResult::Unknown`), and extracts satisfying concrete assignments without native dependencies.
 - **Formal Verification & Property Checking**: Validates program assertions, invariants, preconditions, and postconditions defined in external YAML files or embedded inline annotations (`*> @requires`, `*> @ensures`, `*> @invariant`, `*> @assert`).
 - **Counterexample Synthesis**: Produces precise, concrete variable bindings for any failing execution path violating a declared specification.
 - **Automated Test Generation**: Generates structured test suites (`TestSuite`, `TestCase`) partitioned into `BranchCoverage`, `BoundaryValue`, `ErrorPath`, and `PropertyVerification` categories.
@@ -42,7 +42,7 @@ Traditional testing of mainframe legacy code relies on concrete test inputs whic
         │                  ▲
         │ explore          │ backtrack / branch
         ▼                  │
-    state.rs ◄──────► solver.rs ◄──────► Z3 SMT Solver
+    state.rs ◄──────► solver.rs
  (ExecutionState)   (SymbolicSolver)
         │
    ┌────┴───────────────────────────┐
@@ -66,7 +66,7 @@ PropertyViolation               gnucobol.rs (differential testing)
 | `value` | Symbolic value representation (`SymbolicValue`) and algebraic expression operations (`ExprOp`). |
 | `sort` | Typing system for symbolic values (`Sort`: Integer, Decimal, String, Boolean, BitVec, Array, Custom). |
 | `path` | Path condition representation (`PathCondition`, `Constraint`, `BranchDecision`). |
-| `solver` | Z3 SMT solver bridge (`SymbolicSolver`, `CheckResult`) managing Z3 contexts and constraint satisfiability. |
+| `solver` | Pure-Rust bounded constraint solver (`SymbolicSolver`, `CheckResult`) for feasibility checks and concrete model generation. |
 | `spec` | Formal property specifications (`Property`, `PropertyLocation`) and parser for YAML specs and inline COBOL annotations. |
 | `model_checker` | Formal verification engine (`ModelChecker`, `VerificationResult`, `PropertyViolation`, `CoverageMetrics`). |
 | `testgen` | Test case generation from symbolic constraints (`generate_test_suite`, `TestSuite`, `TestCase`, `EquivalenceResult`). |
@@ -129,7 +129,6 @@ let result = model_checker.verify(&lowering_result.program, &properties)?;
 
 ### External Dependencies
 
-- `z3` / `z3-sys` — Native bindings to the Z3 SMT solver.
 - `rust_decimal` — Exact decimal arithmetic modeling.
 - `serde` / `serde_json` — Test suite and report serialization.
 
@@ -179,7 +178,7 @@ cargo test -p open-mainframe-symbolic
 
 Test coverage includes:
 - `interpreter.rs`: Path exploration, loop termination, and branching tests.
-- `solver.rs`: Z3 constraint solving and model generation tests.
+- `solver.rs`: Bound propagation, bounded constraint solving, and model generation tests.
 - `lowering.rs`: Statement flattening and loop exit fixup tests.
 - `model_checker.rs`: Assertion violation detection and coverage metrics.
 - `testgen.rs`: Test suite synthesis and categorization.
@@ -188,7 +187,7 @@ Test coverage includes:
 
 ## Limitations
 
-- **Native Dependency**: Requires the Z3 theorem prover library (`libz3`) installed on the host operating system.
+- **Bounded Solver**: Complex nonlinear, string, substring, and array constraints may return `Unknown`; inconclusive paths are retained conservatively.
 - **Path Explosion**: Programs with unbounded loops or extensive branch permutations require explicit bounds (`--max-paths`, `--max-depth`, `--max-loop-iterations`).
 - **GnuCOBOL Availability**: Differential testing and golden-master generation require `cobc` to be installed and available in the environment's `PATH`.
 
